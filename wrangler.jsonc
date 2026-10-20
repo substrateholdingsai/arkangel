@@ -1,0 +1,64 @@
+﻿{
+  "$schema": "https://json.schemastore.org/wrangler.jsonc",
+  "name": "arkangel-cobranza",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": { "directory": "dist/frontend", "binding": "ASSETS" },
+  "vars": {
+    "ENVIRONMENT": "production",
+    "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "DEDUPE_WINDOW_HOURS": "24",
+    "RATE_LIMIT_RPM": "42",
+    "MAX_CONCURRENCY": "10",
+    "SEND_WINDOW_START": "8",
+    "SEND_WINDOW_END": "22",
+    "TZ": "America/Mexico_City",
+    "SCORE_AMOUNT_CEILING_CENTS": "200000",
+    "CRON_AUTO_FIRE": "false",
+    "DRY_RUN": "false",
+    "LEGAL_RAZON_SOCIAL": "",
+    "LEGAL_CONDUSEF_REGISTRO": "",
+    "ALLOWED_PAYMENT_DOMAINS": "",
+    "MAX_CONTACTS_PER_DAY": "3",
+    "LEGAL_MONTO_TOLERANCIA_CENTS": "0",
+    "LEGAL_HORARIO_EN_RESPUESTAS": "false",
+    "ALEGRA_IVA_PCT": "16",
+    "RESEND_FROM_EMAIL": "Arkangel <cobranza@arksystems.site>"
+  },
+  "ai": { "binding": "AI" },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "arkangel-cobranza-db",
+      "database_id": "5955313e-eadd-4658-874c-3366c1d24c24",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "kv_namespaces": [{ "binding": "KV", "id": "6665e3e000884081a0fa5cd4674f5dad" }],
+  "r2_buckets": [
+    {
+      "binding": "R2",
+      "bucket_name": "arkangel-contabilidad"
+    }
+  ],
+  "queues": {
+    "producers": [{ "binding": "COBRANZA_QUEUE", "queue": "arkangel-cobranza-queue" }],
+    "consumers": [
+      {
+        "queue": "arkangel-cobranza-queue",
+        "max_batch_size": 10,
+        "max_batch_timeout": 30,
+        "max_retries": 3,
+        "dead_letter_queue": "arkangel-cobranza-dlq"
+      }
+    ]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "CALL_LOCK", "class_name": "CallLockDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CallLockDO"] }],
+  "observability": { "enabled": true },
+  "triggers": { "crons": ["0 6 * * *", "59 5 * * *"] }
+}
+

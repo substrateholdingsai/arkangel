@@ -1,0 +1,96 @@
+/**
+ * ARKANGEL DESIGN SYSTEM · tokens
+ *
+ * Única fuente de verdad de color, tipografía, radio, sombra y patrones.
+ * Este archivo se comparte (copiado o por submódulo) entre el panel de cobranza
+ * y cualquier proyecto futuro del ecosistema Arkangel.
+ *
+ * Paleta: escala Slate (estructura) + Emerald (acción/éxito) + acentos
+ * semánticos por estado. Tipografía Inter (300–700) + monoespaciada para
+ * datos duros.
+ */
+
+:root {
+  /* ── Superficies ── */
+  --ark-canvas: #f8fafc; /* slate-50 */
+  --ark-surface: #ffffff;
+  --ark-surface-muted: #f8fafc; /* slate-50 */
+  --ark-ink: #0f172a; /* slate-900 */
+  --ark-ink-soft: #334155; /* slate-700 */
+  --ark-muted: #64748b; /* slate-500 */
+  --ark-subtle: #94a3b8; /* slate-400 */
+  --ark-line: #e2e8f0; /* slate-200 */
+  --ark-line-strong: #cbd5e1; /* slate-300 */
+
+  /* ── Panel industrial (modo oscuro) ── */
+  --ark-dark: #0f172a; /* slate-900 */
+  --ark-dark-line: #1e293b; /* slate-800 */
+  --ark-dark-ink: #cbd5e1; /* slate-300 */
+  --ark-dark-muted: #94a3b8; /* slate-400 */
+
+  /* ── Acento y estados ── */
+  --ark-accent: #059669; /* emerald-600 */
+  --ark-accent-hover: #047857; /* emerald-700 */
+  --ark-accent-soft: #ecfdf5; /* emerald-50 */
+  --ark-accent-line: #a7f3d0; /* emerald-200 */
+  --ark-accent-ink: #065f46; /* emerald-800 */
+  --ark-accent-bright: #34d399; /* emerald-400 (sobre oscuro) */
+
+  --ark-info: #2563eb; /* blue-600 */
+  --ark-info-soft: #eff6ff; /* blue-50 */
+  --ark-info-line: #bfdbfe; /* blue-200 */
+
+  --ark-warn: #d97706; /* amber-600 */
+  --ark-warn-soft: #fffbeb; /* amber-50 */
+  --ark-warn-line: #fde68a; /* amber-200 */
+
+  --ark-danger: #e11d48; /* rose-600 */
+  --ark-danger-soft: #fff1f2; /* rose-50 */
+  --ark-danger-line: #fecdd3; /* rose-200 */
+  --ark-danger-bright: #fb7185; /* rose-400 (sobre oscuro) */
+
+  --ark-channel-sms: #475569; /* slate-600 */
+  --ark-channel-sms-soft: #f1f5f9; /* slate-100 */
+  --ark-channel-sms-line: #e2e8f0; /* slate-200 */
+
+  /* ── Forma ── */
+  --ark-radius-card: 0.75rem;
+  --ark-radius-control: 0.5rem;
+  --ark-radius-pill: 9999px;
+
+  --ark-shadow-card: 0 1px 2px 0 rgb(15 23 42 / 0.05);
+  --ark-shadow-lift: 0 1px 3px 0 rgb(15 23 42 / 0.1), 0 1px 2px -1px rgb(15 23 42 / 0.1);
+  --ark-shadow-panel: 0 1px 2px 0 rgb(15 23 42 / 0.05);
+
+  /* ── Patrones ── */
+  --ark-grid-size: 24px;
+}
+
+/* Patrón de puntos: fondo claro (Slate-200) y fondo oscuro (Slate-700) */
+.ark-grid {
+  background-image: radial-gradient(circle, #cbd5e1 1px, transparent 1px);
+  background-size: var(--ark-grid-size) var(--ark-grid-size);
+}
+
+.ark-grid-dark {
+  background-image: radial-gradient(circle, #334155 1px, transparent 1px);
+  background-size: var(--ark-grid-size) var(--ark-grid-size);
+}
+
+/* Marca de agua institucional (asset generado por scripts/forge_arkangel_watermark.py) */
+.ark-watermark {
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 420px auto;
+  opacity: 0.06;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

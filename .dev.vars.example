@@ -1,0 +1,38 @@
+# ── Tokens de acceso a la API del dashboard (NO son secretos de proveedor) ──
+# Token que exige la UI para leer métricas y disparar cobranza.
+ADMIN_TOKEN=pon_aqui_un_token_largo_y_aleatorio
+# Token que usa el CRM (Clara) para entregar el CSV de las 6:00 AM.
+INTAKE_TOKEN=pon_aqui_otro_token_distinto
+
+# ── Workers AI ──
+# Opcional: sobreescribe el modelo del var AI_MODEL.
+AI_MODEL=@cf/meta/llama-3.3-70b-instruct-fp8-fast
+
+# ── Resend (email) ──
+RESEND_API_KEY=re_xxxxxxxxxxxxxxxxx
+RESEND_FROM_EMAIL=Arkangel <cobranza@arksystems.site>
+
+# ── WhatsApp Cloud API (Meta) ──
+WHATSAPP_TOKEN=EAAGxxxxxxxxxxxxxxxxxxxx
+WHATSAPP_PHONE_NUMBER_ID=123456789012345
+WHATSAPP_VERIFY_TOKEN=pon_el_mismo_token_que_registraste_en_meta
+# Plantilla aprobada (fuera de la ventana de 24h)
+WHATSAPP_TEMPLATE_NAME=arkangel_recordatorio_cobranza
+WHATSAPP_TEMPLATE_LANG=es_MX
+
+# ── Telnyx (SMS) ──
+TELNYX_API_KEY=KEYxxxxxxxxxxxxxxxx
+TELNYX_MESSAGING_PROFILE_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+TELNYX_FROM_NUMBER=+52xxxxxxxxxx
+# Llave publica Ed25519 de Telnyx para validar webhooks (opcional en dev)
+TELNYX_WEBHOOK_PUBLIC_KEY=
+
+# ── Módulo contable · MCP de Alegra ──
+# Endpoint HTTP del MCP de Alegra (JSON-RPC 2.0).
+ALEGRA_MCP_URL=https://mcp.alegra.com/mcp
+# Bearer del MCP (si el servidor lo exige).
+ALEGRA_MCP_TOKEN=
+# Salt de la idempotency key: sin esto la clave es predecible.
+ALEGRA_IDEMPOTENCY_SALT=
+# Tasa de IVA del resumen contable.
+ALEGRA_IVA_PCT=16

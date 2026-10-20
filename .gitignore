@@ -1,0 +1,56 @@
+# ── Dependencias ──
+node_modules
+.pnpm-store
+
+# ── Build ──
+dist
+build
+.vite
+.wrangler
+.wrangler.tmp
+*.tsbuildinfo
+
+# ── Entorno y secretos (NUNCA versionar) ──
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+*.local
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+
+# ── Cloudflare ──
+worker-configuration.d.ts
+.dev.vars.*
+!.dev.vars.example
+
+# ── IDE ──
+.vscode
+.idea
+*.swp
+*.swo
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs ──
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+
+# ── Tests ──
+coverage
+.vitest
+*.lcov
+
+# ── Turbo / caches ──
+.turbo
+.cache
