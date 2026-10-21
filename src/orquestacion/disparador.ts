@@ -1,4 +1,4 @@
-import { logger } from '../lib/logger';
+import { logger, TraceContext, generateTraceId, generateSpanId } from '../lib/logger';
 import type { Env } from '../types/env';
 import type { TenantContext } from '../tenancy/types';
 import type { CollectionCase } from '../types/cobranza';
@@ -14,7 +14,8 @@ export interface DispararResult {
 /** Encola los casos listos (status ready) de una fecha. */
 export async function enqueueCases(
   ctx: TenantContext,
-  cases: CollectionCase[]
+  cases: CollectionCase[],
+  traceCtx?: TraceContext
 ): Promise<DispararResult> {
   const result: DispararResult = { queued: 0, skipped: 0, caseIds: [] };
 
@@ -24,6 +25,8 @@ export async function enqueueCases(
       continue;
     }
 
+    const msgTraceCtx = traceCtx ?? { traceId: generateTraceId(), spanId: generateSpanId(), sampled: true };
+
     await ctx.env.COBRANZA_QUEUE.send({
       type: 'cobranza.disparar',
       caseId: c.id,
@@ -31,6 +34,8 @@ export async function enqueueCases(
       attempt: 0,
       enqueuedAt: Date.now(),
       tenantId: ctx.tenantId,
+      traceId: msgTraceCtx.traceId,
+      spanId: msgTraceCtx.spanId,
     });
 
     result.queued++;
@@ -45,8 +50,9 @@ export async function enqueueCases(
 /** Dispara todos los casos listos del día. Es el botón verde del dashboard. */
 export async function dispararHoy(
   ctx: TenantContext,
-  date: string
+  date: string,
+  traceCtx?: TraceContext
 ): Promise<DispararResult> {
   const cases = await listReadyCases(ctx, date);
-  return enqueueCases(ctx, cases);
+  return enqueueCases(ctx, cases, traceCtx);
 }

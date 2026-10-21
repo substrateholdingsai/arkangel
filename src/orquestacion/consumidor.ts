@@ -3,7 +3,8 @@ import { adapters, resolveChannels } from '../channels';
 import { configLegal } from '../legal/config';
 import { evaluarMensaje } from '../legal/motor';
 import { IdempotencyKey, reserveOnceConLegado } from '../lib/idempotencia';
-import { logger } from '../lib/logger';
+import { logger, TraceContext } from '../lib/logger';
+import { createTracer } from '../lib/logger';
 import { isWithinSendWindow } from '../lib/score';
 import type { Env } from '../types/env';
 import type { CobranzaQueueMessage, ContabilidadRetryMessage } from '../types/env';
@@ -71,38 +72,48 @@ function diasDeRetraso(dueDate: string): number {
  */
 export async function processCase(
   ctx: TenantContext,
-  msg: CobranzaQueueMessage
+  msg: CobranzaQueueMessage,
+  traceCtx: TraceContext
 ): Promise<void> {
+  const tracer = createTracer('processCase');
+  const { span, log } = tracer.startSpan(traceCtx, `processCase:${msg.caseId}`);
+
   const collectionCase = await getCase(ctx, msg.caseId);
   if (!collectionCase) {
-    logger.warn('Caso no encontrado', { caseId: msg.caseId });
+    log.warn('Caso no encontrado', { caseId: msg.caseId, traceId: traceCtx.traceId });
+    tracer.endSpan(log);
     return;
   }
 
   if (['replied', 'promised', 'paid', 'human', 'failed'].includes(collectionCase.status)) {
+    tracer.endSpan(log, { skipped: true, status: collectionCase.status });
     return;
   }
 
   const client = await getClient(ctx, collectionCase.client_id);
   if (!client) {
-    logger.warn('Cliente no encontrado', { clientId: collectionCase.client_id });
+    log.warn('Cliente no encontrado', { clientId: collectionCase.client_id, traceId: traceCtx.traceId });
+    tracer.endSpan(log, { error: 'client_not_found' });
     return;
   }
 
   if (client.do_not_disturb) {
     await updateCase(ctx, collectionCase.id, { status: 'human' });
     await logEvent(ctx, 'cobranza.dnd', { caseId: collectionCase.id, clientId: client.id });
+    tracer.endSpan(log, { dnd: true });
     return;
   }
 
   if (await hasOpenPromise(ctx, client.id)) {
     await updateCase(ctx, collectionCase.id, { status: 'promised' });
+    tracer.endSpan(log, { promised: true });
     return;
   }
 
   const startHour = ctx.config.horaInicio;
   const endHour = ctx.config.horaFin;
   if (!isWithinSendWindow(new Date(), startHour, endHour, ctx.config.tz)) {
+    tracer.endSpan(log, { deferred: true, reason: 'outside_window' });
     throw new DeferredError('Fuera de la ventana legal de contacto', 1800);
   }
 
@@ -114,11 +125,13 @@ export async function processCase(
       clientId: client.id,
       payload: { band: collectionCase.score_band },
     });
+    tracer.endSpan(log, { failed: true, reason: 'no_channels' });
     return;
   }
 
   const locked = await acquireClientLock(ctx.env, client.id);
   if (!locked) {
+    tracer.endSpan(log, { deferred: true, reason: 'client_locked' });
     throw new DeferredError('Cliente ya tiene un envío en curso', 60);
   }
 
@@ -139,6 +152,8 @@ export async function processCase(
     const credenciales = mergeChannelCredentials(ctx.channels);
 
     for (const channel of channels) {
+      const { span: channelSpan, log: channelLog } = tracer.startSpan(traceCtx, `send:${channel}`);
+
       const dedupeKey = IdempotencyKey.forTenantCase(ctx.tenantId, collectionCase.id, channel);
       const legacyKey = IdempotencyKey.forCase(collectionCase.id, channel);
       const reserved = await reserveOnceConLegado(ctx.env.KV, dedupeKey, legacyKey, dedupeWindow, {
@@ -146,12 +161,14 @@ export async function processCase(
       });
       if (!reserved) {
         state[channel] = 'duplicado';
+        tracer.endSpan(channelLog, { duplicate: true });
         continue;
       }
 
       const destination = channel === 'email' ? client.email : client.phone;
       if (!destination) {
         await ctx.env.KV.delete(dedupeKey);
+        tracer.endSpan(channelLog, { no_destination: true });
         continue;
       }
 
@@ -223,6 +240,8 @@ export async function processCase(
             })),
           },
         });
+        tracer.endSpan(channelLog, { blocked: true, reason: veredicto.bloqueadoPor });
+        tracer.endSpan(log, { blocked: true });
         return;
       }
 
@@ -270,6 +289,8 @@ export async function processCase(
             payload: { canal: channel },
           });
         }
+        tracer.endSpan(channelLog, { sent: true });
+        tracer.endSpan(log, { sent: true });
         break;
       }
 
@@ -280,6 +301,7 @@ export async function processCase(
         clientId: client.id,
         payload: { channel, error: result.error },
       });
+      tracer.endSpan(channelLog, { failed: true, error: result.error });
     }
 
     await updateCase(ctx, collectionCase.id, {
@@ -294,6 +316,7 @@ export async function processCase(
         payload: { state },
       });
     }
+    tracer.endSpan(log, { finalStatus: sent ? 'sent' : 'failed' });
   } finally {
     await releaseClientLock(ctx.env, client.id);
   }
@@ -302,9 +325,11 @@ export async function processCase(
 /** Consumidor de la cola de cobranza. */
 export async function consumeBatch(
   batch: MessageBatch<CobranzaQueueMessage | ContabilidadRetryMessage>,
-  env: Env
+  env: Env,
+  parentTraceCtx?: TraceContext
 ): Promise<void> {
   const contextos = new Map<string, TenantContext>();
+  const tracer = createTracer('consumidor');
 
   const contextoPara = async (tenantId?: string): Promise<TenantContext> => {
     const clave = tenantId ?? 'default';
@@ -318,6 +343,14 @@ export async function consumeBatch(
 
   for (const message of batch.messages) {
     const body = message.body;
+    // Use trace context from message or parent
+    const traceCtx: TraceContext = {
+      traceId: body.traceId ?? parentTraceCtx?.traceId ?? '',
+      spanId: body.spanId ?? parentTraceCtx?.spanId ?? '',
+      sampled: true,
+    };
+
+    const { span, log } = tracer.startSpan(traceCtx, `process:${body.type}`);
 
     // ── Módulo contable: reintento de Alegra ──
     if (body && body.type === 'contabilidad.reintento') {
@@ -326,18 +359,21 @@ export async function consumeBatch(
         const resultado = await reintentarEnvioAlegra(ctx, body.fechaCorte, body.attempt);
         if (resultado.ok) {
           message.ack();
+          tracer.endSpan(log, { ok: true });
           continue;
         }
         if (resultado.reintentoProgramado) {
           message.ack();
+          tracer.endSpan(log, { reintentoProgramado: true });
           continue;
         }
         throw new Error(resultado.motivo ?? 'falló el reintento contable');
       } catch (error) {
-        logger.error('Falló el reintento contable contra Alegra', {
+        log.error('Falló el reintento contable contra Alegra', {
           fechaCorte: body.fechaCorte,
           attempt: body.attempt,
           error: error instanceof Error ? error.message : String(error),
+          traceId: traceCtx.traceId,
         });
         message.retry();
       }
@@ -346,19 +382,23 @@ export async function consumeBatch(
 
     try {
       const ctx = await contextoPara(body.tenantId);
-      await processCase(ctx, body as CobranzaQueueMessage);
+      await processCase(ctx, body as CobranzaQueueMessage, traceCtx);
       message.ack();
+      tracer.endSpan(log, { ok: true });
     } catch (error) {
       if (error instanceof DeferredError) {
-        logger.info('Mensaje diferido', { reason: error.message, delay: error.delaySeconds });
+        log.info('Mensaje diferido', { reason: error.message, delay: error.delaySeconds });
         message.retry({ delaySeconds: error.delaySeconds });
+        tracer.endSpan(log, { deferred: true, delay: error.delaySeconds });
         continue;
       }
-      logger.error('Fallo procesando caso', {
+      log.error('Fallo procesando caso', {
         caseId: (body as CobranzaQueueMessage)?.caseId,
         error: error instanceof Error ? error.message : String(error),
+        traceId: traceCtx.traceId,
       });
       message.retry();
+      tracer.endSpan(log, { error: true });
     }
   }
 }

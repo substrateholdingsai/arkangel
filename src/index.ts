@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { logger } from './lib/logger';
+import { logger, traceMiddleware, getTraceContext, generateTraceId, generateSpanId } from './lib/logger';
 import type { CobranzaQueueMessage, ContabilidadRetryMessage, Env } from './types/env';
 import { api } from './routes/api';
 import { agent } from './routes/agent';
@@ -17,12 +17,12 @@ export { CallLockDO, RateLimiterDO };
 
 const app = new Hono<{ Bindings: Env }>();
 
+// Trace middleware - adds trace context to all requests
+app.use('*', traceMiddleware());
+
 app.use('/api/*', async (c, next) => {
   await next();
   c.header('Access-Control-Allow-Origin', c.req.header('origin') ?? '*');
-  // `Authorization` es lo que lleva la SPA (JWT de sesión de Clerk o token de
-  // máquina). `x-tenant-id` / `x-tenant-slug` sólo acotan el tenant: sin ellos
-  // el preflight del navegador bloquearía la petición.
   c.header(
     'Access-Control-Allow-Headers',
     'Content-Type, Authorization, x-admin-token, x-intake-token, x-tenant-id, x-tenant-slug'
@@ -62,24 +62,50 @@ app.all('*', async (c) => {
 });
 
 app.onError((error, c) => {
+  const traceCtx = getTraceContext(c);
   logger.error('Error no controlado', {
     path: c.req.path,
     error: error instanceof Error ? error.message : String(error),
+    traceId: traceCtx.traceId,
+    spanId: traceCtx.spanId,
   });
   return c.json({ error: 'internal_error' }, 500);
 });
 
 export default {
   fetch: app.fetch,
-  queue: (batch: MessageBatch<unknown>, env: Env) =>
-    consumeBatch(batch as MessageBatch<CobranzaQueueMessage | ContabilidadRetryMessage>, env),
+  queue: async (batch: MessageBatch<unknown>, env: Env) => {
+    // Extract trace context from first message or generate new
+    const firstMsg = batch.messages[0]?.body as CobranzaQueueMessage | ContabilidadRetryMessage | undefined;
+    const traceId = firstMsg?.traceId ?? generateTraceId();
+    const spanId = generateSpanId();
+    const traceCtx = { traceId, spanId, sampled: true };
+
+    logger.info('Queue batch received', {
+      traceId,
+      spanId,
+      batchSize: batch.messages.length,
+    });
+
+    await consumeBatch(batch as MessageBatch<CobranzaQueueMessage | ContabilidadRetryMessage>, env, traceCtx);
+  },
   scheduled: async (controller: ScheduledController, env: Env) => {
+    const traceId = generateTraceId();
+    const spanId = generateSpanId();
+    const traceCtx = { traceId, spanId, sampled: true };
+
+    logger.info('Scheduled trigger', {
+      traceId,
+      spanId,
+      scheduledTime: controller.scheduledTime,
+      cron: controller.cron,
+    });
+
     const scheduledTime = new Date(controller.scheduledTime);
-    // 05:59 UTC = 23:59 CDMX → cierre contable; cualquier otro disparo → cobranza.
     if (scheduledTime.getUTCHours() === 5 && scheduledTime.getUTCMinutes() === 59) {
-      await handleContabilidadDaily(env);
+      await handleContabilidadDaily(env, undefined, traceCtx);
       return;
     }
-    await handleScheduled(env, scheduledTime);
+    await handleScheduled(env, scheduledTime, traceCtx);
   },
 } satisfies ExportedHandler<Env>;

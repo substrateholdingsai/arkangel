@@ -90,8 +90,11 @@ export interface CobranzaQueueMessage {
   channel?: string;
   attempt?: number;
   enqueuedAt: number;
-  /** Tenant al que pertenece el caso. Opcional mientras siga el tenant único. */
-  tenantId?: string;
+  /** Tenant al que pertenece el caso. */
+  tenantId: string;
+  /** Trace context for observability. */
+  traceId?: string;
+  spanId?: string;
 }
 
 /** Reintento del módulo contable: reencola el mismo payload (misma idempotency_key). */
@@ -102,4 +105,7 @@ export interface ContabilidadRetryMessage {
   attempt: number;
   enqueuedAt: number;
   tenantId: string;
+  /** Trace context for observability. */
+  traceId?: string;
+  spanId?: string;
 }

@@ -10,7 +10,7 @@
 
 import type { Env } from '../types/env';
 import type { TenantContext } from '../tenancy/types';
-import { logger } from '../lib/logger';
+import { logger, TraceContext, createTracer } from '../lib/logger';
 import { logEvent } from '../services/eventos';
 import { listTenants } from '../tenancy/repository';
 import { platformPrincipal } from '../auth/principal';
@@ -43,12 +43,17 @@ export interface ResultadoContabilidad {
  */
 export async function handleContabilidadDaily(
   env: Env,
-  fechaCorte?: string
+  fechaCorte?: string,
+  parentTraceCtx?: TraceContext
 ): Promise<ResultadoContabilidad[]> {
+  const tracer = createTracer('contabilidadDaily');
+  const traceCtx = parentTraceCtx ?? { traceId: '', spanId: '', sampled: true };
+  const { span, log } = tracer.startSpan(traceCtx, 'handleContabilidadDaily');
+
   const timeZone = env.TZ ?? 'America/Mexico_City';
   const fecha = fechaCorte ?? diaPrevioIso(timeZone);
 
-  logger.info('Cron contable ejecutado', { fecha_corte: fecha });
+  log.info('Cron contable ejecutado', { fecha_corte: fecha, traceId: traceCtx.traceId });
 
   // Obtener todos los tenants activos
   const tenants = await listTenants(env);
@@ -56,6 +61,8 @@ export async function handleContabilidadDaily(
 
   for (const tenant of tenants) {
     if (tenant.status !== 'active') continue;
+
+    const { span: tenantSpan, log: tenantLog } = tracer.startSpan(traceCtx, `tenant:${tenant.id}`);
 
     const ctx = {
       env,
@@ -86,14 +93,14 @@ export async function handleContabilidadDaily(
     // ── Fase 0: reconciliación de cortes que quedaron a medio camino ──
     let reconciliacion: ResultadoReconciliacion | undefined;
     try {
-      const resultados = await reconciliarCortesPendientes(ctx.env);
-      reconciliacion = resultados[0];
+      const resultadosRec = await reconciliarCortesPendientes(ctx.env);
+      reconciliacion = resultadosRec[0];
     } catch (error) {
       const mensaje = error instanceof Error ? error.message : String(error);
       await logEvent(ctx, 'alegra_sync', {
         payload: { fecha_corte: fecha, status: 'reconciliacion_fallida', error: mensaje },
       });
-      logger.error('Falló la reconciliación previa', { fecha_corte: fecha, tenantId: tenant.id, error: mensaje });
+      tenantLog.error('Falló la reconciliación previa', { fecha_corte: fecha, tenantId: tenant.id, error: mensaje });
     }
 
     let construccion: ResultadoBuild;
@@ -104,12 +111,13 @@ export async function handleContabilidadDaily(
       await logEvent(ctx, 'alegra_sync', {
         payload: { fecha_corte: fecha, status: 'failed', error: mensaje },
       });
-      logger.error('No se pudo construir el payload contable', {
+      tenantLog.error('No se pudo construir el payload contable', {
         fecha_corte: fecha,
         tenantId: tenant.id,
         error: mensaje,
       });
       resultados.push({ fecha, payloadGuardado: false, enviado: false, error: mensaje });
+      tracer.endSpan(tenantLog, { error: true });
       continue;
     }
 
@@ -129,7 +137,7 @@ export async function handleContabilidadDaily(
           error: `no se pudo guardar en R2: ${mensaje}`,
         },
       });
-      logger.error('Falló el guardado del payload en R2', { fecha_corte: fecha, tenantId: tenant.id, error: mensaje });
+      tenantLog.error('Falló el guardado del payload en R2', { fecha_corte: fecha, tenantId: tenant.id, error: mensaje });
     }
 
     // ── Ledger roto: no se envía, se alerta ──
@@ -143,8 +151,9 @@ export async function handleContabilidadDaily(
           aviso: 'el ledger no verifica: los asientos NO se enviaron a Alegra',
         },
       });
-      logger.error('Contabilidad detenida: el ledger no verifica', { fecha_corte: fecha, tenantId: tenant.id });
+      tenantLog.error('Contabilidad detenida: el ledger no verifica', { fecha_corte: fecha, tenantId: tenant.id });
       resultados.push({ fecha, payloadGuardado, enviado: false, error: 'ledger_broken' });
+      tracer.endSpan(tenantLog, { ledger_broken: true });
       continue;
     }
 
@@ -157,7 +166,7 @@ export async function handleContabilidadDaily(
         construccion.checkpoint.total
       );
     } catch (error) {
-      logger.warn('No se pudo guardar el checkpoint del ledger', {
+      tenantLog.warn('No se pudo guardar el checkpoint del ledger', {
         fecha_corte: fecha,
         tenantId: tenant.id,
         error: error instanceof Error ? error.message : String(error),
@@ -168,15 +177,18 @@ export async function handleContabilidadDaily(
     try {
       const resultado = await sendToAlegra(payload, ctx);
       resultados.push({ fecha, payloadGuardado, enviado: resultado.ok, resultado, reconciliacion });
+      tracer.endSpan(tenantLog, { ok: resultado.ok });
     } catch (error) {
       const mensaje = error instanceof Error ? error.message : String(error);
       await logEvent(ctx, 'alegra_sync', {
         payload: { fecha_corte: fecha, status: 'failed', error: mensaje },
       });
-      logger.error('Falló el cron contable', { fecha_corte: fecha, tenantId: tenant.id, error: mensaje });
+      tenantLog.error('Falló el cron contable', { fecha_corte: fecha, tenantId: tenant.id, error: mensaje });
       resultados.push({ fecha, payloadGuardado, enviado: false, error: mensaje, reconciliacion });
+      tracer.endSpan(tenantLog, { error: true });
     }
   }
 
+  tracer.endSpan(log, { tenantsProcessed: tenants.length });
   return resultados;
 }
