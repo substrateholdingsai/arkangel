@@ -222,12 +222,14 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
 - [x] **Tarea 0 · cuadre del conteo**: la suite de `changePassword` quedó con
       7 tests nuevos (4 de la suite + 1 de `revokeAllSessions` + 2 de esta
       tanda: sesión revocada → 401 y nueva = actual → 400). Total: 207 + 7.
-- [~] **Tarea 2 · spike de voz**: implementado y en CI (`CallSessionDO`,
-      pipeline STT→LLM→TTS con barge-in, signaling tras `SPIKE_VOZ_ENABLED`,
-      cliente en `spike/index.html`, arnés de 20 llamadas, migración
-      `0010_spike_calls.sql`). **Sin llamada real**: faltan las credenciales
-      de Deepgram y de Cloudflare Realtime, así que **no hay p50/p95** ni
-      veredicto. Detalle, tarifas vigentes y riesgos legales en
+- [~] **Tarea 2 · spike de voz**: implementado y en CI (**PR #2 mergeado**,
+      <https://github.com/substrateholdingsai/arkangel/pull/2>, run
+      <https://github.com/substrateholdingsai/arkangel/actions/runs/39688865320>
+      verde): `CallSessionDO`, pipeline STT→LLM→TTS con barge-in, signaling
+      tras `SPIKE_VOZ_ENABLED`, cliente en `spike/index.html`, arnés de 20
+      llamadas, migración `0010_spike_calls.sql`. **Sin llamada real**: faltan
+      las credenciales de Deepgram y de Cloudflare Realtime, así que **no hay
+      p50/p95** ni veredicto. Detalle, tarifas vigentes y riesgos legales en
       `docs/spike-voz.md`.
 
 ## Verificación realizada
@@ -254,6 +256,8 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
 | **Hash de contraseña** | test de `src/auth/native.ts` | PBKDF2 con 25 000 iteraciones y sal de 16 bytes; la misma contraseña sale con distinta sal; un hash mal formado no verifica |
 | **Sesión nativa** | test de `tests/authNative.test.ts` (D1 de mentira) | en D1 sólo se guarda el SHA-256 del token; cookie inválida o sesión revocada no dan sesión |
 | **Ciclo de vida en producción** | `curl` contra el worker desplegado | login 200 + `Set-Cookie`; `session` 200; logout 200 y la cookie deja de servir; sin cookie → 401; despacho ajeno → 403 |
+| **CI en GitHub Actions** | 4 runs reales (`push` y `pull_request` a `main`) | PR #1 (run 39684812269, 38 s), push a `main` (39685011657, 33 s), PR #2 (39688865320, 33 s), push a `main` (39689054239, 31 s): los cuatro verdes |
+| **Spike de voz** | 18 tests de `tests/spikeVoz.test.ts` | percentiles (nearest rank), DO (estado, métricas, barge-in, cierre) y pipeline con dobles; **sin llamada real** (faltan credenciales) |
 
 ## Deuda técnica y riesgos abiertos
 
