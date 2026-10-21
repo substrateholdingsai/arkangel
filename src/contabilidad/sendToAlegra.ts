@@ -574,6 +574,7 @@ export async function programarReintento(
         idempotencyKey: payload.idempotency_key,
         attempt: intento + 1,
         enqueuedAt: Date.now(),
+        tenantId: ctx.tenantId,
       },
       { delaySeconds }
     );

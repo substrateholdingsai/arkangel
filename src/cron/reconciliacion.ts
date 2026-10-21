@@ -27,6 +27,7 @@ import type { TenantContext } from '../tenancy/types';
 import { logger } from '../lib/logger';
 import { logEvent } from '../services/eventos';
 import { listTenants } from '../tenancy/repository';
+import { platformPrincipal } from '../auth/principal';
 import { crearClienteAlegra, type AlegraApi } from '../contabilidad/alegraClient';
 import {
   actualizarSync,
@@ -80,7 +81,7 @@ export async function reconciliarCortesPendientes(
         horarioEnRespuestas: tenant.legal_horario_en_respuestas === 1,
         dominiosPermitidos: tenant.allowed_payment_domains.split(',').filter(Boolean),
         condusef: tenant.condusef_registro,
-        nombreLegal: tenant.razon_social,
+        razonSocial: tenant.razon_social,
         rateLimitRpm: tenant.rate_limit_rpm,
         dedupeWindowHours: tenant.dedupe_window_hours,
         scoreAmountCeilingCents: tenant.score_amount_ceiling_cents,
@@ -90,7 +91,7 @@ export async function reconciliarCortesPendientes(
         cronAutoFire: tenant.cron_auto_fire === 1,
       },
       channels: [],
-      principal: { kind: 'platform' as const, actorId: 'cron', tenantId: null, role: 'platform_admin', scopes: [] },
+      principal: platformPrincipal('cron'),
     } as TenantContext;
 
     const resultado: ResultadoReconciliacion = {

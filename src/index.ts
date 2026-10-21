@@ -11,8 +11,9 @@ import { consumeBatch } from './orquestacion/consumidor';
 import { handleScheduled } from './cron/manana';
 import { handleContabilidadDaily } from './cron/contabilidadDaily';
 import { CallLockDO } from './durable/call-lock';
+import { RateLimiterDO } from './durable/rate-limiter';
 
-export { CallLockDO };
+export { CallLockDO, RateLimiterDO };
 
 const app = new Hono<{ Bindings: Env }>();
 

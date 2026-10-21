@@ -17,6 +17,7 @@ export interface Env {
   R2: R2Bucket;
   COBRANZA_QUEUE: Queue<CobranzaQueueMessage | ContabilidadRetryMessage>;
   CALL_LOCK: DurableObjectNamespace;
+  RATE_LIMITER: DurableObjectNamespace;
 
   // ── Tokens de acceso (no son secretos de proveedor, pero sí protegidos) ──
   ADMIN_TOKEN: string;
@@ -100,4 +101,5 @@ export interface ContabilidadRetryMessage {
   idempotencyKey: string;
   attempt: number;
   enqueuedAt: number;
+  tenantId: string;
 }

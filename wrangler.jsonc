@@ -53,10 +53,16 @@
       }
     ]
   },
-  "durable_objects": {
-    "bindings": [{ "name": "CALL_LOCK", "class_name": "CallLockDO" }]
+"durable_objects": {
+    "bindings": [
+      { "name": "CALL_LOCK", "class_name": "CallLockDO" },
+      { "name": "RATE_LIMITER", "class_name": "RateLimiterDO" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CallLockDO"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["CallLockDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["RateLimiterDO"] }
+  ],
   "observability": { "enabled": true },
   "triggers": { "crons": ["0 6 * * *", "59 5 * * *"] }
 }

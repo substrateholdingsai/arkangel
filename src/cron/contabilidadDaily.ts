@@ -13,6 +13,7 @@ import type { TenantContext } from '../tenancy/types';
 import { logger } from '../lib/logger';
 import { logEvent } from '../services/eventos';
 import { listTenants } from '../tenancy/repository';
+import { platformPrincipal } from '../auth/principal';
 import {
   construirPayload,
   diaPrevioIso,
@@ -69,7 +70,7 @@ export async function handleContabilidadDaily(
         horarioEnRespuestas: tenant.legal_horario_en_respuestas === 1,
         dominiosPermitidos: tenant.allowed_payment_domains.split(',').filter(Boolean),
         condusef: tenant.condusef_registro,
-        nombreLegal: tenant.razon_social,
+        razonSocial: tenant.razon_social,
         rateLimitRpm: tenant.rate_limit_rpm,
         dedupeWindowHours: tenant.dedupe_window_hours,
         scoreAmountCeilingCents: tenant.score_amount_ceiling_cents,
@@ -79,13 +80,14 @@ export async function handleContabilidadDaily(
         cronAutoFire: tenant.cron_auto_fire === 1,
       },
       channels: [],
-      principal: { kind: 'platform' as const, actorId: 'cron', tenantId: null, role: 'platform_admin', scopes: [] },
+      principal: platformPrincipal('cron'),
     } as TenantContext;
 
     // ── Fase 0: reconciliación de cortes que quedaron a medio camino ──
     let reconciliacion: ResultadoReconciliacion | undefined;
     try {
-      reconciliacion = await reconciliarCortesPendientes(ctx);
+      const resultados = await reconciliarCortesPendientes(ctx.env);
+      reconciliacion = resultados[0];
     } catch (error) {
       const mensaje = error instanceof Error ? error.message : String(error);
       await logEvent(ctx, 'alegra_sync', {

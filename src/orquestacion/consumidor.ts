@@ -35,16 +35,27 @@ export class DeferredError extends Error {
  * Throttle suave por proveedor: máximo N envíos por minuto y canal.
  *
  * El contador es POR TENANT: el límite de RPM pertenece a la cuenta del
- * cliente, no a la plataforma. Con la clave global, un tenant con volumen alto
- * agotaba el cupo de los demás sin que nadie supiera por qué.
+ * cliente, no a la plataforma. Usa un Durable Object por tenant+canal para
+ * evitar race conditions que tenía la implementación basada en KV.
  */
 async function acquireRateSlot(ctx: TenantContext, channel: string): Promise<boolean> {
   const rpm = ctx.config.rateLimitRpm;
-  const minute = Math.floor(Date.now() / 60000);
-  const key = IdempotencyKey.forTenantRateLimit(ctx.tenantId, channel, minute);
-  const current = Number((await ctx.env.KV.get(key)) ?? 0);
-  if (current >= rpm) return false;
-  await ctx.env.KV.put(key, String(current + 1), { expirationTtl: 180 });
+  const doId = ctx.env.RATE_LIMITER.idFromName(`${ctx.tenantId}:${channel}`);
+  const stub = ctx.env.RATE_LIMITER.get(doId);
+
+  const response = await stub.fetch(
+    `https://rate-limiter/acquire?rpm=${rpm}`,
+    { method: 'POST' }
+  );
+
+  if (!response.ok) {
+    if (response.status === 429) {
+      const data = await response.json<{ retryAfter: number }>();
+      throw new DeferredError(`Throttle de ${channel}`, data.retryAfter);
+    }
+    return false;
+  }
+
   return true;
 }
 
@@ -130,7 +141,7 @@ export async function processCase(
     for (const channel of channels) {
       const dedupeKey = IdempotencyKey.forTenantCase(ctx.tenantId, collectionCase.id, channel);
       const legacyKey = IdempotencyKey.forCase(collectionCase.id, channel);
-      const reserved = await reserveOnceConLegado(env.KV, dedupeKey, legacyKey, dedupeWindow, {
+      const reserved = await reserveOnceConLegado(ctx.env.KV, dedupeKey, legacyKey, dedupeWindow, {
         at: Date.now(),
       });
       if (!reserved) {
@@ -140,16 +151,13 @@ export async function processCase(
 
       const destination = channel === 'email' ? client.email : client.phone;
       if (!destination) {
-        await env.KV.delete(dedupeKey);
+        await ctx.env.KV.delete(dedupeKey);
         continue;
       }
 
-      if (!(await acquireRateSlot(ctx, channel))) {
-        await env.KV.delete(dedupeKey);
-        throw new DeferredError(`Throttle de ${channel}`, 60);
-      }
+      await acquireRateSlot(ctx, channel);
 
-      const drafted = await redactMessage(env, {
+      const drafted = await redactMessage(ctx.env, {
         channel,
         clientName: client.name,
         amountCents,
