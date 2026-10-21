@@ -20,8 +20,10 @@ import { handleScheduled } from './cron/manana';
 import { handleContabilidadDaily } from './cron/contabilidadDaily';
 import { CallLockDO } from './durable/call-lock';
 import { RateLimiterDO } from './durable/rate-limiter';
+import { CallSessionDO } from './durable/call-session';
+import { spike } from './routes/spike';
 
-export { CallLockDO, RateLimiterDO };
+export { CallLockDO, RateLimiterDO, CallSessionDO };
 
 const app = new Hono<{ Bindings: Env; Variables: AuthVars }>();
 
@@ -56,6 +58,10 @@ app.route('/api/v1', api);
 app.route('/api/v1', agent);
 app.route('/api/v1', contabilidad);
 app.route('/webhooks', webhooks);
+
+// Spike de voz (EXPERIMENTAL). Las rutas responden 404 mientras
+// SPIKE_VOZ_ENABLED no sea 'true' (ver src/routes/spike.ts).
+app.route('/spike', spike);
 
 app.notFound((c) => c.json({ error: 'not_found' }, 404));
 

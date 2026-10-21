@@ -23,7 +23,8 @@
     "LEGAL_MONTO_TOLERANCIA_CENTS": "0",
     "LEGAL_HORARIO_EN_RESPUESTAS": "false",
     "ALEGRA_IVA_PCT": "16",
-    "RESEND_FROM_EMAIL": "Arkangel <cobranza@arksystems.site>"
+    "RESEND_FROM_EMAIL": "Arkangel <cobranza@arksystems.site>",
+    "SPIKE_VOZ_ENABLED": "false"
   },
   "ai": { "binding": "AI" },
   "d1_databases": [
@@ -56,12 +57,14 @@
 "durable_objects": {
     "bindings": [
       { "name": "CALL_LOCK", "class_name": "CallLockDO" },
-      { "name": "RATE_LIMITER", "class_name": "RateLimiterDO" }
+      { "name": "RATE_LIMITER", "class_name": "RateLimiterDO" },
+      { "name": "CALL_SESSION", "class_name": "CallSessionDO" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["CallLockDO"] },
-    { "tag": "v2", "new_sqlite_classes": ["RateLimiterDO"] }
+    { "tag": "v2", "new_sqlite_classes": ["RateLimiterDO"] },
+    { "tag": "v3", "new_sqlite_classes": ["CallSessionDO"] }
   ],
   "observability": { "enabled": true },
   "triggers": { "crons": ["0 12 * * *", "59 5 * * *"] }

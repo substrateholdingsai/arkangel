@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spike de voz · Arkangel</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 2rem auto;
+        max-width: 46rem;
+        color: #1a1a1a;
+      }
+      h1 {
+        font-size: 1.25rem;
+      }
+      .aviso {
+        background: #fff6e5;
+        border-left: 4px solid #d98b00;
+        padding: 0.75rem 1rem;
+        margin: 1rem 0;
+        font-size: 0.9rem;
+      }
+      button {
+        font-size: 1rem;
+        padding: 0.6rem 1.2rem;
+        margin-right: 0.5rem;
+        cursor: pointer;
+      }
+      #estado {
+        font-family: ui-monospace, monospace;
+        font-size: 0.8rem;
+        white-space: pre-wrap;
+        background: #f5f5f5;
+        padding: 0.75rem;
+        max-height: 22rem;
+        overflow: auto;
+      }
+      .metricas {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+        gap: 0.5rem;
+        margin: 1rem 0;
+      }
+      .metrica {
+        border: 1px solid #ddd;
+        padding: 0.5rem;
+        font-size: 0.85rem;
+      }
+      .metrica b {
+        display: block;
+        font-size: 1.1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Spike de voz (experimental)</h1>
+
+    <div class="aviso">
+      <b>Esto es un spike, no producción.</b> El audio sale de tu micrófono
+      hacia el Worker y de ahí a Deepgram. No se guarda ni el audio ni la
+      transcripción: sólo las métricas de latencia. No uses datos reales de
+      clientes.
+    </div>
+
+    <p>
+      <button id="llamar">Llamar</button>
+      <button id="colgar" disabled>Colgar</button>
+      <button id="metricas">Ver métricas</button>
+    </p>
+
+    <div class="metricas" id="panel"></div>
+    <div id="estado">Listo.</div>
+
+    <!-- SDK de Cloudflare Realtime (Web Components, sin React). -->
+    <script src="https://cdn.jsdelivr.net/npm/@cloudflare/realtimekit@latest/dist/browser.js"></script>
+
+    <script>
+      const TENANT_ID = 't_arkangel'; // el spike exige un tenant real
+      const estado = document.getElementById('estado');
+      const panel = document.getElementById('panel');
+
+      let callId = null;
+      let traceId = null;
+      let socket = null;
+      let stream = null;
+      let audioCtx = null;
+      let worklet = null;
+      let reunion = null;
+
+      // ── Registro ──────────────────────────────────────────────────────────
+      function log(line) {
+        const ahora = new Date().toISOString().slice(11, 23);
+        estado.textContent = `${ahora}  ${line}\n` + estado.textContent;
+      }
+
+      function pintaMetricas(m) {
+        const claves = [
+          'stt_partial_ms',
+          'stt_final_ms',
+          'llm_first_token_ms',
+          'llm_total_ms',
+          'tts_first_chunk_ms',
+          'round_trip_ms',
+          'barge_in_latency_ms',
+        ];
+        panel.innerHTML = claves
+          .map((k) => {
+            const v = m.resumen && m.resumen[k] ? m.resumen[k] : null;
+            const p50 = v && v.p50 !== null ? `${Math.round(v.p50)} ms` : '—';
+            const p95 = v && v.p95 !== null ? `${Math.round(v.p95)} ms` : '—';
+            const n = v ? v.n : 0;
+            return `<div class="metrica">${k}<b>${p50}</b>p95 ${p95} · n=${n}</div>`;
+          })
+          .join('');
+      }
+
+      // ── Audio del micrófono → PCM 16 kHz mono ─────────────────────────────
+      async function abreMicrofono() {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+        });
+        audioCtx = new AudioContext();
+      }
+
+      // El micrófono se captura con un ScriptProcessor y se remuestrea a
+      // 16 kHz mono de 16 bits (linear16), que es lo que espera Deepgram.
+      function bombeaMicrofono() {
+        const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+        const fuente = audioCtx.createMediaStreamSource(stream);
+        processor.onaudioprocess = (evento) => {
+          if (!socket || socket.readyState !== WebSocket.OPEN) return;
+          const entrada = evento.inputBuffer.getChannelData(0);
+          const salida = new Int16Array(Math.floor(entrada.length / 3));
+          for (let i = 0; i < salida.length; i++) {
+            const base = i * 3;
+            const promedio = (entrada[base] + entrada[base + 1] + entrada[base + 2]) / 3;
+            salida[i] = Math.max(-1, Math.min(1, promedio)) * 32767;
+          }
+          socket.send(salida.buffer);
+        };
+        fuente.connect(processor);
+        // Silencio en la salida para que el nodo corra.
+        const mudo = audioCtx.createGain();
+        mudo.gain.value = 0;
+        processor.connect(mudo).connect(audioCtx.destination);
+        worklet = processor;
+      }
+
+      // ── Reproducción del audio del bot ───────────────────────────────────
+      const cola = [];
+      let reproduciendo = false;
+
+      function reproduce(muestra) {
+        if (!audioCtx) return;
+        if (!reproduciendo) {
+          reproduciendo = true;
+          audioCtx.resume();
+        }
+        const fuente = audioCtx.createBufferSource();
+        fuente.buffer = muestra;
+        fuente.connect(audioCtx.destination);
+        fuente.onended = () => {
+          const siguiente = cola.shift();
+          if (siguiente) reproduce(siguiente);
+          else reproduciendo = false;
+        };
+        fuente.start();
+      }
+
+      function encolaPcm(pcm) {
+        if (!audioCtx) return;
+        // El bot devuelve linear16 a 24 kHz (Deepgram Aura).
+        const muestras = new Float32Array(pcm.length / 2);
+        const vista = new DataView(pcm);
+        for (let i = 0; i < muestras.length; i++) {
+          muestras[i] = vista.getInt16(i * 2, true) / 32768;
+        }
+        const buffer = audioCtx.createBuffer(1, muestras.length, 24000);
+        buffer.copyToChannel(muestras, 0);
+        cola.push(buffer);
+        if (!reproduciendo) reproduce(cola.shift());
+      }
+
+      // ── Llamada ──────────────────────────────────────────────────────────
+      document.getElementById('llamar').addEventListener('click', async () => {
+        try {
+          log('pidiendo la llamada…');
+          const respuesta = await fetch('/spike/call', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tenantId: TENANT_ID, clientName: 'Cliente de prueba' }),
+          });
+          if (!respuesta.ok) {
+            const detalle = await respuesta.json().catch(() => ({}));
+            log(`no se pudo crear la llamada: ${respuesta.status} ${JSON.stringify(detalle)}`);
+            return;
+          }
+          const llamada = await respuesta.json();
+          callId = llamada.callId;
+          traceId = llamada.traceId;
+          log(`llamada ${callId} · trace ${traceId}`);
+
+          // 1) WebRTC con Cloudflare Realtime.
+          reunion = await RealtimeKitClient.init({ authToken: llamada.authToken });
+          await reunion.join();
+          log('unido a la reunión de Realtime');
+
+          // 2) Canal de audio con el Worker (STT/TTS).
+          const protocolo = location.protocol === 'https:' ? 'wss' : 'ws';
+          socket = new WebSocket(`${protocolo}://${location.host}${llamada.audioUrl}`);
+          socket.binaryType = 'arraybuffer';
+          socket.addEventListener('open', () => {
+            log('canal de audio abierto');
+            abreMicrofono()
+              .then(() => bombeaMicrofono())
+              .catch((e) => log(`micrófono: ${e.message}`));
+          });
+          socket.addEventListener('message', (evento) => {
+            if (typeof evento.data === 'string') {
+              const mensaje = JSON.parse(evento.data);
+              if (mensaje.tipo === 'tts_chunk') return; // el audio va en binario
+              log(`evento ${mensaje.tipo}${mensaje.texto ? ': ' + mensaje.texto : ''}`);
+              return;
+            }
+            encolaPcm(evento.data);
+          });
+          socket.addEventListener('close', () => log('canal de audio cerrado'));
+          socket.addEventListener('error', () => log('error en el canal de audio'));
+
+          document.getElementById('colgar').disabled = false;
+        } catch (error) {
+          log(`error: ${error.message}`);
+        }
+      });
+
+      document.getElementById('colgar').addEventListener('click', async () => {
+        try {
+          if (socket) socket.close();
+          if (reunion) await reunion.leave();
+          if (stream) stream.getTracks().forEach((t) => t.stop());
+          if (audioCtx) await audioCtx.close();
+          document.getElementById('colgar').disabled = true;
+          log('llamada colgada');
+        } catch (error) {
+          log(`error al colgar: ${error.message}`);
+        }
+      });
+
+      document.getElementById('metricas').addEventListener('click', async () => {
+        if (!callId) {
+          log('no hay llamada');
+          return;
+        }
+        const respuesta = await fetch(`/spike/call/${callId}/estado`);
+        const datos = await respuesta.json();
+        pintaMetricas(datos);
+        log(`estado: ${datos.estado} · ${datos.turnos} turnos`);
+      });
+    </script>
+  </body>
+</html>
