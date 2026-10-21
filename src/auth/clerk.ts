@@ -90,10 +90,29 @@ async function verificarSesionConClerk(env: Env, request: Request): Promise<Sesi
   if (!cliente) return null;
 
   try {
-    const estado = await cliente.authenticateRequest(request, opcionesDeVerificacion(env));
-    if (!estado.isSignedIn) return null;
+    const opciones = opcionesDeVerificacion(env);
+    logger.debug('Verificando sesión Clerk', {
+      tieneJwtKey: !!opciones.jwtKey,
+      authorizedParties: opciones.authorizedParties,
+      tieneCookie: request.headers.has('cookie'),
+      tieneAuthHeader: request.headers.has('authorization'),
+    });
+
+    const estado = await cliente.authenticateRequest(request, opciones);
+
+    if (!estado.isSignedIn) {
+      logger.debug('Resultado authenticateRequest', { isSignedIn: false });
+      return null;
+    }
 
     const auth = estado.toAuth();
+    logger.debug('Resultado authenticateRequest', {
+      isSignedIn: estado.isSignedIn,
+      isAuthenticated: auth.isAuthenticated,
+      tieneUserId: Boolean(auth.userId),
+      tieneOrgId: Boolean(auth.orgId),
+    });
+
     if (!auth.isAuthenticated) return null;
 
     return {

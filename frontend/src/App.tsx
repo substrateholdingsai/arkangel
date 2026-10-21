@@ -31,6 +31,7 @@ import {
 import { Show, SignIn, UserButton, useAuth } from '@clerk/react';
 import {
   api,
+  ApiError,
   setTokenProvider,
   type CaseRow,
   type DailyMetrics,
@@ -40,6 +41,10 @@ import {
 
 const WATERMARK = '/assets/arkangel-watermark.png';
 const WATERMARK_DARK = '/assets/arkangel-watermark-dark.png';
+
+function esSesionInvalida(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === 401 && error.code === 'unauthorized';
+}
 
 const INTENCION_LABEL: Record<string, string> = {
   paga: 'Pago confirmado',
@@ -81,8 +86,7 @@ export default function App() {
       setMetrics(metricas.metrics);
       setError(null);
     } catch (e) {
-      const ae = e as { status?: number; code?: string; message?: string };
-      if (ae?.status === 401) {
+      if (esSesionInvalida(e)) {
         void signOut();
         return;
       }
@@ -102,8 +106,7 @@ export default function App() {
         setLegal(estado);
         setReglas(catalogo.reglas);
       } catch (e) {
-        const ae = e as { status?: number };
-        if (ae?.status === 401) void signOut();
+        if (esSesionInvalida(e)) void signOut();
         /* el panel de cumplimiento no debe bloquear la operación */
       }
     })();
@@ -121,8 +124,7 @@ export default function App() {
           void cargar();
         }
       } catch (e) {
-        const ae = e as { status?: number };
-        if (ae?.status === 401) void signOut();
+        if (esSesionInvalida(e)) void signOut();
         /* el poll reintenta */
       }
     }, 2500);
