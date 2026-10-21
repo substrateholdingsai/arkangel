@@ -57,6 +57,13 @@ npm run lint             # eslint --max-warnings 0
 npm run db:migrate       # aplica migraciones D1 en remoto
 ```
 
+### CI
+
+Cada `push` a `main` y cada PR contra `main` corren `.github/workflows/ci.yml`:
+`npm ci` + `npm run verify` (format, lint, typecheck, test, build). El workflow
+es el mismo gate que se corre en local: si `npm run verify` falla en local,
+falla en Actions.
+
 ## Variables
 
 Secrets (vía `wrangler secret put`, valores locales en `.dev.vars` — **gitignored**):

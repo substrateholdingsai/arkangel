@@ -1,6 +1,6 @@
 {
   "name": "arkangel",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Arkangel — Cobranza asistida por IA sobre Cloudflare Workers (Workers AI + Resend + WhatsApp Cloud API + Telnyx)",
   "private": true,
   "type": "module",
