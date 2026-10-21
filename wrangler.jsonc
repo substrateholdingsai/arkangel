@@ -64,6 +64,6 @@
     { "tag": "v2", "new_sqlite_classes": ["RateLimiterDO"] }
   ],
   "observability": { "enabled": true },
-  "triggers": { "crons": ["0 6 * * *", "59 5 * * *"] }
+  "triggers": { "crons": ["0 12 * * *", "59 5 * * *"] }
 }
 

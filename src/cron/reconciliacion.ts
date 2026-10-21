@@ -222,7 +222,11 @@ export async function reconciliarCortesPendientes(
 }
 
 /** Reenvía un corte que no llegó a crear ningún asiento. */
-async function reenviarCorte(ctx: TenantContext, corte: SyncRow, cliente: AlegraApi): Promise<boolean> {
+async function reenviarCorte(
+  ctx: TenantContext,
+  corte: SyncRow,
+  cliente: AlegraApi
+): Promise<boolean> {
   const payload = await leerPayloadDesdeR2(ctx, corte.fecha_corte);
   if (!payload) {
     await registrarSinConfirmar(ctx, corte, 'payload no encontrado en R2');
@@ -232,7 +236,11 @@ async function reenviarCorte(ctx: TenantContext, corte: SyncRow, cliente: Alegra
   return resultado.ok;
 }
 
-async function registrarSinConfirmar(ctx: TenantContext, corte: SyncRow, motivo: string): Promise<void> {
+async function registrarSinConfirmar(
+  ctx: TenantContext,
+  corte: SyncRow,
+  motivo: string
+): Promise<void> {
   await logEvent(ctx, 'alegra_reconciliacion_sin_confirmacion', {
     payload: {
       fecha_corte: corte.fecha_corte,

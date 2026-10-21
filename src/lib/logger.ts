@@ -165,11 +165,13 @@ export function traceMiddleware() {
 
 /** Get trace context from Hono context. */
 export function getTraceContext(c: any): TraceContext {
-  return c.get('traceCtx') ?? {
-    traceId: generateTraceId(),
-    spanId: generateSpanId(),
-    sampled: true,
-  };
+  return (
+    c.get('traceCtx') ?? {
+      traceId: generateTraceId(),
+      spanId: generateSpanId(),
+      sampled: true,
+    }
+  );
 }
 
 /** Create a request logger with trace context. */

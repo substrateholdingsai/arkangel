@@ -1,7 +1,7 @@
 import { classifyInbound, draftReply } from '../ai/agent';
 import { adapters } from '../channels';
 import type { InboundMessage } from '../channels/types';
-import { configLegal } from '../legal/config';
+import { configLegal, assertTenantListoParaOperar } from '../legal/config';
 import { evaluarMensaje } from '../legal/motor';
 import { IdempotencyKey, reserveOnceConLegado } from '../lib/idempotencia';
 import { logger } from '../lib/logger';
@@ -49,22 +49,22 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
   if (!isNew) return { handled: false, reason: 'duplicado' };
 
   const phone = normalizePhone(inbound.from);
-  const client = await findClientByContact(env, {
+  const client = await findClientByContact(ctx, {
     phone,
     email: inbound.channel === 'email' ? inbound.from : null,
   });
 
   if (!client) {
-    await logEvent(env, 'inbound.cliente_desconocido', {
+    await logEvent(ctx, 'inbound.cliente_desconocido', {
       payload: { channel: inbound.channel, from: inbound.from },
     });
     return { handled: false, reason: 'cliente desconocido' };
   }
 
-  const openCase = await findOpenCase(env, client.id);
+  const openCase = await findOpenCase(ctx, client.id);
   const caseId = openCase?.id ?? `cas_${client.id}`;
 
-  const inboundRow = await recordMessage(env, {
+  const inboundRow = await recordMessage(ctx, {
     caseId,
     clientId: client.id,
     channel: inbound.channel,
@@ -75,7 +75,7 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
     meta: { contactName: inbound.contactName },
   });
 
-  const debts = await listPendingDebts(env, client.id);
+  const debts = await listPendingDebts(ctx, client.id);
   const amountCents = debts.reduce((sum, debt) => sum + debt.amount_cents, 0);
   const dueDate =
     debts[0]?.due_date ?? openCase?.case_date ?? new Date().toISOString().slice(0, 10);
@@ -88,7 +88,7 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
     inbound: inbound.body,
   });
 
-  await logEvent(env, 'inbound.clasificado', {
+  await logEvent(ctx, 'inbound.clasificado', {
     caseId,
     clientId: client.id,
     payload: {
@@ -98,7 +98,7 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
     },
   });
 
-  await actualizarMetaMensaje(env, inboundRow.id, {
+  await actualizarMetaMensaje(ctx, inboundRow.id, {
     contactName: inbound.contactName,
     intent: classification.intent,
     confidence: classification.confidence,
@@ -109,8 +109,9 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
 
   switch (classification.intent) {
     case 'paga': {
-      for (const debt of debts) await markDebtStatus(env, debt.id, 'paid');
-      await recordPromise(env, {
+      for (const debt of debts) await markDebtStatus(ctx, debt.id, 'paid');
+      await recordPromise(ctx, {
+        tenantId: ctx.tenantId,
         caseId,
         clientId: client.id,
         amountCents,
@@ -118,7 +119,7 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
         confidence: classification.confidence,
         source: classification.source,
       });
-      await updateCase(env, caseId, { status: 'paid' });
+      await updateCase(ctx, caseId, { status: 'paid' });
       replied = await reply(
         env,
         ctx,
@@ -135,7 +136,8 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
 
     case 'promete': {
       const promised = classification.montoPrometidoCents ?? amountCents;
-      await recordPromise(env, {
+      await recordPromise(ctx, {
+        tenantId: ctx.tenantId,
         caseId,
         clientId: client.id,
         amountCents: promised,
@@ -143,8 +145,8 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
         confidence: classification.confidence,
         source: classification.source,
       });
-      for (const debt of debts) await markDebtStatus(env, debt.id, 'promised');
-      await updateCase(env, caseId, { status: 'promised' });
+      for (const debt of debts) await markDebtStatus(ctx, debt.id, 'promised');
+      await updateCase(ctx, caseId, { status: 'promised' });
       replied = await reply(
         env,
         ctx,
@@ -160,8 +162,8 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
     }
 
     case 'molesto': {
-      await markDoNotDisturb(env, client.id, true);
-      await updateCase(env, caseId, { status: 'human' });
+      await markDoNotDisturb(ctx, client.id, true);
+      await updateCase(ctx, caseId, { status: 'human' });
       replied = await reply(
         env,
         ctx,
@@ -179,7 +181,7 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
     case 'rechaza':
     case 'pide_factura':
     case 'pide_info': {
-      await updateCase(env, caseId, { status: 'human' });
+      await updateCase(ctx, caseId, { status: 'human' });
       replied = await reply(
         env,
         ctx,
@@ -208,7 +210,7 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
           classification.intent
         );
       } else {
-        await updateCase(env, caseId, { status: 'human' });
+        await updateCase(ctx, caseId, { status: 'human' });
       }
     }
   }
@@ -228,6 +230,9 @@ async function reply(
   intent: string
 ): Promise<boolean> {
   try {
+    // Fail-closed: tenant en modo db sin identidad legal no puede operar
+    assertTenantListoParaOperar(ctx);
+
     const body = await draftReply(env, {
       clientName,
       amountCents,
@@ -243,9 +248,9 @@ async function reply(
 
     // ── Motor de cumplimiento también sobre la respuesta automática ──
     const legal = configLegal(ctx);
-    const contrato = await getContractByClient(env, clientId);
-    const contactos24h = await countContactos24h(env, clientId);
-    const logsReales = await countSentForCase(env, caseId);
+    const contrato = await getContractByClient(ctx, clientId);
+    const contactos24h = await countContactos24h(ctx, clientId);
+    const logsReales = await countSentForCase(ctx, caseId);
 
     const veredicto = evaluarMensaje({
       ahora: new Date(),
@@ -273,7 +278,7 @@ async function reply(
     });
 
     if (veredicto.violaciones.length > 0) {
-      await registrarViolaciones(env, veredicto.violaciones, {
+      await registrarViolaciones(ctx, veredicto.violaciones, {
         caseId,
         clientId,
         canal: inbound.channel,
@@ -285,7 +290,7 @@ async function reply(
         regla: veredicto.bloqueadoPor,
         caseId,
       });
-      await logEvent(env, 'respuesta.bloqueada_legal', {
+      await logEvent(ctx, 'respuesta.bloqueada_legal', {
         caseId,
         clientId,
         payload: { regla: veredicto.bloqueadoPor },
@@ -304,7 +309,7 @@ async function reply(
       meta: { reply: true },
     });
 
-    await recordMessage(env, {
+    await recordMessage(ctx, {
       caseId,
       clientId,
       channel: inbound.channel,

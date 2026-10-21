@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { AuthVars } from '../auth/middleware';
 import type { Env } from '../types/env';
 import { todayIso } from '../services/db';
 import { listCasesByDate } from '../services/casos';
@@ -11,7 +12,7 @@ import { logEvent } from '../services/eventos';
 import { exigePrincipalConScope } from './guard';
 import { tenantContextDeRequest } from './tenant';
 
-export const agent = new Hono<{ Bindings: Env }>();
+export const agent = new Hono<{ Bindings: Env; Variables: AuthVars }>();
 
 /**
  * API del agente.
@@ -28,10 +29,10 @@ agent.get('/state', async (c) => {
   if (!resultado.ok) return resultado.response;
   const ctx = resultado.ctx;
   const date = c.req.query('date') ?? todayIso(ctx.config.tz);
-  const cases = await listCasesByDate(c.env, date);
-  const metrics = await dailyMetrics(c.env, date);
+  const cases = await listCasesByDate(ctx, date);
+  const metrics = await dailyMetrics(ctx, date);
   const legal = configLegal(ctx);
-  const cumplimiento = await resumenCumplimiento(c.env, date);
+  const cumplimiento = await resumenCumplimiento(ctx, date);
   const mode = ctx.config.agentMode.toLowerCase();
   return c.json({
     ok: true,
@@ -67,7 +68,7 @@ agent.post('/decide', async (c) => {
   const ctx = resultado.ctx;
   const body = await c.req.json().catch(() => ({}));
   const date = (body?.date as string) ?? todayIso(ctx.config.tz);
-  const cases = await listCasesByDate(c.env, date);
+  const cases = await listCasesByDate(ctx, date);
   const threshold = ctx.config.agentAutoThresholdCents;
   const plan = cases.map((item) => {
     const escalado = item.amount_cents > threshold;
@@ -83,7 +84,7 @@ agent.post('/decide', async (c) => {
         item.score_band === 'alto' ? 'high' : item.score_band === 'medio' ? 'medium' : 'low',
     };
   });
-  await logEvent(c.env, 'agent.decide', { payload: { date, count: plan.length } });
+  await logEvent(ctx, 'agent.decide', { payload: { date, count: plan.length } });
   return c.json({ ok: true, date, plan });
 });
 
@@ -99,8 +100,8 @@ agent.post('/dispatch', async (c) => {
   const autonomous = mode.toLowerCase() === 'autonomous';
 
   if (!autonomous) {
-    const cases = await listCasesByDate(c.env, date);
-    await logEvent(c.env, 'agent.dispatch.supervised', { payload: { date, cases: cases.length } });
+    const cases = await listCasesByDate(ctx, date);
+    await logEvent(ctx, 'agent.dispatch.supervised', { payload: { date, cases: cases.length } });
     return c.json({
       ok: true,
       mode: 'supervised',
@@ -109,15 +110,17 @@ agent.post('/dispatch', async (c) => {
     });
   }
 
-  const result = await dispararHoy(c.env, date, ctx.tenantId);
-  await logEvent(c.env, 'agent.dispatch.autonomous', { payload: { date, ...result } });
+  const result = await dispararHoy(ctx, date);
+  await logEvent(ctx, 'agent.dispatch.autonomous', { payload: { date, ...result } });
   return c.json({ ok: true, mode: 'autonomous', date, ...result });
 });
 
 agent.post('/audit', async (c) => {
   const guardia = await exigePrincipalConScope(c, 'agent:audit');
   if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
   const body = await c.req.json().catch(() => ({}));
-  await logEvent(c.env, 'agent.audit', { payload: body ?? {} });
+  await logEvent(resultado.ctx, 'agent.audit', { payload: body ?? {} });
   return c.json({ ok: true });
 });

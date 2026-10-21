@@ -71,16 +71,6 @@ export interface Env {
   ALEGRA_IVA_PCT?: string;
   ALEGRA_CUENTA_CONTINGENCIA?: string;
   ALEGRA_CUENTA_CONTINGENCIA_CREDITO?: string;
-
-  // ── Clerk (identidad) ─────────────────────────────────────────────────────
-  // Opcionales para que el Worker arranque sin Clerk configurado: en ese caso
-  // `clerkActivo(env)` devuelve false y la verificación cae a null (flujo normal).
-  CLERK_SECRET_KEY?: string;
-  CLERK_PUBLISHABLE_KEY?: string;
-  /** PEM público: verificación de JWT sin red (no llama a la API de Clerk). */
-  CLERK_JWT_KEY?: string;
-  /** CSV de orígenes permitidos (claim `azp` del JWT). */
-  CLERK_AUTHORIZED_PARTIES?: string;
 }
 
 export interface CobranzaQueueMessage {

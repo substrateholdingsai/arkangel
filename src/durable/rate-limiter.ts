@@ -69,7 +69,9 @@ export class RateLimiterDO extends DurableObject<Env, RateLimiterState> {
   private async reset(): Promise<Response> {
     this.state = { count: 0, windowStart: Date.now() };
     await this.ctx.storage.put('state', this.state);
-    return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ ok: true }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   private async status(rpm: number, windowMs: number): Promise<Response> {
@@ -83,10 +85,13 @@ export class RateLimiterDO extends DurableObject<Env, RateLimiterState> {
       });
     }
 
-    return new Response(JSON.stringify({
-      count: this.state.count,
-      remaining: rpm - this.state.count,
-      windowStart: this.state.windowStart,
-    }), { headers: { 'Content-Type': 'application/json' } });
+    return new Response(
+      JSON.stringify({
+        count: this.state.count,
+        remaining: rpm - this.state.count,
+        windowStart: this.state.windowStart,
+      }),
+      { headers: { 'Content-Type': 'application/json' } }
+    );
   }
 }

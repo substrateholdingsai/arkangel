@@ -46,7 +46,10 @@ export interface RecordMessageInput {
   meta?: Record<string, unknown> | null;
 }
 
-export async function recordMessage(ctx: TenantContext, input: RecordMessageInput): Promise<MessageRow> {
+export async function recordMessage(
+  ctx: TenantContext,
+  input: RecordMessageInput
+): Promise<MessageRow> {
   const id = newId('msg');
   const timestamp = nowIso();
 
@@ -85,14 +88,28 @@ export async function recordMessage(ctx: TenantContext, input: RecordMessageInpu
   };
 }
 
+/**
+ * Actualiza el estado de un mensaje a partir de su id de proveedor.
+ *
+ * El webhook de estado no lleva el tenant: el proveedor manda el id del
+ * mensaje y su nuevo estado, nada más. El tenant se deduce de la fila del
+ * propio mensaje (es el que tenía cuando se envió), no de lo que diga el
+ * webhook. Si el mensaje no existe, no hay nada que actualizar.
+ */
 export async function updateMessageStatus(
-  ctx: TenantContext,
+  env: Env,
   providerId: string,
   status: MessageStatus,
   error?: string | null
 ): Promise<void> {
-  await ctx.env.DB.prepare('UPDATE messages SET status = ?, error = ? WHERE tenant_id = ? AND provider_id = ?')
-    .bind(status, error ?? null, ctx.tenantId, providerId)
+  const row = await env.DB.prepare('SELECT tenant_id FROM messages WHERE provider_id = ? LIMIT 1')
+    .bind(providerId)
+    .first<{ tenant_id: string }>();
+  if (!row) return;
+  await env.DB.prepare(
+    'UPDATE messages SET status = ?, error = ? WHERE tenant_id = ? AND provider_id = ?'
+  )
+    .bind(status, error ?? null, row.tenant_id, providerId)
     .run();
 }
 

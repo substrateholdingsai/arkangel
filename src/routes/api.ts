@@ -3,8 +3,9 @@ import { formatMXNShort } from '../lib/money';
 import { maskPhone } from '../lib/phone';
 import { configLegal } from '../legal/config';
 import { catalogoReglas } from '../legal/motor';
+import type { AuthVars } from '../auth/middleware';
+import { requireTenantMembership } from '../auth/middleware';
 import type { Env } from '../types/env';
-import type { TenantContext } from '../tenancy/types';
 import {
   etiquetaEstado,
   getCase,
@@ -23,7 +24,12 @@ import { exigeTenant } from '../auth/guards';
 import { exigePrincipalConScope } from './guard';
 import { tenantContextDeRequest } from './tenant';
 
-export const api = new Hono<{ Bindings: Env }>();
+export const api = new Hono<{ Bindings: Env; Variables: AuthVars }>();
+
+// La cabecera `X-Tenant-Id` sólo puede seleccionar uno de los despachos del
+// usuario: si pide un tenant del que no es miembro, la petición se rechaza
+// aquí con 403 antes de tocar un solo dato.
+api.use('*', requireTenantMembership);
 
 /**
  * Panel de cobranza.
@@ -103,8 +109,8 @@ api.post('/disparar', async (c) => {
  *
  * Estas rutas leen por id, así que además del scope hay que comprobar que el
  * principal puede operar sobre el tenant con el que se está respondiendo: un
- * usuario de la Organization A no puede pedir el caso de un id del tenant B
- * poniéndole la cabecera del tenant B.
+ * usuario del despacho A no puede pedir el caso de un id del despacho B
+ * poniéndole la cabecera del despacho B.
  */
 api.get('/cases/:id', async (c) => {
   const guardia = await exigePrincipalConScope(c, 'cases:read');
@@ -114,7 +120,7 @@ api.get('/cases/:id', async (c) => {
   const denegado = exigeTenant(guardia.principal, resultado.ctx.tenantId);
   if (denegado) return denegado;
 
-  const item = await getCase(ctx, c.req.param('id'));
+  const item = await getCase(resultado.ctx, c.req.param('id'));
   if (!item) return c.json({ error: 'not_found' }, 404);
   return c.json({ ok: true, case: item });
 });
@@ -127,9 +133,9 @@ api.get('/clients/:id', async (c) => {
   const denegado = exigeTenant(guardia.principal, resultado.ctx.tenantId);
   if (denegado) return denegado;
 
-  const client = await getClient(ctx, c.req.param('id'));
+  const client = await getClient(resultado.ctx, c.req.param('id'));
   if (!client) return c.json({ error: 'not_found' }, 404);
-  const debts = await listPendingDebts(ctx, client.id);
+  const debts = await listPendingDebts(resultado.ctx, client.id);
   return c.json({ ok: true, client, debts });
 });
 
@@ -142,7 +148,7 @@ api.get('/clients/:id/conversation', async (c) => {
   if (denegado) return denegado;
 
   const limit = Number(c.req.query('limit') ?? 50);
-  const messages = await listConversation(ctx, c.req.param('id'), limit);
+  const messages = await listConversation(resultado.ctx, c.req.param('id'), limit);
   return c.json({ ok: true, messages });
 });
 

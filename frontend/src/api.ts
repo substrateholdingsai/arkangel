@@ -1,9 +1,15 @@
-type TokenProvider = () => Promise<string | null>;
-let tokenProvider: TokenProvider = async () => null;
-
-export function setTokenProvider(p: TokenProvider): void {
-  tokenProvider = p;
-}
+/**
+ * Cliente HTTP del panel.
+ *
+ * La identidad viaja en la cookie `ark_session`: el navegador la manda sola en
+ * cada petición (`credentials: 'include'`), así que aquí no hay token que
+ * gestionar, ni que renovar, ni que se pueda leer desde JavaScript.
+ *
+ * Lo único que este módulo sí lleva es el **tenant activo**: la cabecera
+ * `X-Tenant-Id` elige en cuál de los despachos del usuario se opera. Nunca
+ * amplía el alcance: el Worker comprueba que el usuario sea miembro de ese
+ * despacho y, si no, responde 403.
+ */
 
 export class ApiError extends Error {
   status: number;
@@ -19,23 +25,46 @@ export class ApiError extends Error {
 const MESSAGES: Record<string, string> = {
   unauthorized: 'Sesión inválida o ausente. Inicia sesión de nuevo.',
   forbidden: 'No tienes permiso para realizar esta acción.',
-  tenant_mismatch: 'La organización seleccionada no corresponde al tenant.',
-  org_sin_tenant: 'La organización o el usuario no están dados de alta.',
+  tenant_forbidden: 'Ese despacho no es tuyo. Cambia de despacho o pide acceso.',
+  tenant_mismatch: 'El despacho seleccionado no corresponde al usuario.',
+  sin_membresia: 'Tu usuario no tiene ningún despacho asignado.',
   sin_acceso: 'No tienes acceso a este recurso.',
-  tenant_not_found: 'El tenant solicitado no existe.',
+  tenant_not_found: 'El despacho solicitado no existe.',
 };
+
+let activeTenantId: string | null = null;
+
+/** Fija el despacho activo (el que se manda en `X-Tenant-Id`). */
+export function setActiveTenantId(tenantId: string | null): void {
+  activeTenantId = tenantId;
+}
+
+/** Despacho activo en este momento. */
+export function getActiveTenantId(): string | null {
+  return activeTenantId;
+}
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
-  const token = await tokenProvider();
-  if (token) headers.set('Authorization', `Bearer ${token}`);
   if (init.body && !(init.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
   }
+  if (activeTenantId) {
+    headers.set('X-Tenant-Id', activeTenantId);
+  }
 
-  const response = await fetch(path, { ...init, headers });
+  const response = await fetch(path, {
+    ...init,
+    headers,
+    credentials: 'include',
+  });
   const text = await response.text();
-  const data = text ? (JSON.parse(text) as unknown) : {};
+  let data: unknown = {};
+  try {
+    data = text ? (JSON.parse(text) as unknown) : {};
+  } catch {
+    data = {};
+  }
 
   if (!response.ok) {
     const code = (data as { error?: string }).error ?? response.statusText;
@@ -45,6 +74,73 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   return data as T;
 }
+
+/* ── Sesión ────────────────────────────────────────────────────────────────── */
+
+export type MembershipRole = 'owner' | 'admin' | 'member';
+
+export interface AuthTenant {
+  tenantId: string;
+  tenantName: string;
+  tenantSlug: string;
+  role: MembershipRole;
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  fullName: string;
+}
+
+export interface AuthSession {
+  user: AuthUser;
+  tenants: AuthTenant[];
+  platformRole: 'user' | 'super_admin';
+}
+
+export const auth = {
+  /** Sesión actual (401 si no hay cookie válida). */
+  session: () => request<AuthSession>('/api/auth/session'),
+
+  login: (email: string, password: string) =>
+    request<AuthSession>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+
+  register: (input: { email: string; password: string; fullName: string; tenantName?: string }) =>
+    request<AuthSession>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: input.email,
+        password: input.password,
+        full_name: input.fullName,
+        tenant_name: input.tenantName,
+      }),
+    }),
+
+  logout: () => request<{ success: boolean }>('/api/auth/logout', { method: 'POST' }),
+
+  requestPasswordReset: (email: string) =>
+    request<{ success: boolean; message: string }>('/api/auth/request-password-reset', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+
+  resetPassword: (token: string, password: string) =>
+    request<{ success: boolean; message: string }>('/api/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token, password }),
+    }),
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ success: boolean; message: string }>('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
+};
+
+/* ── Panel ─────────────────────────────────────────────────────────────────── */
 
 export interface CaseRow {
   id: string;

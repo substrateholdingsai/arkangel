@@ -11,7 +11,6 @@
  * Fail-closed: si el ledger no verifica, no se manda nada y se alerta al humano.
  */
 
-import type { Env } from '../types/env';
 import type { TenantContext } from '../tenancy/types';
 import { logEvent } from '../services/eventos';
 import { logger } from '../lib/logger';
@@ -73,8 +72,8 @@ const SQL_LISTAR_SYNC_PENDIENTES = `SELECT id, tenant_id, fecha_corte, idempoten
   LIMIT 50`;
 
 const SQL_LEER_LINEAS = `SELECT legal_audit_id, alegra_journal_id
-  FROM alegra_journal_lines
-  WHERE tenant_id = ? AND idempotency_key = ?
+FROM alegra_journal_lines
+  WHERE tenant_id = ? AND idempotency_key = ? AND legal_audit_id = ?
   LIMIT 1`;
 
 const SQL_LISTAR_LINEAS = `SELECT alegra_sync_id, linea_numero, idempotency_key, legal_audit_id, alegra_journal_id
@@ -169,7 +168,9 @@ export async function leerUltimoPayload(
 // ────────────────────────────── persistencia ──────────────────────────────
 
 async function leerSync(ctx: TenantContext, idempotencyKey: string): Promise<SyncRow | null> {
-  const fila = await ctx.env.DB.prepare(SQL_LEER_SYNC).bind(ctx.tenantId, idempotencyKey).first<SyncRow>();
+  const fila = await ctx.env.DB.prepare(SQL_LEER_SYNC)
+    .bind(ctx.tenantId, idempotencyKey)
+    .first<SyncRow>();
   return fila ?? null;
 }
 
@@ -210,14 +211,21 @@ async function registrarLinea(
 }
 
 /** Líneas de trazabilidad de un corte (para la reconciliación). */
-export async function listarLineas(ctx: TenantContext, idempotencyKey: string): Promise<LineaRow[]> {
-  const result = await ctx.env.DB.prepare(SQL_LISTAR_LINEAS).bind(ctx.tenantId, idempotencyKey).all<LineaRow>();
+export async function listarLineas(
+  ctx: TenantContext,
+  idempotencyKey: string
+): Promise<LineaRow[]> {
+  const result = await ctx.env.DB.prepare(SQL_LISTAR_LINEAS)
+    .bind(ctx.tenantId, idempotencyKey)
+    .all<LineaRow>();
   return result.results ?? [];
 }
 
 /** Cortes que quedaron a medio camino (pendientes o fallidos). */
 export async function listarSyncPendientes(ctx: TenantContext): Promise<SyncRow[]> {
-  const result = await ctx.env.DB.prepare(SQL_LISTAR_SYNC_PENDIENTES).bind(ctx.tenantId).all<SyncRow>();
+  const result = await ctx.env.DB.prepare(SQL_LISTAR_SYNC_PENDIENTES)
+    .bind(ctx.tenantId)
+    .all<SyncRow>();
   return result.results ?? [];
 }
 

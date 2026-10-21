@@ -1,9 +1,9 @@
 import { redactMessage } from '../ai/agent';
 import { adapters, resolveChannels } from '../channels';
-import { configLegal } from '../legal/config';
+import { configLegal, assertTenantListoParaOperar } from '../legal/config';
 import { evaluarMensaje } from '../legal/motor';
 import { IdempotencyKey, reserveOnceConLegado } from '../lib/idempotencia';
-import { logger, TraceContext } from '../lib/logger';
+import { TraceContext } from '../lib/logger';
 import { createTracer } from '../lib/logger';
 import { isWithinSendWindow } from '../lib/score';
 import type { Env } from '../types/env';
@@ -44,10 +44,7 @@ async function acquireRateSlot(ctx: TenantContext, channel: string): Promise<boo
   const doId = ctx.env.RATE_LIMITER.idFromName(`${ctx.tenantId}:${channel}`);
   const stub = ctx.env.RATE_LIMITER.get(doId);
 
-  const response = await stub.fetch(
-    `https://rate-limiter/acquire?rpm=${rpm}`,
-    { method: 'POST' }
-  );
+  const response = await stub.fetch(`https://rate-limiter/acquire?rpm=${rpm}`, { method: 'POST' });
 
   if (!response.ok) {
     if (response.status === 429) {
@@ -76,7 +73,10 @@ export async function processCase(
   traceCtx: TraceContext
 ): Promise<void> {
   const tracer = createTracer('processCase');
-  const { span, log } = tracer.startSpan(traceCtx, `processCase:${msg.caseId}`);
+  const { log } = tracer.startSpan(traceCtx, `processCase:${msg.caseId}`);
+
+  // Fail-closed: tenant en modo db sin identidad legal no puede operar
+  assertTenantListoParaOperar(ctx);
 
   const collectionCase = await getCase(ctx, msg.caseId);
   if (!collectionCase) {
@@ -92,7 +92,10 @@ export async function processCase(
 
   const client = await getClient(ctx, collectionCase.client_id);
   if (!client) {
-    log.warn('Cliente no encontrado', { clientId: collectionCase.client_id, traceId: traceCtx.traceId });
+    log.warn('Cliente no encontrado', {
+      clientId: collectionCase.client_id,
+      traceId: traceCtx.traceId,
+    });
     tracer.endSpan(log, { error: 'client_not_found' });
     return;
   }
@@ -152,7 +155,7 @@ export async function processCase(
     const credenciales = mergeChannelCredentials(ctx.channels);
 
     for (const channel of channels) {
-      const { span: channelSpan, log: channelLog } = tracer.startSpan(traceCtx, `send:${channel}`);
+      const { log: channelLog } = tracer.startSpan(traceCtx, `send:${channel}`);
 
       const dedupeKey = IdempotencyKey.forTenantCase(ctx.tenantId, collectionCase.id, channel);
       const legacyKey = IdempotencyKey.forCase(collectionCase.id, channel);
@@ -350,7 +353,7 @@ export async function consumeBatch(
       sampled: true,
     };
 
-    const { span, log } = tracer.startSpan(traceCtx, `process:${body.type}`);
+    const { log } = tracer.startSpan(traceCtx, `process:${body.type}`);
 
     // ── Módulo contable: reintento de Alegra ──
     if (body && body.type === 'contabilidad.reintento') {

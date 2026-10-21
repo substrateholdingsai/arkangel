@@ -35,7 +35,6 @@ function filaTenant(overrides: Partial<Tenant> = {}): Tenant {
     dry_run: 0,
     cron_auto_fire: 0,
     is_default: 0,
-    clerk_org_id: null,
     created_at: '2026-10-01T00:00:00Z',
     updated_at: '2026-10-01T00:00:00Z',
     ...overrides,

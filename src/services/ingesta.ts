@@ -3,7 +3,6 @@ import { logger } from '../lib/logger';
 import { normalizePhone } from '../lib/phone';
 import { formatMXNShort } from '../lib/money';
 import type { CsvRow } from '../lib/csv';
-import type { Env } from '../types/env';
 import type { TenantContext } from '../tenancy/types';
 import { upsertCase } from './casos';
 import { findOrCreateClient } from './clientes';

@@ -1,4 +1,5 @@
 import type { Context } from 'hono';
+import type { AuthVars } from '../auth/middleware';
 import type { Env } from '../types/env';
 import type { Principal } from '../auth/principal';
 import type { OrigenPrincipal } from '../auth/guards';
@@ -23,8 +24,8 @@ export type TenantContextResult =
  * un id equivocado no puede convertirse en un envío a nombre de la empresa
  * equivocada.
  *
- * Si la cabecera apunta a un tenant que **no** es el del principal (una
- * Organization de Clerk distinta de la del usuario), la respuesta es 403
+ * Si la cabecera apunta a un tenant que **no** es el del principal (un
+ * despacho en el que el usuario no es miembro), la respuesta es 403
  * 	enant_mismatch: es suplantación, no un id mal escrito. Antes esto
  * reventaba como 500.
  *
@@ -33,7 +34,7 @@ export type TenantContextResult =
  * se opera es el del principal que se autorizó.
  */
 export async function tenantContextDeRequest(
-  c: Context<{ Bindings: Env }>,
+  c: Context<{ Bindings: Env; Variables: AuthVars }>,
   principal?: Principal,
   origen?: OrigenPrincipal
 ): Promise<TenantContextResult> {

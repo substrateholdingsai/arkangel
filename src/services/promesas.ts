@@ -1,4 +1,3 @@
-import type { Env } from '../types/env';
 import type { TenantContext } from '../tenancy/types';
 import { newId, nowIso } from './db';
 

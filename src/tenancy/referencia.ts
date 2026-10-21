@@ -5,11 +5,10 @@
  * qué cliente es el tráfico. Sin cabecera se usa el tenant por defecto de la
  * plataforma.
  *
- * Desde la integración con Clerk la cabecera **acota** la vista, no amplía el
- * alcance: el tenant se deduce de la credencial y, si la cabecera apunta a un
- * tenant distinto del del principal, la petición se rechaza con
- * `tenant_mismatch` (fail-closed). Un `X-Tenant-Id` confiado desde el
- * navegador es suplantación.
+ * La cabecera **acota** la vista, no amplía el alcance: el tenant se deduce
+ * de la credencial y, si la cabecera apunta a un tenant distinto del del
+ * principal, la petición se rechaza con `tenant_mismatch` (fail-closed). Un
+ * `X-Tenant-Id` confiado desde el navegador es suplantación.
  *
  * Por qué vive en su propio módulo: lo necesitan las dos capas —la de
  * autenticación (`src/auth/guards.ts`) y la de tenancy— y compartirlo evita un

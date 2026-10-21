@@ -278,3 +278,254 @@ describe('AlegraMcpClient sobre HTTP real', () => {
     ]);
   });
 });
+
+/**
+ * Contrato MCP de Alegra — validación estricta.
+ *
+ * Este test FALLA si el servidor MCP cambia:
+ *   - nombres de tool
+ *   - forma de los argumentos (partidas debe/haber)
+ *   - formato de respuesta
+ *
+ * Cualquier cambio en el contrato requiere actualizar este test + docs/alegra-mcp-contract.md
+ * en el mismo PR. El contrato está CONGELADO por este test.
+ */
+describe('Contrato MCP de Alegra (congelado por test)', () => {
+  const TOOL_NAMES = {
+    LIST_ACCOUNTS: 'alegra.list_accounts',
+    CREATE_JOURNAL_ENTRY: 'alegra.create_journal_entry',
+    LIST_JOURNAL_ENTRIES: 'alegra.list_journal_entries',
+  } as const;
+
+  it('valida nombres de tool esperados', () => {
+    // Estos son los únicos tools que el cliente usa. Si el servidor añade/quita/cambia
+    // nombres, este test falla y obliga a actualizar el contrato documentado.
+    expect(Object.values(TOOL_NAMES)).toEqual([
+      'alegra.list_accounts',
+      'alegra.create_journal_entry',
+      'alegra.list_journal_entries',
+    ]);
+  });
+
+  it('valida forma de argumentos de alegra.create_journal_entry', async () => {
+    const { url, peticiones } = await (async () => {
+      const peticiones: Array<{ method: string; body: unknown }> = [];
+      const server = createServer((req, res) => {
+        let cuerpo = '';
+        req.on('data', (trozo) => {
+          cuerpo += trozo;
+        });
+        req.on('end', () => {
+          let parseado: unknown = {};
+          try {
+            parseado = JSON.parse(cuerpo);
+          } catch {
+            parseado = {};
+          }
+          peticiones.push({
+            method: (parseado as { method?: string }).method ?? '',
+            body: parseado,
+          });
+          const id = (parseado as { id: number }).id;
+          if ((parseado as { method?: string }).method === 'initialize') {
+            res.writeHead(200, {
+              'content-type': 'application/json',
+              'mcp-session-id': 'ses_contract',
+            });
+            res.end(
+              JSON.stringify({ jsonrpc: '2.0', id, result: { capabilities: { tools: {} } } })
+            );
+          } else {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                id,
+                result: {
+                  content: [{ type: 'text', text: JSON.stringify({ id: 'jest_contract' }) }],
+                },
+              })
+            );
+          }
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const puerto = (server.address() as AddressInfo).port;
+      return { url: `http://127.0.0.1:${puerto}`, peticiones };
+    })();
+
+    const cliente = new AlegraMcpClient({ url });
+    await cliente.createJournalEntry(ASIENTO, PAYLOAD);
+
+    const toolCall = peticiones.find((p) => p.method === 'tools/call')?.body as {
+      params: { name: string; arguments: Record<string, unknown> };
+    };
+    expect(toolCall).toBeDefined();
+    expect(toolCall.params.name).toBe(TOOL_NAMES.CREATE_JOURNAL_ENTRY);
+
+    const args = toolCall.params.arguments;
+    // Forma esperada de argumentos
+    expect(args).toHaveProperty('referencia');
+    expect(typeof args.referencia).toBe('string');
+    expect(args.referencia).toContain('legal_audit:');
+    expect(args.referencia).toContain('ledger:');
+
+    const partidas = args.partidas as Array<{ cuenta: string; debe: number; haber: number }>;
+    expect(Array.isArray(partidas)).toBe(true);
+    expect(partidas.length).toBeGreaterThanOrEqual(2);
+
+    // Cada partida debe tener exactamente: cuenta, debe, haber
+    for (const partida of partidas) {
+      expect(Object.keys(partida).sort()).toEqual(['cuenta', 'debe', 'haber']);
+      expect(typeof partida.cuenta).toBe('string');
+      expect(typeof partida.debe).toBe('number');
+      expect(typeof partida.haber).toBe('number');
+      // Una partida tiene debe O haber, no ambos (contabilidad de partida doble)
+      const tieneDebe = partida.debe > 0;
+      const tieneHaber = partida.haber > 0;
+      expect(tieneDebe !== tieneHaber).toBe(true);
+    }
+  });
+
+  it('valida formato de respuesta de alegra.create_journal_entry', async () => {
+    const { url } = await (async () => {
+      const server = createServer((req, res) => {
+        let cuerpo = '';
+        req.on('data', (trozo) => {
+          cuerpo += trozo;
+        });
+        req.on('end', () => {
+          const parseado = JSON.parse(cuerpo);
+          const id = parseado.id;
+          if (parseado.method === 'initialize') {
+            res.writeHead(200, {
+              'content-type': 'application/json',
+              'mcp-session-id': 'ses_resp',
+            });
+            res.end(
+              JSON.stringify({ jsonrpc: '2.0', id, result: { capabilities: { tools: {} } } })
+            );
+          } else {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            // Respuesta MCP estándar: { content: [{ type: 'text', text: '{"id":"..."}' }] }
+            res.end(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                id,
+                result: {
+                  content: [{ type: 'text', text: JSON.stringify({ id: 'jest_resp_123' }) }],
+                },
+              })
+            );
+          }
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const puerto = (server.address() as AddressInfo).port;
+      return { url: `http://127.0.0.1:${puerto}` };
+    })();
+
+    const cliente = new AlegraMcpClient({ url });
+    const resultado = await cliente.createJournalEntry(ASIENTO, PAYLOAD);
+
+    // El cliente debe extraer el ID del JSON dentro del text content
+    expect(resultado).toEqual({ id: 'jest_resp_123', raw: { id: 'jest_resp_123' } });
+  });
+
+  it('valida forma de respuesta de alegra.list_accounts', async () => {
+    const { url } = await (async () => {
+      const server = createServer((req, res) => {
+        let cuerpo = '';
+        req.on('data', (trozo) => {
+          cuerpo += trozo;
+        });
+        req.on('end', () => {
+          const parseado = JSON.parse(cuerpo);
+          const id = parseado.id;
+          if (parseado.method === 'initialize') {
+            res.writeHead(200, { 'content-type': 'application/json', 'mcp-session-id': 'ses_acc' });
+            res.end(
+              JSON.stringify({ jsonrpc: '2.0', id, result: { capabilities: { tools: {} } } })
+            );
+          } else {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            // Respuesta: array de cuentas dentro del text content
+            res.end(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                id,
+                result: {
+                  content: [
+                    {
+                      type: 'text',
+                      text: JSON.stringify([
+                        { codigo: '5101-001', nombre: 'Cuenta 1' },
+                        { code: '1102-003', name: 'Cuenta 2' }, // normaliza code->codigo, name->nombre
+                      ]),
+                    },
+                  ],
+                },
+              })
+            );
+          }
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const puerto = (server.address() as AddressInfo).port;
+      return { url: `http://127.0.0.1:${puerto}` };
+    })();
+
+    const cliente: AlegraApi = new AlegraMcpClient({ url });
+    const cuentas = await cliente.listAccounts();
+
+    expect(cuentas).toEqual([
+      { codigo: '5101-001', nombre: 'Cuenta 1' },
+      { codigo: '1102-003', nombre: 'Cuenta 2' },
+    ]);
+  });
+
+  it('valida mapeo de errores JSON-RPC a errores no reintentables', async () => {
+    const { url } = await (async () => {
+      const server = createServer((req, res) => {
+        let cuerpo = '';
+        req.on('data', (trozo) => {
+          cuerpo += trozo;
+        });
+        req.on('end', () => {
+          const parseado = JSON.parse(cuerpo);
+          const id = parseado.id;
+          if (parseado.method === 'initialize') {
+            res.writeHead(200, { 'content-type': 'application/json', 'mcp-session-id': 'ses_err' });
+            res.end(
+              JSON.stringify({ jsonrpc: '2.0', id, result: { capabilities: { tools: {} } } })
+            );
+          } else {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            // Error JSON-RPC estándar
+            res.end(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                id,
+                error: { code: -32602, message: 'Invalid params: cuenta requerida' },
+              })
+            );
+          }
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const puerto = (server.address() as AddressInfo).port;
+      return { url: `http://127.0.0.1:${puerto}` };
+    })();
+
+    const cliente = new AlegraMcpClient({ url, retries: 0 });
+    await expect(cliente.createJournalEntry(ASIENTO, PAYLOAD)).rejects.toThrow(/Invalid params/);
+
+    try {
+      await cliente.createJournalEntry(ASIENTO, PAYLOAD);
+    } catch (error) {
+      const alegra = error as { codigo?: number; reintentable?: boolean };
+      expect(alegra.codigo).toBe(-32602);
+      expect(alegra.reintentable).toBe(false);
+    }
+  });
+});

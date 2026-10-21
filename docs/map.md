@@ -1,7 +1,7 @@
 # ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · 187 tests verdes · lint + typecheck + build limpios.
-> Última actualización: 2026-10-21 (Sprint 4 completado: tenant isolation, rate limiter, observabilidad).
+> **Estado**: `main` · 214 tests verdes · lint + typecheck + build limpios.
+> Última actualización: 2026-10-21 (Sprint 5: identidad nativa en D1, fin del proveedor externo).
 
 ## Vista general
 
@@ -10,7 +10,7 @@ D1 + KV + Queues + Durable Objects + R2. Workers AI (Llama 3.3) con fallback
 heurístico. Motor legal fail-closed (12 reglas). Scoring Sherman v2. Dashboard
 "1 botón · 0 tablas". Módulo contable: `legal_audit` → asientos → Alegra (MCP).
 **Multi-tenant completo en datos**: `tenant_id` en todas las tablas de negocio (Fase 4),
-identidad por Clerk (Fase 3), config por tenant (Fase 2), catálogo de tenants (Fase 1).
+identidad nativa en D1, config por tenant (Fase 2), catálogo de tenants (Fase 1).
 
 ## Estructura
 
@@ -18,7 +18,8 @@ identidad por Clerk (Fase 3), config por tenant (Fase 2), catálogo de tenants (
 src/
 ├── index.ts                 entry, routing, dispatch de cron (6 AM cobranza / 23:59 CDMX contable)
 ├── routes/                  health · ingest · api · webhooks · agent (Grok Bot) · contabilidad ·
-│                            guard (scope por ruta) · tenant (contexto) · auth (cabeceras)
+│                            autenticacion (login/register/logout/session) · guard (scope por
+│                            ruta) · tenant (contexto) · auth (cabeceras)
 ├── services/                casos, clientes, deudas, mensajes, promesas, metricas,
 │                            legalAudit (ledger append-only), eventos, contratos, db
 ├── orquestacion/            disparador, consumidor (cola), inbound
@@ -29,27 +30,36 @@ src/
 ├── contabilidad/            buildPayload · sendToAlegra · alegraClient · schemas
 ├── tenancy/                 types · config (resolución) · context · repository · channels · keys ·
 │                            referencia (cabecera de tenant)
-├── auth/                    clerk (identidad) · guards (principal + scope) · scopes (catálogo) ·
+├── auth/                    native (PBKDF2, sesiones, membresías) · middleware (sesión +
+│                            membresía) · guards (principal + scope) · scopes (catálogo) ·
 │                            principal
 ├── durable/                 call-lock
 ├── lib/                     crypto, csv, http, idempotencia, logger, money, phone, score
 └── types/                   env, cobranza
-frontend/                    React + Vite (dashboard) + ClerkProvider
+frontend/                    React + Vite (dashboard) + AuthProvider/AuthGate
+│                            (frontend/src/auth/: AuthContext · AuthGate)
 design-system/               tokens + componentes reutilizables
 migrations/                  0001_init · 0002_legal · 0003_alegra_sync · 0004_tenants ·
-                             0005_clerk_auth · 0006_tenant_isolation
-scripts/                     seed.sql, forge_arkangel_watermark.py
+│                             0005_clerk_auth · 0006_tenant_isolation · 0007_native_auth ·
+│                             0008_drop_clerk
+scripts/                     seed.sql, seed-owner.ts, forge_arkangel_watermark.py
 docs/                        arquitectura.md · map.md · runbook-cobranza.md
-tests/                       13 archivos (unit + auth Clerk + transporte MCP sobre HTTP real)
+tests/                       13 archivos (unit + auth nativa + transporte MCP sobre HTTP real)
 ```
 
 ## Endpoints
 
-Auth = sesión de Clerk (`Authorization: Bearer <JWT de sesión>`) o token de máquina.
+Auth = sesión nativa (cookie `ark_session`) o token de máquina.
 Cada ruta exige **su** scope: sin credencial → 401, con credencial pero sin scope → 403.
 
 | Método | Ruta | Scope | Descripción |
 |---|---|---|---|
+| POST | `/api/auth/register` | público | Crea usuario + su primer despacho y abre sesión |
+| POST | `/api/auth/login` | público | Verifica la contraseña (PBKDF2) y emite la cookie `ark_session` |
+| POST | `/api/auth/logout` | sesión | Revoca la sesión en D1 y borra la cookie |
+| GET | `/api/auth/session` | público | Usuario y despachos, si la cookie es válida |
+| POST | `/api/auth/request-password-reset` | público | Envía el enlace de restablecimiento (siempre 202) |
+| POST | `/api/auth/reset-password` | público | Consume el enlace y fija la nueva contraseña |
 | GET | `/api/v1/health` | público | Liveness del worker |
 | POST | `/api/v1/ingest/csv` | `ingest:write` | Ingesta del CSV (multipart o JSON) |
 | GET | `/api/v1/cases/today` | `cases:read` | Casos del día + vista previa |
@@ -71,6 +81,10 @@ Tokens de máquina: `ADMIN_TOKEN` (plataforma, break-glass), `INTAKE_TOKEN`
 (`service_ingest`) y `GROK_BOT_TOKEN` (`service_agent`). Los de servicio quedan
 acotados al tenant de la cabecera y nunca obtienen alcance de plataforma.
 
+La sesión humana viaja en la cookie `ark_session` (`HttpOnly`, `SameSite=Lax`,
+30 días). `X-Tenant-Id` **selecciona** entre los despachos del usuario: pedir
+uno del que no es miembro es 403 `tenant_forbidden`, no un cambio de alcance.
+
 ## Datos
 
 | Tabla | Rol |
@@ -85,11 +99,14 @@ acotados al tenant de la cabecera y nunca obtienen alcance de plataforma.
 | `alegra_journal_lines` | Trazabilidad asiento por asiento (`legal_audit.id` → journal id) |
 | `ledger_checkpoint` | Cabeza de la cadena de hashes del ledger por día |
 | `contract_cfdi` | UUID del CFDI timbrado por contrato (opcional) |
-| `tenants` | **Catálogo de clientes**: razón social, CONDUSEF, ventana, límites, modo de config, `clerk_org_id` |
+| `tenants` | **Catálogo de clientes**: razón social, CONDUSEF, ventana, límites, modo de config |
 | `tenant_channels` | Enrutado y credenciales por canal (phone_number_id, messaging_profile_id, dominio) |
 | `tenant_accounting_map` | Mapa regla legal → cuentas contables, por tenant |
-| `tenant_users` | **Rol** del usuario de Clerk dentro del tenant (`owner`/`compliance`/`operator`/`viewer`) |
-| `platform_users` | Administradores de plataforma: alcance transversal, sin tenant |
+| `users` | Identidad humana: correo, hash PBKDF2, rol de plataforma |
+| `tenant_memberships` | **Rol** del usuario dentro de cada despacho (`owner`/`admin`/`member`) |
+| `auth_sessions` | Sesiones activas: `token_hash` (SHA-256), caducidad y revocación |
+| `auth_tokens` | Tokens de un solo uso (restablecer contraseña) |
+| `auth_rate_limits` | Ventana de intentos de acceso por correo e IP |
 
 ## Sprints / bitácora
 
@@ -136,18 +153,62 @@ acotados al tenant de la cabecera y nunca obtienen alcance de plataforma.
 - [ ] **Ensayo end-to-end** contra un Alegra de pruebas
 
 ### Sprint 4 — Tenant Isolation, Distributed Rate Limiter, Observabilidad (2026-10-21)
-- [x] **Multi-tenant Fase 4 (tenant_id en tablas de negocio)**: Migración `0006_tenant_isolation.sql` añade `tenant_id` a 17 tablas (`cases`, `clients`, `debts`, `messages`, `promises`, `events`, `contracts`, `legal_audit`, `intakes`, `alegra_sync`, `alegra_journal_lines`, `contract_cfdi`, `ledger_checkpoint`, `tenant_accounting_map`, `tenant_channels`, `tenant_users`, `platform_users`) con índices compuestos `(tenant_id, ...)`. Todos los servicios (`casos`, `clientes`, `deudas`, `mensajes`, `promesas`, `contratos`, `legalAudit`, `eventos`, `metricas`, `ingesta`) actualizados a `TenantContext`. Contabilidad, crons, rutas y orquestación propagan el contexto.
+- [x] **Multi-tenant Fase 4 (tenant_id en tablas de negocio)**: Migración `0006_tenant_isolation.sql` añade `tenant_id` a 17 tablas (`cases`, `clients`, `debts`, `messages`, `promises`, `events`, `contracts`, `legal_audit`, `intakes`, `alegra_sync`, `alegra_journal_lines`, `contract_cfdi`, `ledger_checkpoint`, `tenant_accounting_map`, `tenant_channels`, `tenant_users`, `platform_users`) con índices compuestos `(tenant_id, ...)`. Todos los servicios (`casos`, `clientes`, `deudas`, `mensajes`, `promesas`, `contratos`, `legalAudit`, `eventos`, `metricas`, `ingesta`) actualizados a `TenantContext`. Contabilidad, crons, rutas y orquestación propagan el contexto. *(Las dos últimas tablas de esa lista, `tenant_users` y `platform_users`, quedaron después sustituidas por `tenant_memberships` y `users.platform_role` en el Sprint 5.)*
 - [x] **Rate Limiter distribuido (Durable Object)**: `RateLimiterDO` (nuevo `src/durable/rate-limiter.ts`) reemplaza KV check-then-act con contador atómico por `tenantId:channel` persistido en DO storage. Binding `RATE_LIMITER` en `wrangler.jsonc` + migración `v2`. `acquireRateSlot` en consumidor lanza `DeferredError` con `retryAfter` correcto.
 - [x] **Observabilidad (structured logging + OpenTelemetry traces)**: Logger extendido con `TraceContext` (W3C traceparent), `generateTraceId/spanId`, `extract/injectTraceContext`, `traceMiddleware` en Hono. Traza propagada en `fetch` → `queue` → `scheduled`. Tracer spans en `processCase` (por canal), `dispararHoy` (por caso encolado), crons (por tenant). Queue messages incluyen `traceId`/`spanId`. Logs JSON con `traceId`/`spanId` para correlación completa.
+
+### Sprint 5 — Identidad nativa en D1 (fin del proveedor externo) (2026-10-21)
+
+La identidad ya no depende de un SaaS: la contraseña se verifica con PBKDF2
+dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
+
+- [x] **Migración `0007_native_auth.sql`**: `users`, `tenant_memberships`,
+      `auth_sessions`, `auth_tokens` y `auth_rate_limits` (mismo esquema que
+      Ark Ledger, para que el `seed-owner.ts` sirva a los dos proyectos).
+- [x] **Migración `0008_drop_clerk.sql`**: fuera `tenants.clerk_org_id`,
+      `tenant_users` y `platform_users`. Los admins de plataforma pasan a ser
+      `users.platform_role = 'super_admin'`.
+- [x] **`src/auth/native.ts`**: PBKDF2 (SHA-256, 25 000 iteraciones, sal de 16
+      bytes), `createSession`/`validateSession`/`revokeSession`, tokens de un
+      solo uso, rate limiting por correo e IP, traducción del rol
+      (`ROLE_POR_MEMBRESIA`: owner→owner, admin→operator, member→viewer).
+- [x] **`src/auth/middleware.ts`**: `authenticateRequest` (resuelve la sesión
+      una vez por petición y la adjunta al contexto) y `requireTenantMembership`
+      (403 si el despacho pedido no es del usuario). Aplicados a `/api/v1/*`.
+- [x] **`src/routes/autenticacion.ts`**: register · login · logout · session ·
+      request-password-reset · reset-password.
+- [x] **`src/auth/guards.ts`**: la rama de la sesión nativa sustituye a la de
+      Clerk; una sesión válida **no** cae al token de máquina. Motivos de
+      rechazo: `unauthorized` · `sin_membresia` · `tenant_forbidden`.
+- [x] **Frontend**: `AuthContext.tsx` (bootstrap silencioso, sesión
+      persistente, selector de despacho) y `AuthGate.tsx` (login ⇄ registro).
+      `api.ts` manda `credentials: 'include'`; no queda ni un token en JS.
+- [x] **`scripts/seed-owner.ts`**: alta del primer usuario (correo, contraseña,
+      `tenant_id`, rol). Idempotente: si el correo ya existe, cambia la
+      contraseña y actualiza la membresía.
+- [x] **Limpieza**: fuera `@clerk/backend` y `@clerk/react`, las variables
+      `CLERK_*`, `VITE_CLERK_PUBLISHABLE_KEY`, `tenants.clerk_org_id` y el
+      `Tenant.clerk_org_id` del tipo. Cero referencias a Clerk en el código.
+- [x] **Producción**: migraciones 0007/0008 aplicadas en D1 remoto, usuario
+      owner dado de alta, worker y SPA redesplegados, flujo verificado
+      (login → sesión → cambio de despacho → logout).
+- [x] **Typecheck limpio** (partía de 136 errores) y **suite en verde** (partía
+      de 25 tests rojos). Al cerrar los huecos aparecieron tres defectos
+      preexistentes que también quedaron corregidos: `inbound.ts` y `agent.ts`
+      pasaban `env` donde los servicios esperan `ctx: TenantContext` (aislamiento
+      de tenant roto en el camino de entrada), `api.ts` usaba un `ctx` que no
+      existía, y `SQL_LEER_LINEAS` ataba 3 parámetros contra 2 placeholders
+      (un reintento de corte en Alegra devolvía el journal id de **otro**
+      asiento y se saltaba de enviarlo).
 
 ## Verificación realizada
 
 | Qué | Cómo | Resultado |
 |---|---|---|
-| Suite unitaria | `npm test` (13 archivos) | 187/187 |
+| Suite unitaria | `npm test` (13 archivos) | 214/214 |
 | Estilo y tipos | `npm run lint` · `npm run typecheck` | limpios |
 | Build del worker | `npm run build:worker` | limpio |
-| Migraciones | `wrangler d1 migrations apply --local` (BD nueva) | 6 migraciones OK; esquema igual al que lee el código |
+| Migraciones | `wrangler d1 migrations apply --local` (BD nueva) | 8 migraciones OK; esquema igual al que lee el código |
 | Foreign keys | insert con `tenant_id` inexistente | `SQLITE_CONSTRAINT_FOREIGNKEY` |
 | Backfill multi-tenant | `SELECT` sobre `tenants` y `tenant_accounting_map` | 1 tenant, 12 reglas contables copiadas |
 | Identidad por tenant | test de dos tenants con razón social distinta | cada uno firma con la suya; sin herencia de la plataforma |
@@ -156,11 +217,14 @@ acotados al tenant de la cabecera y nunca obtienen alcance de plataforma.
 | Dedupe en la transición | test de `reserveOnceConLegado` | una reserva legacy viva bloquea la nueva: no se reinicia la ventana |
 | SQL contable | queries reales contra D1 local | ingreso reconoce sólo `delivered`/`read`; `sent` excluido |
 | Transporte MCP | servidor HTTP real (`tests/alegraMcp.test.ts`) | handshake, SSE, cache de sesión, mapeo de errores |
-| Auth por sesión (Clerk) | test de `tests/authClerk.test.ts` (se sustituye `sessionVerifier.fn`, sin red) | Organization mapeada → tenant de esa Organization + rol de D1; usuario sin fila en `tenant_users` → 401 `sin_acceso` (no cae al token); Organization sin tenant → 401 `org_sin_tenant`; cabecera de otro tenant → 403 `tenant_mismatch` |
+| Auth por sesión (nativa) | test de `tests/authNative.test.ts` (D1 de mentira, sin red) | cookie válida → principal del usuario con su membresía; cabecera `X-Tenant-Id` de otro despacho → 403 `tenant_forbidden`; usuario sin membresías → 401 `sin_membresia`; sesión válida no cae al token de máquina |
 | Scopes por ruta | test de la guardia en cada router | sin credencial → 401 `unauthorized`; con credencial pero scope insuficiente → 403 `forbidden` + `scope`; un `viewer` lee casos pero no despacha |
 | **Aislamiento multi-tenant** | test de dos tenants accediendo a `/cases/:id` del otro | 403 `tenant_mismatch` en lectura por id; cada tenant ve solo sus datos |
 | **Rate limiter DO** | test de burst concurrente 100 req/tenant+canal | ≤ `rateLimitRpm` por minuto, sin race conditions |
 | **Trace propagation** | request → queue consumer → scheduled cron | mismo `traceId` en logs de toda la cadena; `spanId` único por operación |
+| **Hash de contraseña** | test de `src/auth/native.ts` | PBKDF2 con 25 000 iteraciones y sal de 16 bytes; la misma contraseña sale con distinta sal; un hash mal formado no verifica |
+| **Sesión nativa** | test de `tests/authNative.test.ts` (D1 de mentira) | en D1 sólo se guarda el SHA-256 del token; cookie inválida o sesión revocada no dan sesión |
+| **Ciclo de vida en producción** | `curl` contra el worker desplegado | login 200 + `Set-Cookie`; `session` 200; logout 200 y la cookie deja de servir; sin cookie → 401; despacho ajeno → 403 |
 
 ## Deuda técnica y riesgos abiertos
 
@@ -170,10 +234,13 @@ acotados al tenant de la cabecera y nunca obtienen alcance de plataforma.
 - **Fase 5 (parcial)**: webhooks resuelven tenant por `provider_account_id`; falta firma de Meta en POST.
 - **Fase 6**: contabilidad por tenant (Alegra propio, `tenant_accounting_map`, idempotency key con tenant, ledger por tenant).
 
-### Configuración Clerk (Fase 3 operativa)
+### Identidad (nativa, sin proveedor externo)
 
-- **Clerk todavía no está configurado en este entorno.** Falta `npx -y clerk@latest auth login` (el login del Dashboard no autentica el CLI) y las claves: `CLERK_SECRET_KEY` (secret), `CLERK_PUBLISHABLE_KEY` y `CLERK_AUTHORIZED_PARTIES` (vars de `wrangler.jsonc`), `CLERK_JWT_KEY` (secret, opcional: verificación de JWT sin red) y `VITE_CLERK_PUBLISHABLE_KEY` (`frontend/.env.local`). Sin `CLERK_SECRET_KEY`, `clerkActivo(env)` devuelve `false` y el Worker sigue operando con los tokens de máquina.
-- **Falta dar de alta el primer usuario y mapear la Organization.** Estar en la Organization de Clerk **no basta**: el rol lo concede D1. Sin fila en `tenant_users` (rol dentro del tenant) ni en `platform_users` (admin de plataforma) toda sesión de Clerk responde 401 (`sin_acceso` u `org_sin_tenant`). También falta el mapeo `tenants.clerk_org_id` → `Organization.id` de Clerk.
+- **La identidad ya no depende de nadie.** Contraseña con PBKDF2 (SHA-256, 25 000 iteraciones) verificada dentro del Worker; la sesión es un token aleatorio que D1 guarda **hasheado** (`auth_sessions.token_hash`) y que en el navegador viaja sólo en la cookie `ark_session` (`HttpOnly`, `SameSite=Lax`, 30 días).
+- **Ya hay usuario owner en el entorno remoto** (`duenio@arkangel.mx`, con membresía `owner` en `t_arkangel` y `admin` en `t_ark_systems`). Para dar de alta a otro: `npm run seed:owner:remote -- --email ... --password ... --tenant t_xxx --role owner`. Sin usuarios, el panel devuelve 401 y sólo funcionan los tokens de máquina.
+- **El rol lo concede la membresía, no la cabecera.** `tenant_memberships` es la fuente de verdad (`owner` → `owner`, `admin` → `operator`, `member` → `viewer`; tabla `ROLE_POR_MEMBRESIA` en `src/auth/native.ts`). `X-Tenant-Id` sólo *selecciona* entre las membresías del usuario: pedir un despacho ajeno es 403 `tenant_forbidden`.
+- **El registro del panel auto-verifica el correo.** Es deliberado: el panel es de invitación y sin un servidor de correo verificado dejaría a la gente fuera de su propio panel. La tabla `auth_tokens` queda disponible para el flujo de restablecimiento, que sí está implementado.
+- **El cambio de contraseña ya está en el panel** (`POST /api/auth/change-password`): valida la actual, aplica la política de la nueva, revoca todas las sesiones y limpia la cookie. La nueva debe ser **distinta** de la actual (400) y una sesión revocada no puede cambiar la contraseña (401).
 - **La allowlist de dominios y la ventana horaria del módulo contable** siguen viniendo de `env.TZ` (Fase 6).
 - **Un tenant en `config_mode='platform_env'` hereda la config del Worker.** Hoy sólo lo usa el tenant heredado. Para pasarlo a `db` hay que cargar su fila (razón social y CONDUSEF incluidos) y ejecutar: `UPDATE tenants SET config_mode='db' WHERE id='t_arkangel';` Sin razón social, el motor legal bloquea todos sus mensajes (regla 1.1, fail-closed) y el worker lo avisa por log.
 - **La migración 0004 debe aplicarse ANTES de desplegar el worker.** Si la tabla `tenants` no existe, el worker cae al tenant de respaldo con la config del entorno (sin regresión), pero el multi-tenant no queda habilitado. El respaldo usa el id `t_arkangel`, el mismo que crea el backfill, para que el namespace de claves de KV no cambie al aplicar la migración.
@@ -190,11 +257,11 @@ acotados al tenant de la cabecera y nunca obtienen alcance de plataforma.
 
 ## Próximos (por riesgo)
 
-1. **Configurar Clerk en el entorno**: `npx -y clerk@latest auth login`, las claves (`CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `CLERK_JWT_KEY`, `CLERK_AUTHORIZED_PARTIES`, `VITE_CLERK_PUBLISHABLE_KEY`), la migración 0005 en remoto, el mapeo `tenants.clerk_org_id` → Organization y el alta del primer usuario en `tenant_users` / `platform_users`. La Fase 3 está en código pero no operativa hasta que esto esté hecho.
+1. **[x] Cambio de contraseña en el panel** — implementado en `POST /api/auth/change-password` (valida la actual, aplica política de la nueva, revoca todas las sesiones y limpia la cookie).
 2. **Cargar la fila de `t_arkangel`** (razón social + CONDUSEF) y pasarla a `config_mode='db'`.
 3. **Fase 5** — firma de Meta en POST (el enrutado por tenant ya está).
 4. **Fase 6** — contabilidad por tenant (Alegra propio, mapa de cuentas por cliente).
 5. **Ensayo end-to-end** con un Alegra de pruebas + cerrar el contrato MCP.
-6. **Secretos + bucket R2 + migraciones 003/004/005/006 en remoto**; primera corrida real.
-7. **Alinear el cron de cobranza** con el huso CDMX.
-8. **CI en GitHub Actions** (`npm run verify`).
+6. **Secretos + bucket R2 + primera corrida real** (las migraciones 003/004/005/006/007/008 ya están en remoto).
+7. **[x] Alinear el cron de cobranza** con el huso CDMX — `wrangler.jsonc` pasó de `"0 6 * * *"` (06:00 UTC = 00:00 CDMX) a `"0 12 * * *"` (12:00 UTC = 6 AM CDT).
+8. **[x] CI en GitHub Actions** — `.github/workflows/ci.yml` corre `npm run verify` (format, lint, typecheck, test, build) en `push` y `PR` a `main`.

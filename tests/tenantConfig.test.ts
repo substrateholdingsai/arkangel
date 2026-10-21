@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { buildRedactPrompt } from '../src/ai/prompts';
 import { platformPrincipal } from '../src/auth/principal';
-import { configLegal } from '../src/legal/config';
+import {
+  configLegal,
+  assertTenantListoParaOperar,
+  TenantSinIdentidadLegalError,
+} from '../src/legal/config';
 import { mergeChannelCredentials } from '../src/tenancy/channels';
 import {
   configDesdeEntorno,
@@ -36,7 +40,6 @@ function tenant(overrides: Partial<Tenant> = {}): Tenant {
     dry_run: 0,
     cron_auto_fire: 0,
     is_default: 0,
-    clerk_org_id: null,
     created_at: '2026-10-20T00:00:00Z',
     updated_at: '2026-10-20T00:00:00Z',
     ...overrides,
@@ -269,5 +272,114 @@ describe('utilidades de configuración', () => {
 
     expect(propias.whatsapp?.token).toBeUndefined();
     expect(propias.whatsapp?.phone_number_id).toBe('998877');
+  });
+});
+
+describe('fail-closed: tenant db sin identidad legal bloquea', () => {
+  it('tenant db sin razón social lanza TenantSinIdentidadLegalError', () => {
+    const t = tenant({ config_mode: 'db', razon_social: '', condusef_registro: '' });
+    const context = ctx(t);
+
+    expect(() => assertTenantListoParaOperar(context)).toThrow(TenantSinIdentidadLegalError);
+    expect(() => assertTenantListoParaOperar(context)).toThrow(/razón social/);
+  });
+
+  it('tenant db con razón social NO lanza error', () => {
+    const t = tenant({
+      config_mode: 'db',
+      razon_social: 'Mi Empresa, S.A. de C.V.',
+      condusef_registro: '123',
+    });
+    const context = ctx(t);
+
+    expect(() => assertTenantListoParaOperar(context)).not.toThrow();
+  });
+
+  it('tenant platform_env sin razón social NO lanza error (compatibilidad heredada)', () => {
+    const t = tenant({ config_mode: 'platform_env', razon_social: '', condusef_registro: '' });
+    const context = ctx(t);
+
+    expect(() => assertTenantListoParaOperar(context)).not.toThrow();
+  });
+});
+
+describe('tenant db usa su propia ventana horaria (no env.TZ)', () => {
+  const env = {
+    LEGAL_RAZON_SOCIAL: 'Legacy, S.A. de C.V.',
+    LEGAL_CONDUSEF_REGISTRO: '777',
+    ALLOWED_PAYMENT_DOMAINS: '',
+    SEND_WINDOW_START: '8',
+    SEND_WINDOW_END: '22',
+    MAX_CONTACTS_PER_DAY: '3',
+    LEGAL_MONTO_TOLERANCIA_CENTS: '0',
+    LEGAL_HORARIO_EN_RESPUESTAS: 'false',
+    TZ: 'America/Mexico_City',
+    RATE_LIMIT_RPM: '42',
+    DEDUPE_WINDOW_HOURS: '24',
+    SCORE_AMOUNT_CEILING_CENTS: '200000',
+    AGENT_MODE: 'supervised',
+    AGENT_AUTO_THRESHOLD_CENTS: '200000',
+    DRY_RUN: 'false',
+    CRON_AUTO_FIRE: 'false',
+  } as unknown as Env;
+
+  it('config_mode=db ignora SEND_WINDOW_START/END del entorno', () => {
+    const config = resolveTenantConfig(
+      env,
+      tenant({ config_mode: 'db', send_window_start: 9, send_window_end: 18 })
+    );
+    expect(config.horaInicio).toBe(9);
+    expect(config.horaFin).toBe(18);
+  });
+
+  it('config_mode=db ignora TZ del entorno', () => {
+    const config = resolveTenantConfig(env, tenant({ config_mode: 'db', tz: 'America/Monterrey' }));
+    expect(config.tz).toBe('America/Monterrey');
+  });
+
+  it('config_mode=platform_env usa SEND_WINDOW_START/END del entorno', () => {
+    const config = resolveTenantConfig(env, tenant({ config_mode: 'platform_env' }));
+    expect(config.horaInicio).toBe(8);
+    expect(config.horaFin).toBe(22);
+    expect(config.tz).toBe('America/Mexico_City');
+  });
+});
+
+describe('tenant platform_env sin regresión', () => {
+  const env = {
+    LEGAL_RAZON_SOCIAL: 'Legacy, S.A. de C.V.',
+    LEGAL_CONDUSEF_REGISTRO: '777',
+    ALLOWED_PAYMENT_DOMAINS: 'pago.legacy.mx',
+    SEND_WINDOW_START: '8',
+    SEND_WINDOW_END: '22',
+    MAX_CONTACTS_PER_DAY: '3',
+    LEGAL_MONTO_TOLERANCIA_CENTS: '0',
+    LEGAL_HORARIO_EN_RESPUESTAS: 'false',
+    TZ: 'America/Mexico_City',
+    RATE_LIMIT_RPM: '42',
+    DEDUPE_WINDOW_HOURS: '24',
+    SCORE_AMOUNT_CEILING_CENTS: '200000',
+    AGENT_MODE: 'supervised',
+    AGENT_AUTO_THRESHOLD_CENTS: '200000',
+    DRY_RUN: 'false',
+    CRON_AUTO_FIRE: 'false',
+  } as unknown as Env;
+
+  it('platform_env conserva identidad del entorno', () => {
+    const config = resolveTenantConfig(env, tenant({ config_mode: 'platform_env' }));
+    expect(config.razonSocial).toBe('Legacy, S.A. de C.V.');
+    expect(config.condusef).toBe('777');
+  });
+
+  it('platform_env conserva allowlist del entorno', () => {
+    const config = resolveTenantConfig(env, tenant({ config_mode: 'platform_env' }));
+    expect(config.dominiosPermitidos).toEqual(['pago.legacy.mx']);
+  });
+
+  it('platform_env conserva ventana y límites del entorno', () => {
+    const config = resolveTenantConfig(env, tenant({ config_mode: 'platform_env' }));
+    expect(config.horaInicio).toBe(8);
+    expect(config.horaFin).toBe(22);
+    expect(config.maxContactos24h).toBe(3);
   });
 });

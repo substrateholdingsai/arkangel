@@ -25,9 +25,12 @@ import {
 } from '../src/contabilidad/alegraClient';
 import type { Env } from '../src/types/env';
 import type { AccountingPayload } from '../src/contabilidad/schemas';
+import { platformPrincipal } from '../src/auth/principal';
+import type { Tenant, TenantContext } from '../src/tenancy/types';
 
 const TZ = 'America/Mexico_City';
 const FECHA = '2026-10-19';
+const TENANT_ID = 't_arkangel';
 
 /** Normaliza el SQL para comparar sin depender de saltos de línea. */
 function normalizar(sql: string): string {
@@ -39,6 +42,7 @@ interface FakeRow {
 }
 
 class FakeD1 {
+  tenants: FakeRow[] = [];
   auditoria: FakeRow[] = [];
   mapa: FakeRow[] = [];
   ingresos: FakeRow[] = [];
@@ -81,68 +85,95 @@ class FakeD1 {
     };
   };
 
+  /**
+   * Filtra por tenant.
+   *
+   * En el esquema multi-tenant la primera columna de estos SQL es siempre el
+   * tenant: es lo que impide que el corte de una empresa se mezcle con el de
+   * otra. Las filas sin `tenant_id` se consideran del tenant de la prueba.
+   */
+  deTenant(filas: FakeRow[], args: unknown[]): FakeRow[] {
+    const tenantId = args[0] === undefined ? null : String(args[0]);
+    if (tenantId === null) return filas;
+    return filas.filter((fila) => String(fila.tenant_id ?? TENANT_ID) === tenantId);
+  }
+
   consulta<T>(sql: string, args: unknown[]): T[] {
-    if (sql.startsWith('SELECT id, regla_id, accion')) return this.historia as T[];
-    if (sql.includes('FROM legal_audit')) {
-      const [desde, hasta] = args as [string, string];
-      return this.auditoria.filter(
-        (fila) => String(fila.created_at) >= desde && String(fila.created_at) < hasta
-      ) as T[];
+    if (sql.includes('FROM tenants')) {
+      const status = String(args[0] ?? 'active');
+      return this.tenants.filter((fila) => String(fila.status) === status) as T[];
     }
-    if (sql.includes('FROM legal_accounting_map')) return this.mapa as T[];
+    if (sql.includes('FROM legal_audit')) {
+      if (sql.includes("replace(created_at, ' ', 'T') >= ?")) {
+        const desde = String(args[1]);
+        const hasta = String(args[2]);
+        return this.deTenant(this.auditoria, args).filter(
+          (fila) => String(fila.created_at) >= desde && String(fila.created_at) < hasta
+        ) as T[];
+      }
+      return this.deTenant(this.historia, args) as T[];
+    }
+    if (sql.includes('FROM tenant_accounting_map')) return this.deTenant(this.mapa, args) as T[];
     if (sql.includes('FROM messages')) {
-      const estados = args.slice(0, 3).map((valor) => String(valor));
-      const [desde, hasta] = args.slice(3) as [string, string];
-      return this.ingresos.filter(
+      const estados = args.slice(1, 4).map((valor) => String(valor));
+      const [desde, hasta] = args.slice(4) as [string, string];
+      return this.deTenant(this.ingresos, args).filter(
         (fila) =>
           estados.includes(String(fila.status)) &&
           String(fila.created_at) >= desde &&
           String(fila.created_at) < hasta
       ) as T[];
     }
-    if (sql.includes('FROM cases')) return this.casos as T[];
-    if (sql.includes('FROM contracts')) return this.contratos as T[];
-    if (sql.includes('FROM contract_cfdi')) return this.cfdis as T[];
+    if (sql.includes('FROM cases')) return this.deTenant(this.casos, args) as T[];
+    if (sql.includes('FROM contracts')) return this.deTenant(this.contratos, args) as T[];
+    if (sql.includes('FROM contract_cfdi')) return this.deTenant(this.cfdis, args) as T[];
     if (sql.includes('FROM ledger_checkpoint')) {
-      if (sql.includes('WHERE fecha_corte = ?')) {
-        const fecha = String(args[0]);
-        return this.checkpoints.filter((fila) => fila.fecha_corte === fecha) as T[];
+      const fecha = String(args[1]);
+      if (sql.includes('WHERE tenant_id = ? AND fecha_corte = ?')) {
+        return this.deTenant(this.checkpoints, args).filter(
+          (fila) => fila.fecha_corte === fecha
+        ) as T[];
       }
-      const fecha = String(args[0]);
-      const filtrados = this.checkpoints
+      const filtrados = this.deTenant(this.checkpoints, args)
         .filter((fila) => String(fila.fecha_corte) <= fecha)
         .sort((a, b) => String(b.fecha_corte).localeCompare(String(a.fecha_corte)));
       return (filtrados[0] ? [filtrados[0]] : []) as T[];
     }
     if (sql.includes('FROM alegra_sync')) {
       if (sql.includes("status IN ('pending', 'failed')")) {
-        return this.sync.filter(
+        return this.deTenant(this.sync, args).filter(
           (fila) => fila.status === 'pending' || fila.status === 'failed'
         ) as T[];
       }
-      const clave = String(args[0]);
-      return this.sync.filter((fila) => fila.idempotency_key === clave) as T[];
+      const clave = String(args[1]);
+      return this.deTenant(this.sync, args).filter((fila) => fila.idempotency_key === clave) as T[];
     }
     if (sql.includes('FROM alegra_journal_lines')) {
-      const clave = String(args[0]);
-      if (sql.includes('ORDER BY linea_numero')) {
-        return this.lineas.filter((fila) => fila.idempotency_key === clave) as T[];
+      const clave = String(args[1]);
+      const lineas = this.deTenant(this.lineas, args).filter(
+        (fila) => fila.idempotency_key === clave
+      );
+      // La lectura de una línea concreta filtra por `legal_audit_id`; el
+      // listado del corte devuelve todas las del corte.
+      if (args.length > 2) {
+        const legalAuditId = String(args[2]);
+        return lineas.filter((fila) => fila.legal_audit_id === legalAuditId) as T[];
       }
-      const legalAuditId = String(args[1]);
-      return this.lineas.filter(
-        (fila) => fila.idempotency_key === clave && fila.legal_audit_id === legalAuditId
-      ) as T[];
+      return lineas as T[];
     }
     return [];
   }
 
   ejecuta(sql: string, args: unknown[]): void {
     if (sql.includes('INSERT INTO events')) {
-      this.eventos.push({ type: args[1], payload: args[4] });
+      this.eventos.push({ tenant_id: args[1], type: args[2], payload: args[5] });
       return;
     }
     if (sql.includes('INSERT INTO alegra_sync')) {
-      const [id, fechaCorte, idempotencyKey, payloadR2Key] = args as unknown[];
+      const id = args[0];
+      const fechaCorte = args[2];
+      const idempotencyKey = args[3];
+      const payloadR2Key = args[4];
       const existente = this.sync.find((fila) => fila.idempotency_key === idempotencyKey);
       if (existente) {
         existente.status = 'pending';
@@ -152,6 +183,7 @@ class FakeD1 {
       }
       this.sync.push({
         id,
+        tenant_id: args[1],
         fecha_corte: fechaCorte,
         idempotency_key: idempotencyKey,
         status: 'pending',
@@ -167,7 +199,10 @@ class FakeD1 {
         this.fallarUpdateSync = false;
         throw new Error('D1 no disponible (simulado)');
       }
-      const [status, journalId, errorMessage, idempotencyKey] = args as unknown[];
+      const status = args[0];
+      const journalId = args[1];
+      const errorMessage = args[2];
+      const idempotencyKey = args[4];
       const fila = this.sync.find((item) => item.idempotency_key === idempotencyKey);
       if (!fila) return;
       fila.status = status;
@@ -177,21 +212,27 @@ class FakeD1 {
     }
     if (sql.includes('alegra_journal_lines')) {
       if (sql.startsWith('UPDATE')) {
-        const [journalId, idempotencyKey, legalAuditId] = args as unknown[];
+        const journalId = args[0];
+        const idempotencyKey = args[2];
+        const legalAuditId = args[3];
         const fila = this.lineas.find(
           (item) => item.idempotency_key === idempotencyKey && item.legal_audit_id === legalAuditId
         );
         if (fila) fila.alegra_journal_id = journalId;
         return;
       }
-      const [alegraSyncId, lineaNumero, idempotencyKey, legalAuditId, journalId] =
-        args as unknown[];
+      const alegraSyncId = args[0];
+      const lineaNumero = args[2];
+      const idempotencyKey = args[3];
+      const legalAuditId = args[4];
+      const journalId = args[5];
       const existe = this.lineas.some(
         (fila) => fila.idempotency_key === idempotencyKey && fila.legal_audit_id === legalAuditId
       );
       if (!existe) {
         this.lineas.push({
           alegra_sync_id: alegraSyncId,
+          tenant_id: args[1],
           linea_numero: lineaNumero,
           idempotency_key: idempotencyKey,
           legal_audit_id: legalAuditId,
@@ -202,7 +243,9 @@ class FakeD1 {
     }
     if (sql.includes('ledger_checkpoint')) {
       if (sql.startsWith('UPDATE')) {
-        const [hash, total, fechaCorte] = args as unknown[];
+        const hash = args[0];
+        const total = args[1];
+        const fechaCorte = args[3];
         const fila = this.checkpoints.find((item) => item.fecha_corte === fechaCorte);
         if (fila) {
           fila.hash_cadena = hash;
@@ -211,10 +254,13 @@ class FakeD1 {
         }
         return;
       }
-      const [fechaCorte, hash, total] = args as unknown[];
+      const fechaCorte = args[1];
+      const hash = args[2];
+      const total = args[3];
       const existe = this.checkpoints.some((fila) => fila.fecha_corte === fechaCorte);
       if (!existe) {
         this.checkpoints.push({
+          tenant_id: args[0],
           fecha_corte: fechaCorte,
           hash_cadena: hash,
           total_registros: total,
@@ -315,6 +361,42 @@ function entorno(db: FakeD1, r2 = new FakeR2(), kv = new FakeKV()): Env {
   } as unknown as Env;
 }
 
+/**
+ * Contexto de tenant para los servicios de contabilidad.
+ *
+ * La contabilidad ya no recibe el `env` pelado: recibe el contexto con el
+ * tenant, que es lo que hace que el corte contable de una empresa no se
+ * mezcle con el de otra. El módulo sólo usa `ctx.config.tz` y `ctx.tenantId`,
+ * así que el resto va con valores de referencia.
+ */
+function contextoDe(env: Env, tenantId = 't_arkangel'): TenantContext {
+  return {
+    env,
+    tenantId,
+    tenant: { id: tenantId } as Tenant,
+    config: {
+      tz: TZ,
+      razonSocial: '',
+      condusef: '',
+      dominiosPermitidos: [],
+      horaInicio: 8,
+      horaFin: 22,
+      maxContactos24h: 3,
+      montoToleranciaCents: 0,
+      horarioEnRespuestas: false,
+      rateLimitRpm: 42,
+      dedupeWindowHours: 24,
+      scoreAmountCeilingCents: 200000,
+      agentMode: 'supervised',
+      agentAutoThresholdCents: 200000,
+      dryRun: false,
+      cronAutoFire: false,
+    },
+    channels: [],
+    principal: platformPrincipal('test'),
+  };
+}
+
 function auditoria(
   id: string,
   reglaId: string,
@@ -324,6 +406,7 @@ function auditoria(
 ): FakeRow {
   return {
     id,
+    tenant_id: TENANT_ID,
     regla_id: reglaId,
     ley: 'Código Penal Federal',
     articulo: 'Art. 284 Bis',
@@ -340,6 +423,34 @@ function auditoria(
 
 function datosBase(): FakeD1 {
   const db = new FakeD1();
+  db.tenants = [
+    {
+      id: TENANT_ID,
+      slug: 'arkangel',
+      nombre: 'Arkangel',
+      status: 'active',
+      config_mode: 'db',
+      razon_social: 'Cobranzas Arkangel S.A. de C.V.',
+      condusef_registro: 'CONDUSEF-0001',
+      allowed_payment_domains: 'pago.example.com',
+      tz: TZ,
+      send_window_start: 8,
+      send_window_end: 22,
+      max_contacts_per_day: 3,
+      legal_monto_tolerancia_cents: 0,
+      legal_horario_en_respuestas: 0,
+      rate_limit_rpm: 42,
+      dedupe_window_hours: 24,
+      score_amount_ceiling_cents: 200000,
+      agent_mode: 'supervised',
+      agent_auto_threshold_cents: 200000,
+      dry_run: 0,
+      cron_auto_fire: 0,
+      is_default: 1,
+      created_at: '2026-10-01T00:00:00.000Z',
+      updated_at: '2026-10-01T00:00:00.000Z',
+    },
+  ];
   db.mapa = [
     {
       regla_id: '2.1',
@@ -398,7 +509,7 @@ describe('ventana contable', () => {
 
   it('el payload declara la ventana en UTC y en CDMX', async () => {
     const db = datosBase();
-    const payload = await buildAccountingPayload(FECHA, entorno(db));
+    const payload = await buildAccountingPayload(contextoDe(entorno(db)), FECHA);
 
     expect(payload.ventana.inicio_utc).toBe('2026-10-19T06:00:00.000Z');
     expect(payload.ventana.fin_utc).toBe('2026-10-20T06:00:00.000Z');
@@ -414,7 +525,7 @@ describe('ventana contable', () => {
 describe('buildAccountingPayload', () => {
   it('genera un asiento por violación con la cuenta del mapa contable', async () => {
     const db = datosBase();
-    const payload = await buildAccountingPayload(FECHA, entorno(db));
+    const payload = await buildAccountingPayload(contextoDe(entorno(db)), FECHA);
 
     expect(payload.asientos).toHaveLength(3);
     expect(payload.asientos.map((asiento) => asiento.regla_id)).toEqual(['2.1', '2.4', '8.1']);
@@ -436,7 +547,7 @@ describe('buildAccountingPayload', () => {
 
   it('el concepto y la referencia ledger apuntan al legal_audit original', async () => {
     const db = datosBase();
-    const payload = await buildAccountingPayload(FECHA, entorno(db));
+    const payload = await buildAccountingPayload(contextoDe(entorno(db)), FECHA);
     const asiento = payload.asientos[0];
 
     expect(asiento?.legal_audit_id).toBe('leg_1');
@@ -448,7 +559,7 @@ describe('buildAccountingPayload', () => {
 
   it('el resumen cuadra con los montos del corte', async () => {
     const db = datosBase();
-    const payload = await buildAccountingPayload(FECHA, entorno(db));
+    const payload = await buildAccountingPayload(contextoDe(entorno(db)), FECHA);
 
     expect(payload.resumen.ingresos_reconocidos).toBe(800);
     expect(payload.resumen.ingresos_no_reconocidos_por_bloqueo).toBe(1200);
@@ -460,7 +571,7 @@ describe('buildAccountingPayload', () => {
 
   it('el IVA acreditable se publica como estimado, con su fuente', async () => {
     const db = datosBase();
-    const payload = await buildAccountingPayload(FECHA, entorno(db));
+    const payload = await buildAccountingPayload(contextoDe(entorno(db)), FECHA);
 
     expect(payload.resumen.iva_acreditable_estimado).toBe(32);
     expect(payload.metadata.fuente_iva_acreditable).toBe('estimado_por_gastos_arkangel');
@@ -469,7 +580,7 @@ describe('buildAccountingPayload', () => {
 
   it('el payload valida contra el esquema Zod', async () => {
     const db = datosBase();
-    const payload = await buildAccountingPayload(FECHA, entorno(db));
+    const payload = await buildAccountingPayload(contextoDe(entorno(db)), FECHA);
     const validado = validarPayload(payload);
     expect(validado.ok).toBe(true);
     expect(payload.idempotency_key).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -479,11 +590,14 @@ describe('buildAccountingPayload', () => {
   it('la idempotency key cambia con el salt', async () => {
     const db = datosBase();
     const env = entorno(db);
-    const conSalt = await buildAccountingPayload(FECHA, {
-      ...env,
-      ALEGRA_IDEMPOTENCY_SALT: 'pepita',
-    } as Env);
-    const sinSalt = await buildAccountingPayload(FECHA, env);
+    const conSalt = await buildAccountingPayload(
+      contextoDe({
+        ...env,
+        ALEGRA_IDEMPOTENCY_SALT: 'pepita',
+      } as Env),
+      FECHA
+    );
+    const sinSalt = await buildAccountingPayload(contextoDe(env), FECHA);
     expect(conSalt.idempotency_key).not.toBe(sinSalt.idempotency_key);
   });
 
@@ -492,7 +606,7 @@ describe('buildAccountingPayload', () => {
     db.auditoria.push(auditoria('leg_4', '9.9', 'BLOCK', 'cas_4', 'cli_4'));
     db.historia = db.auditoria;
 
-    const { payload, reglasSinMapa } = await construirPayload(FECHA, entorno(db));
+    const { payload, reglasSinMapa } = await construirPayload(contextoDe(entorno(db)), FECHA);
     expect(payload.asientos).toHaveLength(3);
     expect(reglasSinMapa).toEqual(['9.9']);
     expect(db.eventos.some((evento) => evento.type === 'contabilidad.regla_sin_mapa')).toBe(true);
@@ -513,13 +627,13 @@ describe('regla de reconocimiento de ingreso', () => {
       },
     ];
 
-    const payload = await buildAccountingPayload(FECHA, entorno(db));
+    const payload = await buildAccountingPayload(contextoDe(entorno(db)), FECHA);
     expect(payload.resumen.ingresos_reconocidos).toBe(0);
   });
 
   it('un mensaje delivered sí genera ingreso reconocido', async () => {
     const db = datosBase();
-    const payload = await buildAccountingPayload(FECHA, entorno(db));
+    const payload = await buildAccountingPayload(contextoDe(entorno(db)), FECHA);
     expect(payload.resumen.ingresos_reconocidos).toBe(800);
     expect(payload.metadata.regla_ingreso_reconocido).toContain('delivered');
   });
@@ -529,10 +643,10 @@ describe('sendToAlegra', () => {
   it('crea un asiento por violación y registra la trazabilidad', async () => {
     const db = datosBase();
     const env = entorno(db);
-    const payload = await buildAccountingPayload(FECHA, env);
+    const payload = await buildAccountingPayload(contextoDe(env), FECHA);
     const alegra = new FakeAlegra();
 
-    const resultado = await sendToAlegra(payload, env, { cliente: alegra });
+    const resultado = await sendToAlegra(payload, contextoDe(env), { cliente: alegra });
 
     expect(resultado.ok).toBe(true);
     expect(resultado.estado).toBe('sent');
@@ -546,12 +660,12 @@ describe('sendToAlegra', () => {
   it('no duplica asientos si el mismo día se procesa dos veces', async () => {
     const db = datosBase();
     const env = entorno(db);
-    const payload = await buildAccountingPayload(FECHA, env);
+    const payload = await buildAccountingPayload(contextoDe(env), FECHA);
     const alegra = new FakeAlegra();
 
-    await sendToAlegra(payload, env, { cliente: alegra });
+    await sendToAlegra(payload, contextoDe(env), { cliente: alegra });
     const creados = alegra.asientosCreados.length;
-    const segunda = await sendToAlegra(payload, env, { cliente: alegra });
+    const segunda = await sendToAlegra(payload, contextoDe(env), { cliente: alegra });
 
     expect(segunda.estado).toBe('omitido');
     expect(alegra.asientosCreados).toHaveLength(creados);
@@ -569,11 +683,11 @@ describe('sendToAlegra', () => {
       },
     ];
     const env = entorno(db);
-    const payload = await buildAccountingPayload(FECHA, env);
+    const payload = await buildAccountingPayload(contextoDe(env), FECHA);
     const alegra = new FakeAlegra();
 
     expect(payload.ledger_integrity.verificado).toBe(false);
-    const resultado = await sendToAlegra(payload, env, { cliente: alegra });
+    const resultado = await sendToAlegra(payload, contextoDe(env), { cliente: alegra });
 
     expect(resultado.ok).toBe(false);
     expect(resultado.estado).toBe('skipped');
@@ -593,11 +707,11 @@ describe('sendToAlegra', () => {
       },
     ];
     const env = entorno(db);
-    const payload = await buildAccountingPayload(FECHA, env);
+    const payload = await buildAccountingPayload(contextoDe(env), FECHA);
     const alegra = new FakeAlegra();
 
     expect(payload.ledger_integrity.verificado).toBe(false);
-    await sendToAlegra(payload, env, { cliente: alegra });
+    await sendToAlegra(payload, contextoDe(env), { cliente: alegra });
     expect(alegra.llamadas).toBe(0);
   });
 
@@ -612,7 +726,7 @@ describe('sendToAlegra', () => {
       },
     ];
     const env = entorno(db);
-    const payload = await buildAccountingPayload(FECHA, env);
+    const payload = await buildAccountingPayload(contextoDe(env), FECHA);
 
     expect(payload.ledger_integrity.verificado).toBe(true);
   });
@@ -621,26 +735,26 @@ describe('sendToAlegra', () => {
     const db = datosBase();
     const kv = new FakeKV();
     const env = entorno(db, new FakeR2(), kv);
-    const payload = await buildAccountingPayload(FECHA, env);
+    const payload = await buildAccountingPayload(contextoDe(env), FECHA);
     const alegra = new FakeAlegra();
 
-    await sendToAlegra(payload, env, { cliente: alegra });
+    await sendToAlegra(payload, contextoDe(env), { cliente: alegra });
     expect(alegra.llamadasListAccounts).toBe(1);
-    expect(kv.store.has(`alegra:accounts:${FECHA}`)).toBe(true);
+    expect(kv.store.has(`alegra:accounts:${TENANT_ID}:${FECHA}`)).toBe(true);
 
     // Segundo envío (idempotente): no vuelve a listar cuentas.
-    await sendToAlegra(payload, env, { cliente: alegra });
+    await sendToAlegra(payload, contextoDe(env), { cliente: alegra });
     expect(alegra.llamadasListAccounts).toBe(1);
   });
 
   it('fallback de cuenta: warning accionable en events y cuenta 5101-004', async () => {
     const db = datosBase();
     const env = entorno(db);
-    const payload = await buildAccountingPayload(FECHA, env);
+    const payload = await buildAccountingPayload(contextoDe(env), FECHA);
     const alegra = new FakeAlegra();
     alegra.cuentas = [{ codigo: '1102-003', nombre: 'Provisión por cartera ilegal' }];
 
-    const resultado = await sendToAlegra(payload, env, { cliente: alegra });
+    const resultado = await sendToAlegra(payload, contextoDe(env), { cliente: alegra });
 
     expect(resultado.ok).toBe(true);
     const evento = db.eventos.find((item) => item.type === 'alegra_account_fallback');
@@ -656,7 +770,7 @@ describe('sendToAlegra', () => {
   it('si Alegra rechaza la cuenta, reintenta el asiento con la cuenta de contingencia', async () => {
     const db = datosBase();
     const env = entorno(db);
-    const payload = await buildAccountingPayload(FECHA, env);
+    const payload = await buildAccountingPayload(contextoDe(env), FECHA);
 
     class Rechazador implements AlegraApi {
       intentos = 0;
@@ -680,7 +794,7 @@ describe('sendToAlegra', () => {
     }
 
     const alegra = new Rechazador();
-    const resultado = await sendToAlegra(payload, env, { cliente: alegra });
+    const resultado = await sendToAlegra(payload, contextoDe(env), { cliente: alegra });
 
     expect(resultado.ok).toBe(true);
     // 3 asientos: el primero se rechaza y se reintenta con la cuenta de contingencia.
@@ -694,34 +808,34 @@ describe('reconciliación (flujo de dos fases)', () => {
     const db = datosBase();
     const r2 = new FakeR2();
     const env = entorno(db, r2);
-    const payload = await buildAccountingPayload(FECHA, env);
+    const payload = await buildAccountingPayload(contextoDe(env), FECHA);
     const alegra = new FakeAlegra();
 
     // Fase 1 y 2: el asiento se crea en Alegra pero el UPDATE a D1 revienta.
     db.fallarUpdateSync = true;
-    const primerIntento = await sendToAlegra(payload, env, { cliente: alegra });
+    const primerIntento = await sendToAlegra(payload, contextoDe(env), { cliente: alegra });
     expect(primerIntento.ok).toBe(false);
     expect(alegra.asientosCreados.length).toBeGreaterThan(0);
     expect(db.sync[0]?.status).toBe('failed');
     // Las líneas sí quedaron escritas (se escriben antes del UPDATE).
     expect(db.lineas.length).toBeGreaterThan(0);
 
-    await guardarPayloadEnR2(env, FECHA, payload);
+    await guardarPayloadEnR2(contextoDe(env), FECHA, payload);
     db.fallarUpdateSync = false;
 
     // Siguiente corrida: la reconciliación pregunta a Alegra y no re-asienta.
     const resultado = await reconciliarCortesPendientes(env, { cliente: alegra });
 
-    expect(resultado.reconciliados).toBe(1);
+    expect(resultado[0]?.reconciliados).toBe(1);
     expect(alegra.asientosCreados).toHaveLength(3);
     expect(db.sync[0]?.status).toBe('reconciled');
-    expect(r2.store.has(claveR2(FECHA))).toBe(true);
+    expect(r2.store.has(claveR2(contextoDe(env), FECHA))).toBe(true);
   });
 
   it('sin confirmación de Alegra no se re-asienta: se avisa al humano', async () => {
     const db = datosBase();
     const env = entorno(db);
-    const payload = await buildAccountingPayload(FECHA, env);
+    const payload = await buildAccountingPayload(contextoDe(env), FECHA);
 
     class Mudo implements AlegraApi {
       creados = 0;
@@ -741,13 +855,13 @@ describe('reconciliación (flujo de dos fases)', () => {
 
     const alegra = new Mudo();
     db.fallarUpdateSync = true;
-    const primerIntento = await sendToAlegra(payload, env, { cliente: alegra });
+    const primerIntento = await sendToAlegra(payload, contextoDe(env), { cliente: alegra });
     expect(primerIntento.ok).toBe(false);
     const creadosAntes = alegra.creados;
-    await guardarPayloadEnR2(env, FECHA, payload);
+    await guardarPayloadEnR2(contextoDe(env), FECHA, payload);
 
     const resultado = await reconciliarCortesPendientes(env, { cliente: alegra });
-    expect(resultado.sinConfirmar).toBe(1);
+    expect(resultado[0]?.sinConfirmar).toBe(1);
     expect(alegra.creados).toBe(creadosAntes);
     expect(
       db.eventos.some((evento) => evento.type === 'alegra_reconciliacion_sin_confirmacion')
@@ -784,8 +898,8 @@ describe('cron contable', () => {
 
     const resultado = await handleContabilidadDaily(env, FECHA);
 
-    expect(resultado.payloadGuardado).toBe(true);
-    expect(r2.store.has(claveR2(FECHA))).toBe(true);
+    expect(resultado[0]?.payloadGuardado).toBe(true);
+    expect(r2.store.has(claveR2(contextoDe(env), FECHA))).toBe(true);
     expect(db.eventos.some((evento) => evento.type === 'alegra_sync')).toBe(true);
   });
 
@@ -793,11 +907,11 @@ describe('cron contable', () => {
     const db = datosBase();
     const r2 = new FakeR2();
     const env = entorno(db, r2);
-    const payload = await buildAccountingPayload(FECHA, env);
-    const key = await guardarPayloadEnR2(env, FECHA, payload);
+    const payload = await buildAccountingPayload(contextoDe(env), FECHA);
+    const key = await guardarPayloadEnR2(contextoDe(env), FECHA, payload);
 
-    expect(key).toBe(claveR2(FECHA));
-    expect(key).toBe('contabilidad/2026-10-19.json');
+    expect(key).toBe(claveR2(contextoDe(env), FECHA));
+    expect(key).toBe('contabilidad/t_arkangel/2026-10-19.json');
     expect(r2.store.get(key)).toContain('idempotency_key');
   });
 
@@ -805,10 +919,10 @@ describe('cron contable', () => {
     const db = datosBase();
     const r2 = new FakeR2();
     const env = entorno(db, r2);
-    const payload = await buildAccountingPayload(FECHA, env);
-    await guardarPayloadEnR2(env, FECHA, payload);
+    const payload = await buildAccountingPayload(contextoDe(env), FECHA);
+    await guardarPayloadEnR2(contextoDe(env), FECHA, payload);
 
-    const ultimo = await leerUltimoPayload(env);
+    const ultimo = await leerUltimoPayload(contextoDe(env));
     expect(ultimo?.fecha).toBe(FECHA);
     expect(ultimo?.payload.asientos).toHaveLength(3);
   });
@@ -858,7 +972,7 @@ describe('consultas del módulo', () => {
 
   it('el payload serializado es JSON puro', async () => {
     const db = datosBase();
-    const payload = await buildAccountingPayload(FECHA, entorno(db));
+    const payload = await buildAccountingPayload(contextoDe(entorno(db)), FECHA);
     const texto = JSON.stringify(payload);
     const parseado = JSON.parse(texto) as AccountingPayload;
     expect(parseado.fecha_corte).toBe(FECHA);

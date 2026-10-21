@@ -2,16 +2,22 @@
 
 ## Acceso al panel
 
-El panel se abre con **login de Clerk**: no se pega ningún token. Sin sesión
-muestra el login embebido; con sesión, el botón de usuario en la barra.
+El panel se abre con **correo y contraseña**: no se pega ningún token. La sesión
+viaja en una cookie `ark_session` (`HttpOnly`, 30 días) y persiste al recargar.
 
-- Si el panel muestra **"Clerk no está configurado"**, falta
-  `VITE_CLERK_PUBLISHABLE_KEY` en `frontend/.env.local` (mismo valor que
-  `CLERK_PUBLISHABLE_KEY`). Sin esa clave la SPA no renderiza, a propósito.
+- Si el panel no deja entrar, el alta del usuario se hace con el script de
+  ownership (o con el propio formulario de registro del panel):
+
+  ```bash
+  npm run seed:owner:remote -- --email duenio@arkangel.mx --password "una-clave-larga" --tenant t_arkangel --role owner
+  ```
+
 - Si el login entra pero el panel no carga, la sesión existe pero el usuario no
-  tiene rol: hace falta una fila en `tenant_users` (rol dentro del tenant) o en
-  `platform_users` (administrador de plataforma). **Estar en la Organization de
-  Clerk no basta**: el rol lo concede D1.
+  tiene ningún despacho: hace falta una fila en `tenant_memberships` (rol
+  dentro del despacho) o `users.platform_role = 'super_admin'` (administrador
+  de plataforma).
+- Si el login responde 429, se agotaron los intentos: el cubo de rate limit
+  caduca a los 15 minutos (login) o a la hora (registro).
 - `ADMIN_TOKEN` sigue existiendo como **break-glass** para línea de comandos
   (`x-admin-token`). El panel ya no lo pide.
 
@@ -30,8 +36,8 @@ re-disparo manual.
 
 ## Verificación rápida
 
-Estas llamadas usan el `ADMIN_TOKEN` de break-glass (el panel usa la sesión de
-Clerk):
+Estas llamadas usan el `ADMIN_TOKEN` de break-glass (el panel usa la cookie de
+sesión):
 
 ```bash
 BASE=https://arkangel-cobranza.substrateholdingsai.workers.dev
@@ -81,14 +87,20 @@ npx wrangler d1 execute $DB --remote --command "SELECT regla_id, accion, detalle
 # resumen del día
 npx wrangler d1 execute $DB --remote --command "SELECT accion, COUNT(*) FROM legal_audit WHERE created_at LIKE date('now')||'%' GROUP BY accion"
 
-# mapa tenant -> Organization de Clerk (vacío = el tenant no tiene Organization)
-npx wrangler d1 execute $DB --remote --command "SELECT id, slug, clerk_org_id FROM tenants"
+# catálogo de despachos
+npx wrangler d1 execute $DB --remote --command "SELECT id, slug, nombre, status FROM tenants"
 
 # roles concedidos por D1
-npx wrangler d1 execute $DB --remote --command "SELECT user_id, tenant_id, role FROM tenant_users"
+npx wrangler d1 execute $DB --remote --command "SELECT user_id, tenant_id, role FROM tenant_memberships"
 
 # administradores de plataforma
-npx wrangler d1 execute $DB --remote --command "SELECT user_id FROM platform_users"
+npx wrangler d1 execute $DB --remote --command "SELECT id, email FROM users WHERE platform_role = 'super_admin'"
+
+# usuarios dados de alta
+npx wrangler d1 execute $DB --remote --command "SELECT id, email, full_name, email_verified_at, created_at FROM users"
+
+# sesiones activas (el token va hasheado: no se puede suplantar a nadie con esto)
+npx wrangler d1 execute $DB --remote --command "SELECT user_id, expires_at, revoked_at, created_at FROM auth_sessions"
 ```
 
 ## Troubleshooting
@@ -96,11 +108,13 @@ npx wrangler d1 execute $DB --remote --command "SELECT user_id FROM platform_use
 | Síntoma | Causa probable | Qué hacer |
 |---|---|---|
 | Dashboard dice "PENDIENTE" | el CSV no llegó o falló el intake | ver `events` con `type='intake.csv'` y `type='cron.csv_ausente'` |
-| El panel avisa "Clerk no está configurado" | falta `VITE_CLERK_PUBLISHABLE_KEY` | definirla en `frontend/.env.local` con el mismo valor que `CLERK_PUBLISHABLE_KEY` y redesplegar la SPA |
-| Login entra pero el panel no carga (401 `sin_acceso`) | el usuario está en la Organization pero sin rol en D1 | insertar la fila en `tenant_users` (`user_id`, `tenant_id`, `role`) |
-| 401 `org_sin_tenant` | la Organization de Clerk no está mapeada a ningún tenant | `UPDATE tenants SET clerk_org_id = 'org_xxx' WHERE id = 't_xxx';` |
-| 403 `forbidden` | la credencial no tiene el scope que exige la ruta | revisar el rol en `tenant_users`; en emergencies, `ADMIN_TOKEN` (break-glass) |
-| 403 `tenant_mismatch` | la cabecera `X-Tenant-Id` no corresponde a la Organization del usuario | quitar la cabecera: el tenant sale de la Organization |
+| El login responde 401 | correo o contraseña incorrectos | probar con el `break-glass` (`ADMIN_TOKEN`) y revisar la fila en `users` |
+| Login entra pero el panel no carga (401 `sin_membresia`) | el usuario no tiene ningún despacho | insertar la fila en `tenant_memberships` (`user_id`, `tenant_id`, `role`) |
+| 403 `tenant_forbidden` | la cabecera `X-Tenant-Id` pide un despacho del que el usuario no es miembro | elegir otro despacho en el selector del panel; o dar de alta la membresía |
+| 401 `unauthorized` al recargar | la sesión caducó o se revocó (30 días) | volver a iniciar sesión |
+| 429 al intentar entrar | se agotaron los intentos de login | esperar 15 minutos; si se repite, revisar el cubo en `auth_rate_limits` |
+| 403 `forbidden` | la credencial no tiene el scope que exige la ruta | revisar el rol de la membresía; en emergencias, `ADMIN_TOKEN` (break-glass) |
+| 403 `tenant_mismatch` | la cabecera `X-Tenant-Id` no corresponde al principal | quitar la cabecera: el tenant sale de la membresía |
 | "Token inválido o ausente" (en `curl`) | `ADMIN_TOKEN` distinto al secret | `npx wrangler secret list` y reescribir el secret |
 | Casos en `failed` | ningún canal utilizable (opt-in o datos) | revisar `channel_state` y `clients.opt_in` |
 | Casos en `human` con `channel_state` = `bloqueado:<regla>` | el motor legal bloqueó el mensaje | ver `legal_audit` y corregir (config, contrato o prompt) |

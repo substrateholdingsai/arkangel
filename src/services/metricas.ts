@@ -1,10 +1,11 @@
 import type { DailyMetrics } from '../types/cobranza';
-import type { Env } from '../types/env';
 import type { TenantContext } from '../tenancy/types';
 import { countPromisesByDay } from './promesas';
 
 export async function dailyMetrics(ctx: TenantContext, date: string): Promise<DailyMetrics> {
-  const totalRow = await ctx.env.DB.prepare('SELECT COUNT(*) AS total FROM cases WHERE tenant_id = ? AND case_date = ?')
+  const totalRow = await ctx.env.DB.prepare(
+    'SELECT COUNT(*) AS total FROM cases WHERE tenant_id = ? AND case_date = ?'
+  )
     .bind(ctx.tenantId, date)
     .first<{ total: number }>();
 

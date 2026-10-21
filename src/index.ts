@@ -1,8 +1,16 @@
 import { Hono } from 'hono';
-import { logger, traceMiddleware, getTraceContext, generateTraceId, generateSpanId } from './lib/logger';
+import {
+  logger,
+  traceMiddleware,
+  getTraceContext,
+  generateTraceId,
+  generateSpanId,
+} from './lib/logger';
+import { authenticateRequest, type AuthVars } from './auth/middleware';
 import type { CobranzaQueueMessage, ContabilidadRetryMessage, Env } from './types/env';
 import { api } from './routes/api';
 import { agent } from './routes/agent';
+import { autenticacion } from './routes/autenticacion';
 import { contabilidad } from './routes/contabilidad';
 import { health } from './routes/health';
 import { ingest } from './routes/ingest';
@@ -15,14 +23,18 @@ import { RateLimiterDO } from './durable/rate-limiter';
 
 export { CallLockDO, RateLimiterDO };
 
-const app = new Hono<{ Bindings: Env }>();
+const app = new Hono<{ Bindings: Env; Variables: AuthVars }>();
 
 // Trace middleware - adds trace context to all requests
 app.use('*', traceMiddleware());
 
 app.use('/api/*', async (c, next) => {
   await next();
-  c.header('Access-Control-Allow-Origin', c.req.header('origin') ?? '*');
+  const origin = c.req.header('origin');
+  // La sesión viaja en cookie: el navegador sólo acepta credenciales si el
+  // origen es explícito (no `*`) y se permite el envío de credenciales.
+  c.header('Access-Control-Allow-Origin', origin ?? '*');
+  if (origin) c.header('Access-Control-Allow-Credentials', 'true');
   c.header(
     'Access-Control-Allow-Headers',
     'Content-Type, Authorization, x-admin-token, x-intake-token, x-tenant-id, x-tenant-slug'
@@ -32,6 +44,12 @@ app.use('/api/*', async (c, next) => {
   return undefined;
 });
 
+// Identidad nativa: resuelve la cookie `ark_session` una sola vez por
+// petición y la deja en el contexto. No bloquea: las rutas de máquina
+// (ingesta, agente) se autentican con token, no con sesión.
+app.use('/api/v1/*', authenticateRequest);
+
+app.route('/api/auth', autenticacion);
 app.route('/api/v1', health);
 app.route('/api/v1', ingest);
 app.route('/api/v1', api);
@@ -76,7 +94,8 @@ export default {
   fetch: app.fetch,
   queue: async (batch: MessageBatch<unknown>, env: Env) => {
     // Extract trace context from first message or generate new
-    const firstMsg = batch.messages[0]?.body as CobranzaQueueMessage | ContabilidadRetryMessage | undefined;
+    const firstMsg = batch.messages[0]?.body as
+      CobranzaQueueMessage | ContabilidadRetryMessage | undefined;
     const traceId = firstMsg?.traceId ?? generateTraceId();
     const spanId = generateSpanId();
     const traceCtx = { traceId, spanId, sampled: true };
@@ -87,7 +106,11 @@ export default {
       batchSize: batch.messages.length,
     });
 
-    await consumeBatch(batch as MessageBatch<CobranzaQueueMessage | ContabilidadRetryMessage>, env, traceCtx);
+    await consumeBatch(
+      batch as MessageBatch<CobranzaQueueMessage | ContabilidadRetryMessage>,
+      env,
+      traceCtx
+    );
   },
   scheduled: async (controller: ScheduledController, env: Env) => {
     const traceId = generateTraceId();

@@ -12,7 +12,6 @@
  *     `verificado: false` y NADIE lo envía a Alegra (fail-closed).
  */
 
-import type { Env } from '../types/env';
 import type { TenantContext } from '../tenancy/types';
 import { logEvent } from '../services/eventos';
 import { logger } from '../lib/logger';
@@ -408,7 +407,10 @@ export interface ResultadoBuild {
  * Construye el payload contable del corte. Lanza si el JSON no valida con Zod:
  * un payload inválido nunca llega a R2 ni a Alegra.
  */
-export async function buildAccountingPayload(ctx: TenantContext, fecha: string): Promise<AccountingPayload> {
+export async function buildAccountingPayload(
+  ctx: TenantContext,
+  fecha: string
+): Promise<AccountingPayload> {
   const resultado = await construirPayload(ctx, fecha);
   return resultado.payload;
 }
@@ -420,8 +422,12 @@ export async function construirPayload(ctx: TenantContext, fecha: string): Promi
   const hasta = ventana.fin_utc;
 
   const [auditoria, mapa, ingresos, checkpointPrevio, checkpointDia, historia] = await Promise.all([
-    conReintentos(() => ctx.env.DB.prepare(SQL_AUDITORIA_DIA).bind(ctx.tenantId, desde, hasta).all<AuditoriaRow>()),
-    conReintentos(() => ctx.env.DB.prepare(SQL_MAP_CONTABLE).bind(ctx.tenantId).all<MapaContable>()),
+    conReintentos(() =>
+      ctx.env.DB.prepare(SQL_AUDITORIA_DIA).bind(ctx.tenantId, desde, hasta).all<AuditoriaRow>()
+    ),
+    conReintentos(() =>
+      ctx.env.DB.prepare(SQL_MAP_CONTABLE).bind(ctx.tenantId).all<MapaContable>()
+    ),
     conReintentos(() =>
       ctx.env.DB.prepare(SQL_INGRESOS_DIA)
         .bind(ctx.tenantId, ...ESTADOS_INGRESO_RECONOCIDO, desde, hasta)
@@ -432,10 +438,16 @@ export async function construirPayload(ctx: TenantContext, fecha: string): Promi
           mensajes: number;
         }>()
     ),
-    conReintentos(() => ctx.env.DB.prepare(SQL_CHECKPOINT).bind(ctx.tenantId, fecha).first<Checkpoint>()),
-    conReintentos(() => ctx.env.DB.prepare(SQL_CHECKPOINT_FECHA).bind(ctx.tenantId, fecha).first<Checkpoint>()),
     conReintentos(() =>
-      ctx.env.DB.prepare(SQL_LEDGER_HISTORIA).bind(ctx.tenantId, hasta, LIMITE_LEDGER).all<LedgerRow>()
+      ctx.env.DB.prepare(SQL_CHECKPOINT).bind(ctx.tenantId, fecha).first<Checkpoint>()
+    ),
+    conReintentos(() =>
+      ctx.env.DB.prepare(SQL_CHECKPOINT_FECHA).bind(ctx.tenantId, fecha).first<Checkpoint>()
+    ),
+    conReintentos(() =>
+      ctx.env.DB.prepare(SQL_LEDGER_HISTORIA)
+        .bind(ctx.tenantId, hasta, LIMITE_LEDGER)
+        .all<LedgerRow>()
     ),
   ]);
 
@@ -696,7 +708,10 @@ async function cargarContratos(ctx: TenantContext, clientIds: string[]): Promise
   return result.results ?? [];
 }
 
-async function cargarCfdis(ctx: TenantContext, contractIds: string[]): Promise<Map<string, string>> {
+async function cargarCfdis(
+  ctx: TenantContext,
+  contractIds: string[]
+): Promise<Map<string, string>> {
   if (contractIds.length === 0) return new Map();
   const sql = SQL_CFDI_CONTRATOS.replace('%IDS%', placeholders(contractIds.length));
   const result = await conReintentos(() =>

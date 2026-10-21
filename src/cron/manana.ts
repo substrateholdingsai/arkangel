@@ -1,6 +1,5 @@
-import { logger, TraceContext, createTracer } from '../lib/logger';
+import { TraceContext, createTracer } from '../lib/logger';
 import type { Env } from '../types/env';
-import type { TenantContext } from '../tenancy/types';
 import { dailyMetrics } from '../services/metricas';
 import { logEvent } from '../services/eventos';
 import { todayIso } from '../services/db';
@@ -19,7 +18,7 @@ export async function handleScheduled(
 ): Promise<void> {
   const tracer = createTracer('manana');
   const traceCtx = parentTraceCtx ?? { traceId: '', spanId: '', sampled: true };
-  const { span, log } = tracer.startSpan(traceCtx, 'handleScheduled');
+  const { log } = tracer.startSpan(traceCtx, 'handleScheduled');
 
   const ctx = await resolveTenantContext(env);
   const date = todayIso(ctx.config.tz);

@@ -1,4 +1,3 @@
-import type { Env } from '../types/env';
 import type { TenantContext } from '../tenancy/types';
 import type { ContratoLegal } from '../legal/tipos';
 import { newId, nowIso } from './db';
@@ -53,7 +52,10 @@ export interface ContractInput {
   condusef?: string | null;
 }
 
-export async function upsertContract(ctx: TenantContext, input: ContractInput): Promise<ContratoLegal> {
+export async function upsertContract(
+  ctx: TenantContext,
+  input: ContractInput
+): Promise<ContratoLegal> {
   const id = newId('con');
   const timestamp = nowIso();
 
@@ -89,7 +91,9 @@ export async function upsertContract(ctx: TenantContext, input: ContractInput): 
 }
 
 export async function listContracts(ctx: TenantContext, limit = 100): Promise<ContratoLegal[]> {
-  const result = await ctx.env.DB.prepare('SELECT * FROM contracts WHERE tenant_id = ? ORDER BY updated_at DESC LIMIT ?')
+  const result = await ctx.env.DB.prepare(
+    'SELECT * FROM contracts WHERE tenant_id = ? ORDER BY updated_at DESC LIMIT ?'
+  )
     .bind(ctx.tenantId, limit)
     .all<ContractRow>();
   return (result.results ?? []).map(toContrato);

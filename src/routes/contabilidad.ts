@@ -7,14 +7,14 @@
  */
 
 import { Hono } from 'hono';
+import type { AuthVars } from '../auth/middleware';
 import type { Env } from '../types/env';
-import type { TenantContext } from '../tenancy/types';
 import { diaPrevioIso } from '../contabilidad/buildPayload';
 import { leerPayloadDesdeR2, leerUltimoPayload } from '../contabilidad/sendToAlegra';
 import { exigePrincipalConScope } from './guard';
 import { tenantContextDeRequest } from './tenant';
 
-export const contabilidad = new Hono<{ Bindings: Env }>();
+export const contabilidad = new Hono<{ Bindings: Env; Variables: AuthVars }>();
 
 /**
  * El resumen contable exige `accounting:read`.

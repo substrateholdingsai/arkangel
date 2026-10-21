@@ -4,12 +4,13 @@ import { parseTelnyxPayload } from '../channels/telnyx';
 import { parseWhatsAppPayload, whatsappChallengeResponse } from '../channels/whatsapp';
 import { verifyEd25519 } from '../lib/crypto';
 import { logger } from '../lib/logger';
+import type { AuthVars } from '../auth/middleware';
 import type { Env } from '../types/env';
 import { handleInbound } from '../orquestacion/inbound';
 import { updateMessageStatus } from '../services/mensajes';
 import { resolveTenantIdForInbound } from '../tenancy/context';
 
-export const webhooks = new Hono<{ Bindings: Env }>();
+export const webhooks = new Hono<{ Bindings: Env; Variables: AuthVars }>();
 
 async function processParsed(
   env: Env,

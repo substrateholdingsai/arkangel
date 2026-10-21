@@ -1,34 +1,35 @@
 /**
- * Guardas de autorizaci�n: qui�n es el actor de la petici�n y qu� puede hacer.
+ * Guardias de autorización: quién es el actor de la petición y qué puede hacer.
  *
- * 
-esolverPrincipal es la �nica puerta de entrada al backend: decide qui�n
- * es el principal (una sesi�n de Clerk o un token de m�quina) y con qu�
- * alcance. A partir de ah� todo el c�digo consume el Principal que sale de
- * aqu�; nadie vuelve a leer cabeceras de autenticaci�n.
+ * `resolverPrincipal` es la única puerta de entrada al backend: decide quién
+ * es el principal (una sesión nativa o un token de máquina) y con qué
+ * alcance. A partir de ahí todo el código consume el Principal que sale de
+ * aquí; nadie vuelve a leer cabeceras de autenticación.
  *
- * Por qu� el orden es sesi�n ? token: la sesi�n de Clerk es la identidad real
- * del humano y manda sobre cualquier otra credencial de la petici�n. Y si hay
- * sesi�n pero el usuario no tiene acceso a ning�n tenant, la respuesta es 401:
- * reinterpretar la petici�n como una llamada de m�quina convertir�a "no
- * autorizado" en "autorizado como otro actor".
+ * Por qué el orden es sesión → token: la sesión es la identidad real del
+ * humano y manda sobre cualquier otra credencial de la petición. Y si hay
+ * sesión pero el usuario no tiene acceso, la respuesta es 401: reinterpretar
+ * la petición como una llamada de máquina convertiría "no autorizado" en
+ * "autorizado como otro actor".
  */
 
 import { safeCompare } from '../lib/crypto';
 import { logger } from '../lib/logger';
 import { extractToken } from '../routes/auth';
 import { tenantRefDesdeRequest, type ReferenciaTenant } from '../tenancy/referencia';
-import {
-  esErrorDeTablaFaltante,
-  getTenantByClerkOrgId,
-  getTenantBySlug,
-} from '../tenancy/repository';
+import { esErrorDeTablaFaltante, getTenantBySlug } from '../tenancy/repository';
 import type { Env } from '../types/env';
-import { clerkActivo, principalDeSesion, verificarSesion, type SesionClerk } from './clerk';
-import { canActOnTenant, hasScope, platformPrincipal, type Principal } from './principal';
+import { ROLE_POR_MEMBRESIA, validateSession, type Membership, type NativeSession } from './native';
+import {
+  canActOnTenant,
+  hasScope,
+  platformPrincipal,
+  tenantPrincipal,
+  type Principal,
+} from './principal';
 import { scopesForRole, type Role, type Scope } from './scopes';
 
-/** De d�nde sali� el principal de la petici�n. */
+/** De dónde salió el principal de la petición. */
 export type OrigenPrincipal = 'session' | 'token';
 
 export interface PrincipalResuelto {
@@ -38,30 +39,39 @@ export interface PrincipalResuelto {
   tenantId: string | null;
 }
 
-/** Motivo por el que una petici�n no llega a tener principal. */
-export type MotivoSinAcceso = 'unauthorized' | 'org_sin_tenant' | 'sin_acceso';
+/**
+ * Motivo por el que una petición no llega a tener principal.
+ *
+ * · `unauthorized`      → no hay ninguna credencial válida.
+ * · `sin_membresia`     → la sesión es válida pero el usuario no pertenece a
+ *                         ningún despacho: no hay contra qué operar.
+ * · `tenant_forbidden`  → el usuario pidió un despacho del que no es miembro.
+ */
+export type MotivoSinAcceso = 'unauthorized' | 'sin_membresia' | 'tenant_forbidden';
 
 export interface PrincipalResueltoDetallado {
   principal: Principal | null;
   origen?: OrigenPrincipal;
   tenantId?: string | null;
   motivo?: MotivoSinAcceso;
+  /** Código HTTP con el que se responde (401 o 403). */
+  status?: 401 | 403;
 }
 
 /**
- * Resuelve el principal de la petici�n: primero la sesi�n de Clerk,
- * despu�s los tokens de m�quina. null si no hay ninguna credencial v�lida.
+ * Resuelve el principal de la petición: primero la sesión nativa, después
+ * los tokens de máquina. `null` si no hay ninguna credencial válida.
  *
- * Wrapper fino para mantener compatibilidad con el resto del c�digo
- * (notablemente tenancy/context.ts). Usa 
-esolverPrincipalDetallado para
- * evitar verificaciones dobles de Clerk.
+ * Wrapper fino para mantener compatibilidad con el resto del código
+ * (notablemente tenancy/context.ts). Usa `resolverPrincipalDetallado` para
+ * evitar verificaciones dobles contra D1.
  */
 export async function resolverPrincipal(
   env: Env,
-  request: Request
+  request: Request,
+  sesion?: NativeSession | null
 ): Promise<PrincipalResuelto | null> {
-  const detallado = await resolverPrincipalDetallado(env, request);
+  const detallado = await resolverPrincipalDetallado(env, request, sesion);
   if (!detallado.principal) return null;
   return {
     principal: detallado.principal,
@@ -71,32 +81,23 @@ export async function resolverPrincipal(
 }
 
 /**
- * Variante detallada que evita verificaciones dobles de Clerk: devuelve
- * el motivo cuando no hay principal (especialmente para sesiones v�lidas
- * sin acceso).
+ * Variante detallada que evita verificaciones dobles: devuelve el motivo
+ * cuando no hay principal (y si la respuesta es 401 o 403).
+ *
+ * `sesion` es la sesión ya resuelta por el middleware. `undefined` significa
+ * "resuélvela tú" (la cookie no se ha mirado todavía); `null` significa
+ * "ya se resolvió y no hay sesión".
  */
 export async function resolverPrincipalDetallado(
   env: Env,
-  request: Request
+  request: Request,
+  sesion?: NativeSession | null
 ): Promise<PrincipalResueltoDetallado> {
-  if (clerkActivo(env)) {
-    const sesion = await verificarSesion(env, request);
-    if (sesion) {
-      const principal = await principalDeSesion(env, sesion);
-      if (!principal) {
-        const motivo = await motivoDeSesionSinAcceso(env, sesion);
-        logger.warn('Sesi�n de Clerk sin acceso: la petici�n se rechaza', {
-          userId: sesion.userId,
-          orgId: sesion.orgId,
-          motivo,
-        });
-        return { principal: null, origen: 'session', motivo };
-      }
-      return { principal, origen: 'session', tenantId: principal.tenantId };
-    }
-    // No hay sesi�n v�lida de Clerk; seguir probando tokens de m�quina
+  const resuelta = sesion === undefined ? await validateSession(env, request) : sesion;
+  if (resuelta) {
+    return principalDeSesion(request, resuelta);
   }
-
+  // No hay sesión válida; seguir probando tokens de máquina
   const principalToken = await principalDeTokenDeMaquina(env, request);
   if (principalToken) {
     return {
@@ -105,11 +106,75 @@ export async function resolverPrincipalDetallado(
       tenantId: principalToken.tenantId,
     };
   }
-  return { principal: null, motivo: 'unauthorized' };
+  return { principal: null, motivo: 'unauthorized', status: 401 };
 }
 
 /**
- * 403 si al principal le falta el scope. null si lo tiene.
+ * Principal de una sesión nativa.
+ *
+ * · Administrador de plataforma (`platform_role = 'super_admin'`): alcance
+ *   transversal, su `tenantId` es `null`.
+ * · Usuario de un tenant: su despachos, según la cabecera `X-Tenant-Id` o
+ *   `X-Tenant-Slug` (que sólo *selecciona* entre sus membresías) y, si no
+ *   viene cabecera, el primero. El rol es el de la membresía.
+ * · Cualquier otro caso: `null`. Sin membresía no hay contra qué operar.
+ */
+function principalDeSesion(request: Request, sesion: NativeSession): PrincipalResueltoDetallado {
+  const { user, memberships } = sesion;
+
+  if (user.platformRole === 'super_admin') {
+    return { principal: platformPrincipal(user.id), origen: 'session', tenantId: null };
+  }
+
+  if (memberships.length === 0) {
+    logger.warn('Sesión sin membresías: la petición se rechaza', { userId: user.id });
+    return {
+      principal: null,
+      origen: 'session',
+      motivo: 'sin_membresia',
+      status: 401,
+    };
+  }
+
+  const ref = tenantRefDesdeRequest(request);
+  const membresia = membresiaDe(ref, memberships);
+
+  if (!membresia) {
+    logger.warn('El usuario pidió un despacho del que no es miembro: se rechaza', {
+      userId: user.id,
+      tenantSolicitado: ref.tenantId ?? ref.tenantSlug ?? null,
+    });
+    return {
+      principal: null,
+      origen: 'session',
+      motivo: 'tenant_forbidden',
+      status: 403,
+    };
+  }
+
+  const rol = ROLE_POR_MEMBRESIA[membresia.role] ?? 'viewer';
+  return {
+    principal: tenantPrincipal('user', user.id, membresia.tenantId, rol),
+    origen: 'session',
+    tenantId: membresia.tenantId,
+  };
+}
+
+/**
+ * Membresía que corresponde a la referencia de la petición.
+ *
+ * Sin cabecera se toma la primera: es el comportamiento de "el panel acaba de
+ * abrir y aún no ha elegido despacho". Con cabecera, sólo puede ser una de
+ * las membresías del usuario: `null` significa que pidió un tenant ajeno.
+ */
+function membresiaDe(ref: ReferenciaTenant, memberships: Membership[]): Membership | undefined {
+  if (ref.tenantId) return memberships.find((m) => m.tenantId === ref.tenantId);
+  if (ref.tenantSlug) return memberships.find((m) => m.tenantSlug === ref.tenantSlug);
+  return memberships[0];
+}
+
+/**
+ * 403 si al principal le falta el scope. `null` si lo tiene.
  */
 export function exigeScope(principal: Principal, scope: Scope): Response | null {
   if (hasScope(principal, scope)) return null;
@@ -117,12 +182,12 @@ export function exigeScope(principal: Principal, scope: Scope): Response | null 
 }
 
 /**
- * 403 si el principal no puede operar sobre ese tenant. null si puede.
+ * 403 si el principal no puede operar sobre ese tenant. `null` si puede.
  *
- * La plataforma es transversal. Los dem�s s�lo operan sobre su propio tenant:
- * un token de servicio que todav�a no est� acotado (	enantId = null) NO es
- * plataforma, as� que se rechaza hasta que el contexto lo acota. Por eso la
- * comprobaci�n mira el kind y no s�lo el 	enantId.
+ * La plataforma es transversal. Los demás sólo operan sobre su propio tenant:
+ * un token de servicio que todavía no está acotado (tenantId = null) NO es
+ * plataforma, así que se rechaza hasta que el contexto lo acota. Por eso la
+ * comprobación mira el kind y no sólo el tenantId.
  */
 export function exigeTenant(principal: Principal, tenantId: string): Response | null {
   const permitido =
@@ -133,10 +198,10 @@ export function exigeTenant(principal: Principal, tenantId: string): Response | 
 }
 
 /**
- * Principal de un token de m�quina.
+ * Principal de un token de máquina.
  *
- * El admin de plataforma es el �nico actor con alcance transversal. Los
- * tokens de servicio (ingesta, agente) son pikey con el rol de su servicio:
+ * El admin de plataforma es el único actor con alcance transversal. Los
+ * tokens de servicio (ingesta, agente) son apikey con el rol de su servicio:
  * nunca obtienen alcance de plataforma aunque no traigan cabecera de tenant.
  */
 async function principalDeTokenDeMaquina(
@@ -160,7 +225,7 @@ async function principalDeTokenDeMaquina(
     return principalDeServicio(env, ref, 'agent-token', 'service_agent');
   }
 
-  logger.warn('Credencial de m�quina no reconocida: la petici�n se rechaza', {
+  logger.warn('Credencial de máquina no reconocida: la petición se rechaza', {
     tieneToken: true,
   });
   return null;
@@ -170,12 +235,12 @@ async function principalDeTokenDeMaquina(
  * Principal de un token de servicio.
  *
  * El tenant sale de la cabecera (X-Tenant-Id / X-Tenant-Slug); sin
- * cabecera el principal queda **sin acotar** (	enantId: null) y se acota
+ * cabecera el principal queda **sin acotar** (tenantId = null) y se acota
  * cuando se resuelve el contexto.
  *
- * El Principal se arma a mano en vez de con 	enantPrincipal() porque �se
- * exige un tenant no nulo: aqu� el token puede llegar sin acotar y aun as�
- * debe seguir siendo pikey, nunca plataforma.
+ * El Principal se arma a mano en vez de con tenantPrincipal() porque aquí
+ * se exige un tenant no nulo: aquí el token puede llegar sin acotar y aun así
+ * debe seguir siendo apikey, nunca plataforma.
  */
 async function principalDeServicio(
   env: Env,
@@ -199,8 +264,8 @@ async function principalDeServicio(
  *
  * El slug se resuelve contra D1 porque el principal necesita un *id* para
  * poder compararse con el tenant del contexto. Si el slug no existe, el
- * principal queda sin acotar y ser� la resoluci�n del contexto la que
- * rechace la llamada (	enant_not_found).
+ * principal queda sin acotar y será la resolución del contexto la que
+ * rechace la llamada (tenant_not_found).
  */
 async function tenantDeReferencia(env: Env, ref: ReferenciaTenant): Promise<string | null> {
   if (ref.tenantId) return ref.tenantId;
@@ -215,31 +280,7 @@ async function tenantDeReferencia(env: Env, ref: ReferenciaTenant): Promise<stri
   }
 }
 
-/**
- * Motivo por el que una sesi�n v�lida no llega a un principal.
- *
- * org_sin_tenant: la Organization de Clerk no est� mapeada a ning�n tenant.
- * sin_acceso: el tenant existe pero el usuario no tiene rol en �l.
- */
-async function motivoDeSesionSinAcceso(
-  env: Env,
-  sesion: SesionClerk
-): Promise<'org_sin_tenant' | 'sin_acceso'> {
-  if (!sesion.orgId) return 'sin_acceso';
-
-  try {
-    const tenant = await getTenantByClerkOrgId(env, sesion.orgId);
-    return tenant ? 'sin_acceso' : 'org_sin_tenant';
-  } catch (error) {
-    logger.debug('No se pudo comprobar el tenant de la Organization de Clerk', {
-      orgId: sesion.orgId,
-      motivo: error instanceof Error ? error.message : String(error),
-    });
-    return 'sin_acceso';
-  }
-}
-
-/** Respuesta JSON plana: los errores de autorizaci�n no filtran datos. */
+/** Respuesta JSON plana: los errores de autorización no filtran datos. */
 function respuestaJson(cuerpo: Record<string, unknown>, status: number): Response {
   return new Response(JSON.stringify(cuerpo), {
     status,

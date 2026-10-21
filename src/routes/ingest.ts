@@ -1,12 +1,13 @@
 import { Hono } from 'hono';
 import { rowsToCollectionRows, parseCsvRows } from '../lib/csv';
 import { logger } from '../lib/logger';
+import type { AuthVars } from '../auth/middleware';
 import type { Env } from '../types/env';
 import { ingestRows } from '../services/ingesta';
 import { exigePrincipalConScope } from './guard';
 import { tenantContextDeRequest } from './tenant';
 
-export const ingest = new Hono<{ Bindings: Env }>();
+export const ingest = new Hono<{ Bindings: Env; Variables: AuthVars }>();
 
 /**
  * Entrega del CSV de las 6:00 AM (CRM → Arkangel).

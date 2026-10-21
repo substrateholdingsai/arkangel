@@ -1,5 +1,4 @@
 import { logger, TraceContext, generateTraceId, generateSpanId } from '../lib/logger';
-import type { Env } from '../types/env';
 import type { TenantContext } from '../tenancy/types';
 import type { CollectionCase } from '../types/cobranza';
 import { listReadyCases } from '../services/casos';
@@ -25,7 +24,11 @@ export async function enqueueCases(
       continue;
     }
 
-    const msgTraceCtx = traceCtx ?? { traceId: generateTraceId(), spanId: generateSpanId(), sampled: true };
+    const msgTraceCtx = traceCtx ?? {
+      traceId: generateTraceId(),
+      spanId: generateSpanId(),
+      sampled: true,
+    };
 
     await ctx.env.COBRANZA_QUEUE.send({
       type: 'cobranza.disparar',
@@ -43,7 +46,8 @@ export async function enqueueCases(
     await logEvent(ctx, 'cobranza.enqueued', { caseId: c.id, clientId: c.client_id });
   }
 
-  if (result.queued > 0) logger.info('Casos encolados', { queued: result.queued, tenantId: ctx.tenantId });
+  if (result.queued > 0)
+    logger.info('Casos encolados', { queued: result.queued, tenantId: ctx.tenantId });
   return result;
 }
 

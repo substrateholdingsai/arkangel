@@ -148,7 +148,7 @@ Este reporte fue generado por **Kilo**, un agente de ingeniería de software aut
 
 ## 5. Próximos Pasos Recomendados (para humano)
 
-1. **Configurar Clerk** — `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `CLERK_JWT_KEY`, `CLERK_AUTHORIZED_PARTIES`, `VITE_CLERK_PUBLISHABLE_KEY` + mapeo `tenants.clerk_org_id`
+1. **Dar de alta el primer usuario** — `npm run seed:owner:remote -- --email ... --password ... --tenant t_arkangel --role owner` (tras aplicar las migraciones 0007/0008 en remoto). La identidad ya no necesita ninguna clave de proveedor externo.
 2. **Cargar tenant `t_arkangel`** — Razón social + CONDUSEF → `UPDATE tenants SET config_mode='db'`
 3. **Fase 5** — Firma Meta en webhook POST (enrutado ya listo)
 4. **Fase 6** — Contabilidad por tenant (Alegra propio, mapa cuentas, ledger)

@@ -176,12 +176,14 @@ El panel consume `GET /api/v1/cases/today` (estado, último canal, intención de
 y próxima acción por caso) y `GET /api/v1/metrics/today` (KPIs + `por_estado`), y expone el
 mismo catálogo legal en `GET /api/v1/legal/catalogo`.
 
-El panel entra con **login de Clerk**: `ClerkProvider` (`frontend/src/main.tsx`) con
-`VITE_CLERK_PUBLISHABLE_KEY`; si la clave falta, la SPA muestra un aviso ("Clerk no está
-configurado") en vez de una pantalla en blanco. Sin sesión, `<Show when="signed-out">`
-muestra el login embebido (`<SignIn>`); con sesión, `<UserButton>` en la barra. La SPA
-manda `Authorization: Bearer <JWT de sesión>` —ya no `x-admin-token`— y traduce los
-errores: un 401 devuelve al login, un 403 muestra el mensaje de permiso.
+El panel entra con **identidad nativa**: `AuthProvider` (`frontend/src/auth/AuthContext.tsx`)
+hace un bootstrap silencioso contra `GET /api/auth/session`; si la cookie `ark_session` sigue
+viva, entra al panel; si no, `AuthGate` (`frontend/src/auth/AuthGate.tsx`) pide correo y
+contraseña. La cookie es `HttpOnly`, así que la SPA no puede leerla: sólo mandarla, con
+`credentials: 'include'`. Un 401 devuelve al acceso; un 403 muestra el motivo (despacho ajeno,
+sin permiso). El selector de despacho de la barra superior cambia el tenant activo sin cerrar
+sesión: sólo mueve la cabecera `X-Tenant-Id`, y el Worker comprueba que el usuario sea miembro
+de ese despacho.
 
 ## Modelo de datos (D1)
 
@@ -201,11 +203,14 @@ errores: un 401 devuelve al login, un 403 muestra el mensaje de permiso.
 | `alegra_journal_lines` | trazabilidad asiento por asiento (`legal_audit.id` → journal id) | `(idempotency_key, legal_audit_id)` |
 | `ledger_checkpoint` | cabeza de la cadena de hashes del ledger por día | `fecha_corte` |
 | `contract_cfdi` | UUID del CFDI timbrado por contrato (opcional) | `contract_id` |
-| `tenants` | catálogo de clientes: identidad legal, ventana, límites, modo de config | `id`; `slug` único; un solo `is_default`; `clerk_org_id` único |
+| `tenants` | catálogo de clientes: identidad legal, ventana, límites, modo de config | `id`; `slug` único; un solo `is_default` |
 | `tenant_channels` | enrutado y credenciales por canal | `(channel, provider_account_id)` único |
 | `tenant_accounting_map` | mapa regla legal → cuentas, por tenant | `(tenant_id, regla_id)` |
-| `tenant_users` | **rol** del usuario de Clerk dentro del tenant | `(user_id, tenant_id)`; `role` con CHECK (`owner`/`compliance`/`operator`/`viewer`) |
-| `platform_users` | administradores de plataforma: alcance transversal, sin tenant | `user_id` |
+| `users` | identidad humana: correo, hash PBKDF2, rol de plataforma | `id`; `email` único (sin distinguir mayúsculas) |
+| `tenant_memberships` | **rol** del usuario dentro de cada despacho | `(user_id, tenant_id)`; `role` con CHECK (`owner`/`admin`/`member`) |
+| `auth_sessions` | sesiones activas: `token_hash` (SHA-256), caducidad y revocación | `token_hash` |
+| `auth_tokens` | tokens de un solo uso (restablecer contraseña) | `token_hash` |
+| `auth_rate_limits` | ventana de intentos de acceso por correo e IP | `bucket_key` |
 
 `opt_in` es **triestado**: `1` = acepta, `0` = rechaza explícito, `NULL` = desconocido
 (se permite el primer contacto a WhatsApp/SMS; el email exige `1`).
@@ -252,35 +257,41 @@ La allowlist de dominios distingue dos casos que antes se confundían: la
 variable **no definida** usa el dominio por defecto; la variable **vacía**
 significa "ningún link permitido".
 
-### Identidad: Clerk
+### Identidad: nativa (D1 + cookie)
 
-Clerk es el proveedor de autenticación. La identidad humana de una petición sale
-de su sesión (`src/auth/clerk.ts`): `userId`, `sessionId` y la Organization
-activa. La sesión llega como cookie o como JWT en `Authorization: Bearer`.
+No hay proveedor de identidad externo. La contraseña se verifica con PBKDF2
+dentro del Worker (`src/auth/native.ts`) y la sesión es un token aleatorio que
+D1 guarda **hasheado**; en el navegador sólo viaja la cookie `ark_session`
+(`HttpOnly`, `SameSite=Lax`, 30 días), que la SPA no puede leer.
 
 ```
-sesión de Clerk
+cookie ark_session
    │
-   ├─ ¿el user_id está en `platform_users`?  → principal de plataforma (tenantId = null)
-   │
-   └─ Organization (`sesion.orgId`) → `tenants.clerk_org_id`
+   └─ SHA-256 → `auth_sessions.token_hash`
           │
-          ├─ sin tenant mapeado   → 401 `org_sin_tenant`
-          └─ `tenant_users(user_id, tenant_id)` → el rol de D1
+          ├─ sin fila / caducada / revocada  → 401 `unauthorized`
+          │
+          └─ `users` + `tenant_memberships`
                  │
-                 ├─ sin fila          → 401 `sin_acceso`
-                 └─ con fila          → principal de tenant
+                 ├─ `platform_role = 'super_admin'` → principal de plataforma (tenantId = null)
+                 │
+                 └─ membresías del usuario
+                        │
+                        ├─ sin membresías                    → 401 `sin_membresia`
+                        ├─ cabecera `X-Tenant-Id` de otro   → 403 `tenant_forbidden`
+                        └─ cabecera válida (o la primera)    → principal de tenant
+                               │
+                               └─ el rol sale de la membresía (`ROLE_POR_MEMBRESIA`)
 ```
 
-**El rol lo concede D1, no Clerk.** Estar en la Organization de Clerk **no
-basta**: `tenant_users` es la fuente de verdad del rol dentro del tenant y
-`platform_users` la de los administradores de plataforma (alcance transversal,
-sin tenant). Clerk aporta la identidad; Arkangel aporta el alcance.
+**El rol lo concede la membresía, no la cabecera.** `X-Tenant-Id` *selecciona*
+entre los despachos del usuario; nunca amplía el alcance. Pedir uno ajeno es
+403 `tenant_forbidden`: es suplantación, no un id mal escrito.
 
 | Actor | Credencial | Alcance |
 |---|---|---|
-| Usuario de tenant | sesión de Clerk | su tenant y los scopes de su rol |
-| Administrador de plataforma | sesión de Clerk + fila en `platform_users` | todos los tenants |
+| Usuario de tenant | cookie `ark_session` | su despacho y los scopes de su rol |
+| Administrador de plataforma | cookie `ark_session` + `users.platform_role = 'super_admin'` | todos los tenants |
 | Servicio de ingesta | `INTAKE_TOKEN` | `ingest:write`, acotado al tenant de la cabecera |
 | Servicio del agente | `GROK_BOT_TOKEN` | `agent:read`, `agent:decide`, `agent:dispatch`, `agent:audit`, acotado al tenant de la cabecera |
 | Break-glass | `ADMIN_TOKEN` | plataforma (todos los scopes) |
@@ -289,6 +300,15 @@ Los tokens de máquina se conservan: el CRM (ingesta), el agente Grok y el
 `ADMIN_TOKEN` de emergencia. Los de servicio **nunca** obtienen alcance de
 plataforma: sin cabecera de tenant quedan sin acotar (`tenantId = null`) y es el
 contexto el que los acota al resolverlo.
+
+La traducción del rol de la membresía al de Arkangel es una tabla, no una
+constante dispersa:
+
+| Membresía | Rol de Arkangel | Puede |
+|---|---|---|
+| `owner` | `owner` | todo el despacho, incluida la configuración legal |
+| `admin` | `operator` | opera casos y dispara cobranza |
+| `member` | `viewer` | sólo lectura |
 
 ### Autorización: rol, scope y ruta
 
@@ -321,7 +341,7 @@ scope que necesita (`src/routes/guard.ts`):
 | `GET /api/v1/state` · `POST /api/v1/decide` · `/dispatch` · `/audit` | `agent:read` · `agent:decide` · `agent:dispatch` · `agent:audit` |
 
 Sin credencial → 401. Con credencial pero sin scope → 403
-`{"error":"forbidden","scope":"…"}`. La verificación de Clerk se hace **una sola
+`{"error":"forbidden","scope":"…"}`. La verificación de la sesión se hace **una sola
 vez** por petición: si se resolviera dos veces, el tenant con el que se opera
 podría no ser el del principal que la ruta ya autorizó.
 
@@ -329,20 +349,22 @@ podría no ser el del principal que la ruta ya autorizó.
 
 `src/auth/guards.ts` decide quién es el actor y el orden es **sesión → token**:
 
-1. Si hay sesión de Clerk válida, esa manda. Si el usuario no llega a un
-   principal, la respuesta es 401 con el motivo (`unauthorized`, `org_sin_tenant`
-   o `sin_acceso`) y **no** se cae al token de máquina: reinterpretar la petición
-   convertiría "no autorizado" en "autorizado como otro actor".
-2. Si no hay sesión de Clerk (o Clerk no está configurado), se prueban los
+1. Si hay sesión nativa válida, esa manda. Si el usuario no llega a un
+   principal, la respuesta es 401 o 403 con el motivo (`unauthorized`,
+   `sin_membresia` o `tenant_forbidden`) y **no** se cae al token de máquina:
+   reinterpretar la petición convertiría "no autorizado" en "autorizado como
+   otro actor".
+2. Si no hay sesión, se prueban los
    tokens de máquina: `ADMIN_TOKEN` → plataforma, `INTAKE_TOKEN` → `service_ingest`,
    `GROK_BOT_TOKEN` → `service_agent`.
 
 El **tenant se deduce de la credencial**, nunca de un header del cliente: un
 `X-Tenant-Id` confiado desde el navegador es suplantación trivial.
 
-> La cabecera `X-Tenant-Id` / `X-Tenant-Slug` **acota, nunca amplía**. Con sesión
-> de Clerk el tenant sale de la Organization del usuario: si la cabecera apunta a
-> otro tenant, la respuesta es 403 `tenant_mismatch` (fail-closed). Para la
+> La cabecera `X-Tenant-Id` / `X-Tenant-Slug` **selecciona, nunca amplía**. Con
+> sesión nativa el tenant sale de las membresías del usuario: si la cabecera
+> apunta a un despacho del que no es miembro, la respuesta es 403
+> `tenant_forbidden` (fail-closed). Para la
 > plataforma y los tokens de servicio la cabecera sí decide el tenant, y en el
 > caso de la plataforma la operación queda auditada como impersonación (`events`
 > tipo `auth.impersonacion`). Un tenant inexistente responde 404

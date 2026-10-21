@@ -10,7 +10,7 @@
 
 import type { Env } from '../types/env';
 import type { TenantContext } from '../tenancy/types';
-import { logger, TraceContext, createTracer } from '../lib/logger';
+import { TraceContext, createTracer } from '../lib/logger';
 import { logEvent } from '../services/eventos';
 import { listTenants } from '../tenancy/repository';
 import { platformPrincipal } from '../auth/principal';
@@ -48,7 +48,7 @@ export async function handleContabilidadDaily(
 ): Promise<ResultadoContabilidad[]> {
   const tracer = createTracer('contabilidadDaily');
   const traceCtx = parentTraceCtx ?? { traceId: '', spanId: '', sampled: true };
-  const { span, log } = tracer.startSpan(traceCtx, 'handleContabilidadDaily');
+  const { log } = tracer.startSpan(traceCtx, 'handleContabilidadDaily');
 
   const timeZone = env.TZ ?? 'America/Mexico_City';
   const fecha = fechaCorte ?? diaPrevioIso(timeZone);
@@ -62,7 +62,7 @@ export async function handleContabilidadDaily(
   for (const tenant of tenants) {
     if (tenant.status !== 'active') continue;
 
-    const { span: tenantSpan, log: tenantLog } = tracer.startSpan(traceCtx, `tenant:${tenant.id}`);
+    const { log: tenantLog } = tracer.startSpan(traceCtx, `tenant:${tenant.id}`);
 
     const ctx = {
       env,
@@ -100,7 +100,11 @@ export async function handleContabilidadDaily(
       await logEvent(ctx, 'alegra_sync', {
         payload: { fecha_corte: fecha, status: 'reconciliacion_fallida', error: mensaje },
       });
-      tenantLog.error('Falló la reconciliación previa', { fecha_corte: fecha, tenantId: tenant.id, error: mensaje });
+      tenantLog.error('Falló la reconciliación previa', {
+        fecha_corte: fecha,
+        tenantId: tenant.id,
+        error: mensaje,
+      });
     }
 
     let construccion: ResultadoBuild;
@@ -137,7 +141,11 @@ export async function handleContabilidadDaily(
           error: `no se pudo guardar en R2: ${mensaje}`,
         },
       });
-      tenantLog.error('Falló el guardado del payload en R2', { fecha_corte: fecha, tenantId: tenant.id, error: mensaje });
+      tenantLog.error('Falló el guardado del payload en R2', {
+        fecha_corte: fecha,
+        tenantId: tenant.id,
+        error: mensaje,
+      });
     }
 
     // ── Ledger roto: no se envía, se alerta ──
@@ -151,7 +159,10 @@ export async function handleContabilidadDaily(
           aviso: 'el ledger no verifica: los asientos NO se enviaron a Alegra',
         },
       });
-      tenantLog.error('Contabilidad detenida: el ledger no verifica', { fecha_corte: fecha, tenantId: tenant.id });
+      tenantLog.error('Contabilidad detenida: el ledger no verifica', {
+        fecha_corte: fecha,
+        tenantId: tenant.id,
+      });
       resultados.push({ fecha, payloadGuardado, enviado: false, error: 'ledger_broken' });
       tracer.endSpan(tenantLog, { ledger_broken: true });
       continue;
@@ -183,7 +194,11 @@ export async function handleContabilidadDaily(
       await logEvent(ctx, 'alegra_sync', {
         payload: { fecha_corte: fecha, status: 'failed', error: mensaje },
       });
-      tenantLog.error('Falló el cron contable', { fecha_corte: fecha, tenantId: tenant.id, error: mensaje });
+      tenantLog.error('Falló el cron contable', {
+        fecha_corte: fecha,
+        tenantId: tenant.id,
+        error: mensaje,
+      });
       resultados.push({ fecha, payloadGuardado, enviado: false, error: mensaje, reconciliacion });
       tracer.endSpan(tenantLog, { error: true });
     }

@@ -1,4 +1,3 @@
-import type { Env } from '../types/env';
 import type { TenantContext } from '../tenancy/types';
 import type { Debt } from '../types/cobranza';
 import { newId, nowIso } from './db';
@@ -99,7 +98,9 @@ export async function markDebtStatus(
   debtId: string,
   status: Debt['status']
 ): Promise<void> {
-  await ctx.env.DB.prepare('UPDATE debts SET status = ?, updated_at = ? WHERE tenant_id = ? AND id = ?')
+  await ctx.env.DB.prepare(
+    'UPDATE debts SET status = ?, updated_at = ? WHERE tenant_id = ? AND id = ?'
+  )
     .bind(status, nowIso(), ctx.tenantId, debtId)
     .run();
 }

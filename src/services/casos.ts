@@ -1,6 +1,5 @@
 import type { CaseStatus, CollectionCase } from '../types/cobranza';
 import type { ScoreBand } from '../lib/score';
-import type { Env } from '../types/env';
 import type { TenantContext } from '../tenancy/types';
 import { newId, nowIso, parseJson } from './db';
 

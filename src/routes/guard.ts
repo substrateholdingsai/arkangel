@@ -12,22 +12,24 @@
  * que distingue a un `viewer` (lee) de un `operator` (despara).
  *
  * Por qué el 401 dice el motivo: el panel necesita distinguir tres situaciones
- * —sesión caducada (unauthorized), Organization sin tenant (org_sin_tenant)
- * y usuario sin rol en el tenant (sin_acceso)— porque el mensaje al usuario
- * es distinto. Para el servidor las tres son lo mismo: no hay identidad con la
- * que operar, así que la petición se rechaza y **no** se cae al token de
- * máquina (reinterpretar la llamada convertiría "no autorizado" en "autorizado
- * como otro actor"). Una sola verificación evita llamadas dobles a Clerk.
+ * —sesión caducada (unauthorized), usuario sin ningún despacho
+ * (sin_membresia) y despacho ajeno al usuario (tenant_forbidden)— porque el
+ * mensaje al usuario es distinto. Para el servidor son tres respuestas
+ * distintas: 401, 401 y 403. Una sesión válida sin acceso **no** cae al token
+ * de máquina (reinterpretar la llamada convertiría "no autorizado" en
+ * "autorizado como otro actor"). El middleware ya resolvió la sesión: la
+ * guardia la reutiliza, así que no hay dos consultas a D1 por petición.
  */
 
 import type { Context } from 'hono';
 import { exigeScope, resolverPrincipalDetallado, type OrigenPrincipal } from '../auth/guards';
+import type { AuthVars } from '../auth/middleware';
 import type { Principal } from '../auth/principal';
 import type { Scope } from '../auth/scopes';
 import type { Env } from '../types/env';
 
 /** Contexto de Hono con los bindings del Worker. */
-export type ContextoRuta = Context<{ Bindings: Env }>;
+export type ContextoRuta = Context<{ Bindings: Env; Variables: AuthVars }>;
 
 /**
  * Resultado de una guardia: o hay principal autorizado, o hay una respuesta
@@ -40,17 +42,18 @@ export type ResultadoGuardia =
 /**
  * Resuelve el principal de la petición y exige un scope concreto.
  *
- * 401 si no hay credencial válida (o si hay sesión de Clerk pero el usuario no
- * tiene acceso: no se cae al token). 403 si el principal no tiene el scope.
+ * 401 si no hay credencial válida (o si la sesión es válida pero el usuario
+ * no tiene ningún despacho). 403 si el usuario pidió un despacho del que no
+ * es miembro. 403 si el principal no tiene el scope.
  */
 export async function exigePrincipalConScope(
   c: ContextoRuta,
   scope: Scope
 ): Promise<ResultadoGuardia> {
-  const resuelto = await resolverPrincipalDetallado(c.env, c.req.raw);
+  const resuelto = await resolverPrincipalDetallado(c.env, c.req.raw, c.get('sesionNativa'));
   if (!resuelto.principal) {
     const motivo = resuelto.motivo ?? 'unauthorized';
-    return { ok: false, response: c.json({ error: motivo }, 401) };
+    return { ok: false, response: c.json({ error: motivo }, resuelto.status ?? 401) };
   }
 
   const denegado = exigeScope(resuelto.principal, scope);

@@ -8,7 +8,6 @@
 
 import { parseJson } from '../services/db';
 import type { Env } from '../types/env';
-import type { Role } from '../auth/scopes';
 import type {
   Tenant,
   TenantChannel,
@@ -20,12 +19,8 @@ import type {
 const SQL_TENANT_POR_ID = 'SELECT * FROM tenants WHERE id = ? LIMIT 1';
 const SQL_TENANT_POR_SLUG = 'SELECT * FROM tenants WHERE slug = ? LIMIT 1';
 const SQL_TENANT_POR_DEFECTO = 'SELECT * FROM tenants WHERE is_default = 1 LIMIT 1';
-const SQL_TENANT_POR_CLERK_ORG_ID = 'SELECT * FROM tenants WHERE clerk_org_id = ? LIMIT 1';
 const SQL_CANALES_DEL_TENANT =
   "SELECT * FROM tenant_channels WHERE tenant_id = ? AND status = 'active' ORDER BY created_at DESC";
-const SQL_USUARIOS_PLATAFORMA = 'SELECT 1 FROM platform_users WHERE user_id = ? LIMIT 1';
-const SQL_USUARIOS_TENANT =
-  'SELECT role FROM tenant_users WHERE user_id = ? AND tenant_id = ? LIMIT 1';
 
 interface TenantRow {
   id: string;
@@ -50,7 +45,6 @@ interface TenantRow {
   dry_run: number;
   cron_auto_fire: number;
   is_default: number;
-  clerk_org_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -89,7 +83,6 @@ function mapTenant(row: TenantRow): Tenant {
     dry_run: Number(row.dry_run),
     cron_auto_fire: Number(row.cron_auto_fire),
     is_default: Number(row.is_default),
-    clerk_org_id: row.clerk_org_id ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -176,72 +169,10 @@ export async function getTenantByProviderAccountId(
  * Lista todos los tenants activos (para el cron contable multi-tenant).
  */
 export async function listTenants(env: Env): Promise<Tenant[]> {
-  const result = await env.DB.prepare('SELECT * FROM tenants WHERE status = ? ORDER BY created_at ASC')
+  const result = await env.DB.prepare(
+    'SELECT * FROM tenants WHERE status = ? ORDER BY created_at ASC'
+  )
     .bind('active')
     .all<TenantRow>();
   return (result.results ?? []).map(mapTenant);
-}
-
-/**
- * ¿Es el usuario un administrador de plataforma?
- *
- * Los admins de plataforma tienen alcance transversal: pueden actuar sobre
- * cualquier tenant sin necesidad de ser miembro de su Organization. Su rol en
- * el Principal es `platform_admin` y su `tenantId` es null.
- *
- * Si la tabla `platform_users` todavía no existe (migración 0005 sin aplicar)
- * devolvemos `false`: nadie es admin de plataforma hasta que el esquema lo
- * permita. No es un error, es el estado pre-migración.
- */
-export async function getPlatformUser(env: Env, userId: string): Promise<boolean> {
-  try {
-    const row = await env.DB.prepare(SQL_USUARIOS_PLATAFORMA).bind(userId).first<unknown>();
-    return row != null;
-  } catch (error) {
-    if (esErrorDeTablaFaltante(error, ['platform_users'])) return false;
-    throw error;
-  }
-}
-
-/**
- * Resuelve el tenant por su Organization ID de Clerk.
- *
- * Es el puente entre la identidad de Clerk (orgId) y el catálogo de tenants
- * de Arkangel. Sin coincidencia no hay tenant para esa Organization: la
- * petición cae a `null` y el flujo de auth la trata como "sin rol".
- */
-export async function getTenantByClerkOrgId(env: Env, orgId: string): Promise<Tenant | null> {
-  try {
-    const row = await env.DB.prepare(SQL_TENANT_POR_CLERK_ORG_ID).bind(orgId).first<TenantRow>();
-    return row ? mapTenant(row) : null;
-  } catch (error) {
-    if (esErrorDeTablaFaltante(error, ['tenants'])) return null;
-    throw error;
-  }
-}
-
-/**
- * Rol del usuario dentro del tenant, concedido por D1.
- *
- * Estar en la Organization de Clerk NO basta: el rol lo concede esta tabla.
- * Si la fila no existe, el usuario no tiene rol en ese tenant → `null`.
- *
- * Si la tabla `tenant_users` todavía no existe (migración 0005 sin aplicar)
- * devolvemos `null`: un tenant sin tabla de roles no puede tener roles.
- */
-export async function getTenantUser(
-  env: Env,
-  userId: string,
-  tenantId: string
-): Promise<{ role: Role } | null> {
-  try {
-    const row = await env.DB.prepare(SQL_USUARIOS_TENANT)
-      .bind(userId, tenantId)
-      .first<{ role: string }>();
-    if (!row) return null;
-    return { role: row.role as Role };
-  } catch (error) {
-    if (esErrorDeTablaFaltante(error, ['tenant_users'])) return null;
-    throw error;
-  }
 }

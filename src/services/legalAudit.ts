@@ -1,4 +1,3 @@
-import type { Env } from '../types/env';
 import type { TenantContext } from '../tenancy/types';
 import type { Violacion } from '../legal/tipos';
 import { newId, nowIso } from './db';
@@ -75,7 +74,10 @@ export interface ResumenCumplimiento {
   porRegla: Record<string, number>;
 }
 
-export async function resumenCumplimiento(ctx: TenantContext, date: string): Promise<ResumenCumplimiento> {
+export async function resumenCumplimiento(
+  ctx: TenantContext,
+  date: string
+): Promise<ResumenCumplimiento> {
   const rows = await ctx.env.DB.prepare(
     'SELECT regla_id, accion, COUNT(*) AS total FROM legal_audit WHERE tenant_id = ? AND created_at LIKE ? GROUP BY regla_id, accion'
   )
@@ -101,7 +103,9 @@ export async function resumenCumplimiento(ctx: TenantContext, date: string): Pro
 }
 
 export async function listAudit(ctx: TenantContext, limit = 50): Promise<AuditoriaLegal[]> {
-  const result = await ctx.env.DB.prepare('SELECT * FROM legal_audit WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?')
+  const result = await ctx.env.DB.prepare(
+    'SELECT * FROM legal_audit WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?'
+  )
     .bind(ctx.tenantId, limit)
     .all<AuditoriaLegal>();
   return result.results ?? [];

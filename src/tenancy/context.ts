@@ -5,19 +5,19 @@
  * necesitan saber *de quién* es el trabajo. Al ir en la firma (y no por `env`),
  * el compilador obliga a propagarlo: es el sustituto de las RLS que D1 no tiene.
  *
- * Desde la integración con Clerk el tenant ya no se deduce de una cabecera
- * confiada: se deduce del **principal** (la sesión de Clerk y su Organization).
- * La cabecera `X-Tenant-Id` sólo acota y nunca amplía: si apunta a un tenant
- * distinto del del principal, la petición se rechaza con `tenant_mismatch`
- * (fail-closed).
+ * El tenant ya no se deduce de una cabecera confiada: se deduce del
+ * **principal** (la sesión nativa y sus membresías). La cabecera `X-Tenant-Id`
+ * sólo acota y nunca amplía: si apunta a un tenant distinto del del
+ * principal, la petición se rechaza con `tenant_mismatch` (fail-closed).
  */
 
 import { resolverPrincipal, type OrigenPrincipal } from '../auth/guards';
+import { getCookie, SESSION_COOKIE } from '../auth/native';
 import { platformPrincipal, type Principal } from '../auth/principal';
 import type { InboundMessage } from '../channels/types';
 import { logger } from '../lib/logger';
 import { extractToken } from '../routes/auth';
-import { logEvent } from '../services/eventos';
+import { logEventForTenant } from '../services/eventos';
 import type { Env } from '../types/env';
 import {
   configDesdeEntorno,
@@ -43,14 +43,13 @@ import type { Tenant, TenantContext } from './types';
  * CRM, el panel), que es quien sabe de qué cliente es el tráfico. Sin cabecera
  * se usa el tenant por defecto de la plataforma.
  *
- * **Desde la integración con Clerk la cabecera está acotada por el principal.**
- * El tenant se deduce de la identidad de Clerk y de su Organization; la
- * cabecera ya no amplía el alcance, sólo puede confirmar el tenant del
- * principal. Si apunta a otro tenant, la petición se rechaza con
- * `tenant_mismatch` (403): un `X-Tenant-Id` confiado desde el navegador es
- * suplantación. Para la plataforma (admin) y para los servicios la cabecera
- * sí decide el tenant, y en el caso de la plataforma queda auditado como
- * impersonación.
+ * **La cabecera está acotada por el principal.** El tenant se deduce de la
+ * identidad del usuario y de sus membresías; la cabecera ya no amplía el
+ * alcance, sólo puede confirmar el tenant del principal. Si apunta a otro
+ * tenant, la petición se rechaza con `tenant_mismatch` (403): un
+ * `X-Tenant-Id` confiado desde el navegador es suplantación. Para la
+ * plataforma (admin) y para los servicios la cabecera sí decide el tenant, y
+ * en el caso de la plataforma queda auditado como impersonación.
  */
 export { tenantRefDesdeRequest } from './referencia';
 
@@ -132,9 +131,6 @@ export function tenantDeEntorno(env: Env): Tenant {
     dry_run: config.dryRun ? 1 : 0,
     cron_auto_fire: config.cronAutoFire ? 1 : 0,
     is_default: 1,
-    // El tenant heredado de la plataforma todavía no tiene Organization de
-    // Clerk: su identidad sigue viniendo del entorno.
-    clerk_org_id: null,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -199,8 +195,8 @@ async function cargarCanales(env: Env, tenantId: string) {
  * existir y estar activo: no hay herencia silenciosa.
  *
  * El tenant final depende de **quién** es el principal:
- *   · Usuario de Clerk → el tenant de su Organization. La cabecera sólo puede
- *     confirmar ese tenant; si apunta a otro, `TenantMismatchError`.
+ *   · Usuario de sesión → el tenant de su membresía activa. La cabecera sólo
+ *     puede confirmar ese tenant; si apunta a otro, `TenantMismatchError`.
  *   · Plataforma (admin) → el de la cabecera si viene; si no, el por defecto.
  *   · Servicio (API key) → el de la cabecera si viene; si no, el por defecto.
  */
@@ -236,7 +232,7 @@ export async function resolveTenantContext(
  * Contexto del tenant que pide la llamada, deducido del principal.
  *
  * Si el llamador ya resolvió el principal, se usa el que pasa (`opts.principal`);
- * si no, se resuelve aquí con `resolverPrincipal` (sesión de Clerk primero,
+ * si no, se resuelve aquí con `resolverPrincipal` (sesión nativa primero,
  * tokens de máquina después).
  */
 export async function resolveTenantContextDeRequest(
@@ -270,8 +266,8 @@ async function tenantDelPrincipal(
   principal: Principal,
   ref: ReferenciaTenant
 ): Promise<Tenant> {
-  // Usuario de Clerk: su tenant es el de su Organization. La cabecera puede
-  // confirmar ese tenant, nunca sustituirlo.
+  // Usuario de sesión: su tenant es el de su membresía activa. La cabecera
+  // puede confirmar ese tenant, nunca sustituirlo.
   if (principal.kind === 'user') {
     if (!principal.tenantId) {
       throw new TenantMismatchError(null, ref.tenantId ?? ref.tenantSlug ?? null);
@@ -330,10 +326,11 @@ function acotarPrincipal(principal: Principal, tenant: Tenant): Principal {
 /**
  * Origen del principal cuando el llamador no lo dice.
  *
- * Si la petición trae un token de máquina, el principal viene del token; si
- * no, de la sesión de Clerk.
+ * Si la petición trae la cookie de sesión, el principal viene de la sesión;
+ * si trae un token de máquina, del token.
  */
 function origenInferido(request: Request): OrigenPrincipal {
+  if (getCookie(request, SESSION_COOKIE)) return 'session';
   return extractToken(request) ? 'token' : 'session';
 }
 
@@ -349,7 +346,7 @@ async function auditarImpersonacion(
   origen: OrigenPrincipal
 ): Promise<void> {
   try {
-    await logEvent(env, 'auth.impersonacion', {
+    await logEventForTenant(env, tenantId, 'auth.impersonacion', {
       payload: {
         actorId: principal.actorId,
         tenantSolicitado: tenantId,

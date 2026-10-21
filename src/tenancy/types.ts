@@ -52,9 +52,6 @@ export interface Tenant {
   cron_auto_fire: number;
   /** 1 = tenant por defecto de la plataforma (el que se usa sin resolver). */
   is_default: number;
-  /** Organization de Clerk a la que pertenece el tenant. `null` = tenant sin
-   *  organization (el heredado de la plataforma, que todavía no está en Clerk). */
-  clerk_org_id: string | null;
   created_at: string;
   updated_at: string;
 }

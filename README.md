@@ -102,91 +102,70 @@ Bucket de R2 (crear una vez):
 npx wrangler r2 bucket create arkangel-contabilidad
 ```
 
-### Variables de Clerk
+### Identidad (nativa, sin proveedor externo)
 
-| Var | Dónde va | Qué hace |
+La identidad del panel es **100% nativa**: la contraseña se verifica con PBKDF2
+dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
+No hay claves de API, ni cuenta que pagar, ni red de por medio.
+
+| Pieza | Dónde vive | Qué hace |
 |---|---|---|
-| `CLERK_SECRET_KEY` | secret (`wrangler secret put`) | Clave de backend de Clerk. Habilita la verificación de sesión en el Worker: sin ella, Clerk queda deshabilitado (`clerkActivo` = false) y sólo valen los tokens de máquina |
-| `CLERK_PUBLISHABLE_KEY` | `wrangler.jsonc` → `vars` | Clave pública de la instancia de Clerk; la usa el backend para validar la sesión |
-| `CLERK_JWT_KEY` | secret (`wrangler secret put`, opcional) | PEM público: la verificación del JWT es local, sin llamar a la API de Clerk |
-| `CLERK_AUTHORIZED_PARTIES` | `wrangler.jsonc` → `vars` | CSV de orígenes permitidos para el claim `azp` de la sesión |
-| `VITE_CLERK_PUBLISHABLE_KEY` | `frontend/.env.local` | Clave pública para la SPA. **Mismo valor** que `CLERK_PUBLISHABLE_KEY` |
+| `users` | D1 | Correo, hash de la contraseña, `platform_role` (`user` / `super_admin`) y `email_verified_at` |
+| `tenant_memberships` | D1 | Los despachos a los que pertenece el usuario y su rol (`owner` / `admin` / `member`) |
+| `auth_sessions` | D1 | Sesiones activas: `token_hash` (SHA-256), `expires_at`, `revoked_at` |
+| `auth_tokens` | D1 | Tokens de un solo uso para restablecer contraseña |
+| `auth_rate_limits` | D1 | Ventana de intentos por correo e IP (login y registro) |
+| Cookie `ark_session` | navegador | El token **en claro**, `HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000` (+ `Secure` en HTTPS) |
 
-```bash
-npx wrangler secret put CLERK_SECRET_KEY     # clave de backend de Clerk
-npx wrangler secret put CLERK_JWT_KEY        # opcional: verificación de sesión sin red
-```
+El panel **no** pide el `ADMIN_TOKEN`: entra con correo y contraseña. Ese token
+sigue existiendo como break-glass, igual que `INTAKE_TOKEN` (CRM) y
+`GROK_BOT_TOKEN` (agente).
 
-El panel ya **no** pide el `ADMIN_TOKEN`: entra con login de Clerk. Ese token sigue
-existiendo como break-glass, igual que `INTAKE_TOKEN` (CRM) y `GROK_BOT_TOKEN`
-(agente).
+## Puesta en marcha (identidad nativa)
 
-## Puesta en marcha (Clerk)
+El panel entra con **correo y contraseña**: no se pega ningún token. Los pasos, en orden:
 
-El panel entra con **login de Clerk**: no se pega ningún token. Los pasos, en orden:
-
-1. **Autenticar el CLI de Clerk.** El login del Dashboard no basta: hay que
-   autenticar el CLI.
-
-   ```bash
-   npx -y clerk@latest auth login
-   ```
-
-2. **Cargar las claves.** `CLERK_SECRET_KEY` y `CLERK_JWT_KEY` (opcional) van como
-   secrets; `CLERK_PUBLISHABLE_KEY` y `CLERK_AUTHORIZED_PARTIES` en `wrangler.jsonc`
-   → `vars`; `VITE_CLERK_PUBLISHABLE_KEY` en `frontend/.env.local`, con el **mismo
-   valor** que `CLERK_PUBLISHABLE_KEY`.
-
-   ```bash
-   npx wrangler secret put CLERK_SECRET_KEY
-   npx wrangler secret put CLERK_JWT_KEY        # opcional: verificación sin red
-   ```
-
-3. **Aplicar la migración** (añade `tenants.clerk_org_id`, `tenant_users` y
-   `platform_users`).
+1. **Aplicar las migraciones** (crean el esquema de autenticación y dan de baja
+   lo que dejó Clerk en D1).
 
    ```bash
    npx wrangler d1 migrations apply arkangel-cobranza-db --remote
    ```
 
-4. **Mapear la Organization al tenant.**
+2. **Dar de alta al primer usuario.** El script pide el correo, la contraseña y
+   el despacho, calcula el hash PBKDF2 e inserta el usuario (con el correo ya
+   verificado) y su membresía.
 
    ```bash
-   npx wrangler d1 execute arkangel-cobranza-db --remote --command \
-     "UPDATE tenants SET clerk_org_id = 'org_xxx' WHERE id = 't_xxx';"
+   npm run seed:owner:remote -- --email duenio@arkangel.mx --password "una-clave-larga" --tenant t_arkangel --role owner
    ```
 
-5. **Dar de alta al primer usuario.** El rol lo concede D1, no Clerk: `owner`,
-   `compliance`, `operator` o `viewer` en `tenant_users`; para un administrador
-   de plataforma (alcance transversal, sin tenant), `platform_users`.
+   Sin argumentos abre un prompt interactivo. El despacho tiene que existir en
+   el catálogo (`SELECT id, slug FROM tenants;`).
 
-   ```bash
-   npx wrangler d1 execute arkangel-cobranza-db --remote --command \
-     "INSERT INTO tenant_users (user_id, tenant_id, role) VALUES ('user_xxx','t_xxx','owner');"
+3. **Entrar.** Abre el panel, teclea el correo y la contraseña. La sesión
+   persiste al recargar y puedes cambiar de despacho desde el selector de la
+   barra superior sin cerrar sesión.
 
-   npx wrangler d1 execute arkangel-cobranza-db --remote --command \
-     "INSERT INTO platform_users (user_id) VALUES ('user_xxx');"
-   ```
-
-De dónde salen los ids:
-
-| Id | Dónde se obtiene |
-|---|---|
-| `org_xxx` | Dashboard de Clerk → **Organizations** → id de la Organization |
-| `user_xxx` | Dashboard de Clerk → **Users** → id del usuario |
-| `t_xxx` | `npx wrangler d1 execute arkangel-cobranza-db --remote --command "SELECT id, slug FROM tenants;"` |
-
-> **Estar en la Organization de Clerk no basta.** El rol lo concede la tabla
-> `tenant_users`: un usuario que está en la Organization pero sin fila ahí recibe
-> 401 (`sin_acceso`) y no puede operar.
+Roles: la membresía `owner` da todo el alcance del despacho (incluida la
+configuración legal); `admin` opera casos y dispara cobranza; `member` queda en
+sólo lectura. La traducción está en `ROLE_POR_MEMBRESIA`
+(`src/auth/native.ts`): es el único punto donde se decide qué puede hacer un
+humano.
 
 ## API
 
-Auth = sesión de Clerk (`Authorization: Bearer <JWT de sesión>`) o token de máquina.
-Cada ruta exige **su** scope: sin credencial → 401, con credencial pero sin scope → 403.
+Auth = sesión nativa (cookie `ark_session`) o token de máquina. Cada ruta exige
+**su** scope: sin credencial → 401, con credencial pero sin scope → 403.
 
 | Método | Ruta | Scope | Descripción |
 |---|---|---|---|
+| `POST` | `/api/auth/register` | público | Crea usuario + su primer despacho y abre sesión |
+| `POST` | `/api/auth/login` | público | Verifica la contraseña y emite la cookie de sesión |
+| `POST` | `/api/auth/logout` | sesión | Revoca la sesión y borra la cookie |
+| `GET` | `/api/auth/session` | público | Devuelve el usuario y sus despachos si la cookie es válida |
+| `POST` | `/api/auth/request-password-reset` | público | Envía el enlace de restablecimiento por correo |
+| `POST` | `/api/auth/reset-password` | público | Consume el enlace y fija la nueva contraseña |
 | `GET` | `/api/v1/health` | público | Liveness del worker |
 | `POST` | `/api/v1/ingest/csv` | `ingest:write` | Ingesta del CSV (multipart, `text/csv` o JSON `{csv}`) |
 | `GET` | `/api/v1/cases/today` | `cases:read` | Casos del día + vista previa (estado, canal, intención, próxima acción) |
@@ -202,8 +181,9 @@ Cada ruta exige **su** scope: sin credencial → 401, con credencial pero sin sc
 | `POST` | `/webhooks/telnyx` | firma Ed25519 | SMS entrantes y estados |
 | `POST` | `/webhooks/resend` | — | Email entrante |
 
-La cabecera `X-Tenant-Id` / `X-Tenant-Slug` acota el tenant: con sesión de Clerk sólo
-puede confirmar el tenant de tu Organization (si no, 403 `tenant_mismatch`).
+La cabecera `X-Tenant-Id` / `X-Tenant-Slug` **selecciona** el despacho en el que
+se opera, pero sólo entre los que el usuario es miembro: pedir uno ajeno es
+403 `tenant_forbidden`, no un cambio de alcance.
 
 
 ## Flujo del día
@@ -465,7 +445,7 @@ curl -H "x-admin-token: $ADMIN_TOKEN" \
 ```
 
 El `ADMIN_TOKEN` es el camino break-glass por línea de comandos: el panel ya no lo
-pide, entra con la sesión de Clerk.
+pide, entra con la sesión nativa (correo y contraseña).
 
 Devuelve el mismo JSON que el cron dejó en R2 (`idempotency_key`, `ventana`,
 `resumen`, `desglose_bloqueos`, `asientos`, `ledger_integrity`, `metadata`). Sin
