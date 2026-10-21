@@ -4,6 +4,7 @@ import { maskPhone } from '../lib/phone';
 import { configLegal } from '../legal/config';
 import { catalogoReglas } from '../legal/motor';
 import type { Env } from '../types/env';
+import type { TenantContext } from '../tenancy/types';
 import {
   etiquetaEstado,
   getCase,
@@ -42,7 +43,7 @@ api.get('/metrics/today', async (c) => {
   if (!resultado.ok) return resultado.response;
   const ctx = resultado.ctx;
   const date = c.req.query('date') ?? todayIso(ctx.config.tz);
-  const metrics = await dailyMetrics(c.env, date);
+  const metrics = await dailyMetrics(ctx, date);
   return c.json({ ok: true, date, metrics });
 });
 
@@ -53,12 +54,12 @@ api.get('/cases/today', async (c) => {
   if (!resultado.ok) return resultado.response;
   const ctx = resultado.ctx;
   const date = c.req.query('date') ?? todayIso(ctx.config.tz);
-  const cases = await listCasesByDate(c.env, date);
+  const cases = await listCasesByDate(ctx, date);
 
   const rows = await Promise.all(
     cases.slice(0, 200).map(async (item) => {
       const state = readChannelState(item.channel_state);
-      const intencion = await ultimaIntencion(c.env, item.id);
+      const intencion = await ultimaIntencion(ctx, item.id);
       return {
         id: item.id,
         nombre: item.name,
@@ -93,7 +94,7 @@ api.post('/disparar', async (c) => {
   if (!resultado.ok) return resultado.response;
   const ctx = resultado.ctx;
   const date = c.req.query('date') ?? todayIso(ctx.config.tz);
-  const result = await dispararHoy(c.env, date, ctx.tenantId);
+  const result = await dispararHoy(ctx, date);
   return c.json({ ok: true, date, ...result });
 });
 
@@ -113,7 +114,7 @@ api.get('/cases/:id', async (c) => {
   const denegado = exigeTenant(guardia.principal, resultado.ctx.tenantId);
   if (denegado) return denegado;
 
-  const item = await getCase(c.env, c.req.param('id'));
+  const item = await getCase(ctx, c.req.param('id'));
   if (!item) return c.json({ error: 'not_found' }, 404);
   return c.json({ ok: true, case: item });
 });
@@ -126,9 +127,9 @@ api.get('/clients/:id', async (c) => {
   const denegado = exigeTenant(guardia.principal, resultado.ctx.tenantId);
   if (denegado) return denegado;
 
-  const client = await getClient(c.env, c.req.param('id'));
+  const client = await getClient(ctx, c.req.param('id'));
   if (!client) return c.json({ error: 'not_found' }, 404);
-  const debts = await listPendingDebts(c.env, client.id);
+  const debts = await listPendingDebts(ctx, client.id);
   return c.json({ ok: true, client, debts });
 });
 
@@ -141,7 +142,7 @@ api.get('/clients/:id/conversation', async (c) => {
   if (denegado) return denegado;
 
   const limit = Number(c.req.query('limit') ?? 50);
-  const messages = await listConversation(c.env, c.req.param('id'), limit);
+  const messages = await listConversation(ctx, c.req.param('id'), limit);
   return c.json({ ok: true, messages });
 });
 
@@ -160,8 +161,8 @@ api.get('/legal/hoy', async (c) => {
   const ctx = resultado.ctx;
   const date = c.req.query('date') ?? todayIso(ctx.config.tz);
   const legal = configLegal(ctx);
-  const resumen = await resumenCumplimiento(c.env, date);
-  const auditoria = await listAudit(c.env, 20);
+  const resumen = await resumenCumplimiento(ctx, date);
+  const auditoria = await listAudit(ctx, 20);
 
   return c.json({
     ok: true,

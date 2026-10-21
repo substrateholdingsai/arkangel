@@ -1,9 +1,11 @@
 import type { Env } from '../types/env';
+import type { TenantContext } from '../tenancy/types';
 import type { Debt } from '../types/cobranza';
 import { newId, nowIso } from './db';
 
 interface DebtRow {
   id: string;
+  tenant_id: string;
   client_id: string;
   amount_cents: number;
   currency: string;
@@ -31,6 +33,7 @@ function toDebt(row: DebtRow): Debt {
 }
 
 export interface DebtInput {
+  tenantId: string;
   clientId: string;
   amountCents: number;
   dueDate: string;
@@ -38,16 +41,17 @@ export interface DebtInput {
   source?: string | null;
 }
 
-export async function createDebt(env: Env, input: DebtInput): Promise<Debt> {
+export async function createDebt(ctx: TenantContext, input: DebtInput): Promise<Debt> {
   const id = newId('dbt');
   const timestamp = nowIso();
 
-  await env.DB.prepare(
-    `INSERT INTO debts (id, client_id, amount_cents, currency, due_date, status, description, source, created_at, updated_at)
-     VALUES (?, ?, ?, 'MXN', ?, 'pending', ?, ?, ?, ?)`
+  await ctx.env.DB.prepare(
+    `INSERT INTO debts (id, tenant_id, client_id, amount_cents, currency, due_date, status, description, source, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'MXN', ?, 'pending', ?, ?, ?, ?)`
   )
     .bind(
       id,
+      ctx.tenantId,
       input.clientId,
       input.amountCents,
       input.dueDate,
@@ -72,30 +76,30 @@ export async function createDebt(env: Env, input: DebtInput): Promise<Debt> {
   };
 }
 
-export async function listPendingDebts(env: Env, clientId: string): Promise<Debt[]> {
-  const result = await env.DB.prepare(
-    `SELECT * FROM debts WHERE client_id = ? AND status IN ('pending', 'promised') ORDER BY due_date ASC`
+export async function listPendingDebts(ctx: TenantContext, clientId: string): Promise<Debt[]> {
+  const result = await ctx.env.DB.prepare(
+    `SELECT * FROM debts WHERE tenant_id = ? AND client_id = ? AND status IN ('pending', 'promised') ORDER BY due_date ASC`
   )
-    .bind(clientId)
+    .bind(ctx.tenantId, clientId)
     .all<DebtRow>();
   return (result.results ?? []).map(toDebt);
 }
 
-export async function sumPendingCents(env: Env, clientId: string): Promise<number> {
-  const row = await env.DB.prepare(
-    `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM debts WHERE client_id = ? AND status IN ('pending', 'promised')`
+export async function sumPendingCents(ctx: TenantContext, clientId: string): Promise<number> {
+  const row = await ctx.env.DB.prepare(
+    `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM debts WHERE tenant_id = ? AND client_id = ? AND status IN ('pending', 'promised')`
   )
-    .bind(clientId)
+    .bind(ctx.tenantId, clientId)
     .first<{ total: number }>();
   return Number(row?.total ?? 0);
 }
 
 export async function markDebtStatus(
-  env: Env,
+  ctx: TenantContext,
   debtId: string,
   status: Debt['status']
 ): Promise<void> {
-  await env.DB.prepare('UPDATE debts SET status = ?, updated_at = ? WHERE id = ?')
-    .bind(status, nowIso(), debtId)
+  await ctx.env.DB.prepare('UPDATE debts SET status = ?, updated_at = ? WHERE tenant_id = ? AND id = ?')
+    .bind(status, nowIso(), ctx.tenantId, debtId)
     .run();
 }

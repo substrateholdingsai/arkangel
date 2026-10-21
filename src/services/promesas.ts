@@ -1,7 +1,9 @@
 import type { Env } from '../types/env';
+import type { TenantContext } from '../tenancy/types';
 import { newId, nowIso } from './db';
 
 export interface PromiseInput {
+  tenantId: string;
   caseId: string;
   clientId: string;
   amountCents: number;
@@ -10,13 +12,14 @@ export interface PromiseInput {
   source?: string;
 }
 
-export async function recordPromise(env: Env, input: PromiseInput): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO promises (id, case_id, client_id, amount_cents, promised_date, confidence, status, source, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)`
+export async function recordPromise(ctx: TenantContext, input: PromiseInput): Promise<void> {
+  await ctx.env.DB.prepare(
+    `INSERT INTO promises (id, tenant_id, case_id, client_id, amount_cents, promised_date, confidence, status, source, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`
   )
     .bind(
       newId('prm'),
+      ctx.tenantId,
       input.caseId,
       input.clientId,
       input.amountCents,
@@ -28,23 +31,23 @@ export async function recordPromise(env: Env, input: PromiseInput): Promise<void
     .run();
 }
 
-export async function hasOpenPromise(env: Env, clientId: string): Promise<boolean> {
-  const row = await env.DB.prepare(
-    `SELECT COUNT(*) AS total FROM promises WHERE client_id = ? AND status = 'open'`
+export async function hasOpenPromise(ctx: TenantContext, clientId: string): Promise<boolean> {
+  const row = await ctx.env.DB.prepare(
+    `SELECT COUNT(*) AS total FROM promises WHERE tenant_id = ? AND client_id = ? AND status = 'open'`
   )
-    .bind(clientId)
+    .bind(ctx.tenantId, clientId)
     .first<{ total: number }>();
   return Number(row?.total ?? 0) > 0;
 }
 
 export async function countPromisesByDay(
-  env: Env,
+  ctx: TenantContext,
   date: string
 ): Promise<{ count: number; montoCents: number }> {
-  const row = await env.DB.prepare(
-    `SELECT COUNT(*) AS total, COALESCE(SUM(amount_cents), 0) AS monto FROM promises WHERE created_at LIKE ?`
+  const row = await ctx.env.DB.prepare(
+    `SELECT COUNT(*) AS total, COALESCE(SUM(amount_cents), 0) AS monto FROM promises WHERE tenant_id = ? AND created_at LIKE ?`
   )
-    .bind(`${date}%`)
+    .bind(ctx.tenantId, `${date}%`)
     .first<{ total: number; monto: number }>();
   return { count: Number(row?.total ?? 0), montoCents: Number(row?.monto ?? 0) };
 }

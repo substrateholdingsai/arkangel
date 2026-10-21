@@ -1,10 +1,12 @@
 import type { CaseStatus, CollectionCase } from '../types/cobranza';
 import type { ScoreBand } from '../lib/score';
 import type { Env } from '../types/env';
+import type { TenantContext } from '../tenancy/types';
 import { newId, nowIso, parseJson } from './db';
 
 interface CaseRow {
   id: string;
+  tenant_id: string;
   case_date: string;
   client_id: string;
   debt_id: string | null;
@@ -42,6 +44,7 @@ function toCase(row: CaseRow): CollectionCase {
 }
 
 export interface CaseInput {
+  tenantId: string;
   caseDate: string;
   clientId: string;
   debtId: string | null;
@@ -55,14 +58,14 @@ export interface CaseInput {
 }
 
 /** Crea el caso del día. Si ya existe para el cliente, actualiza montos y score. */
-export async function upsertCase(env: Env, input: CaseInput): Promise<CollectionCase> {
+export async function upsertCase(ctx: TenantContext, input: CaseInput): Promise<CollectionCase> {
   const id = newId('cas');
   const timestamp = nowIso();
 
-  await env.DB.prepare(
-    `INSERT INTO cases (id, case_date, client_id, debt_id, name, phone, email, amount_cents, status, score, score_band, channel_state, source, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, '{}', ?, ?, ?)
-     ON CONFLICT(client_id, case_date) DO UPDATE SET
+  await ctx.env.DB.prepare(
+    `INSERT INTO cases (id, tenant_id, case_date, client_id, debt_id, name, phone, email, amount_cents, status, score, score_band, channel_state, source, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, '{}', ?, ?, ?)
+     ON CONFLICT(tenant_id, client_id, case_date) DO UPDATE SET
        amount_cents = excluded.amount_cents,
        name = excluded.name,
        phone = excluded.phone,
@@ -74,6 +77,7 @@ export async function upsertCase(env: Env, input: CaseInput): Promise<Collection
   )
     .bind(
       id,
+      ctx.tenantId,
       input.caseDate,
       input.clientId,
       input.debtId,
@@ -89,36 +93,36 @@ export async function upsertCase(env: Env, input: CaseInput): Promise<Collection
     )
     .run();
 
-  const row = await env.DB.prepare(
-    'SELECT * FROM cases WHERE client_id = ? AND case_date = ? LIMIT 1'
+  const row = await ctx.env.DB.prepare(
+    'SELECT * FROM cases WHERE tenant_id = ? AND client_id = ? AND case_date = ? LIMIT 1'
   )
-    .bind(input.clientId, input.caseDate)
+    .bind(ctx.tenantId, input.clientId, input.caseDate)
     .first<CaseRow>();
 
   return toCase(row!);
 }
 
-export async function getCase(env: Env, id: string): Promise<CollectionCase | null> {
-  const row = await env.DB.prepare('SELECT * FROM cases WHERE id = ? LIMIT 1')
-    .bind(id)
+export async function getCase(ctx: TenantContext, id: string): Promise<CollectionCase | null> {
+  const row = await ctx.env.DB.prepare('SELECT * FROM cases WHERE tenant_id = ? AND id = ? LIMIT 1')
+    .bind(ctx.tenantId, id)
     .first<CaseRow>();
   return row ? toCase(row) : null;
 }
 
-export async function listCasesByDate(env: Env, date: string): Promise<CollectionCase[]> {
-  const result = await env.DB.prepare(
-    'SELECT * FROM cases WHERE case_date = ? ORDER BY amount_cents DESC'
+export async function listCasesByDate(ctx: TenantContext, date: string): Promise<CollectionCase[]> {
+  const result = await ctx.env.DB.prepare(
+    'SELECT * FROM cases WHERE tenant_id = ? AND case_date = ? ORDER BY amount_cents DESC'
   )
-    .bind(date)
+    .bind(ctx.tenantId, date)
     .all<CaseRow>();
   return (result.results ?? []).map(toCase);
 }
 
-export async function listReadyCases(env: Env, date: string): Promise<CollectionCase[]> {
-  const result = await env.DB.prepare(
-    `SELECT * FROM cases WHERE case_date = ? AND status IN ('ready', 'sending') ORDER BY amount_cents DESC`
+export async function listReadyCases(ctx: TenantContext, date: string): Promise<CollectionCase[]> {
+  const result = await ctx.env.DB.prepare(
+    `SELECT * FROM cases WHERE tenant_id = ? AND case_date = ? AND status IN ('ready', 'sending') ORDER BY amount_cents DESC`
   )
-    .bind(date)
+    .bind(ctx.tenantId, date)
     .all<CaseRow>();
   return (result.results ?? []).map(toCase);
 }
@@ -131,7 +135,7 @@ export interface CasePatch {
   channelState?: Record<string, unknown>;
 }
 
-export async function updateCase(env: Env, id: string, patch: CasePatch): Promise<void> {
+export async function updateCase(ctx: TenantContext, id: string, patch: CasePatch): Promise<void> {
   const sets: string[] = [];
   const binds: unknown[] = [];
 
@@ -160,9 +164,10 @@ export async function updateCase(env: Env, id: string, patch: CasePatch): Promis
 
   sets.push('updated_at = ?');
   binds.push(nowIso());
+  binds.push(ctx.tenantId);
   binds.push(id);
 
-  await env.DB.prepare(`UPDATE cases SET ${sets.join(', ')} WHERE id = ?`)
+  await ctx.env.DB.prepare(`UPDATE cases SET ${sets.join(', ')} WHERE tenant_id = ? AND id = ?`)
     .bind(...binds)
     .run();
 }

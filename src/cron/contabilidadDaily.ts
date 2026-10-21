@@ -9,8 +9,10 @@
  */
 
 import type { Env } from '../types/env';
+import type { TenantContext } from '../tenancy/types';
 import { logger } from '../lib/logger';
 import { logEvent } from '../services/eventos';
+import { listTenants } from '../tenancy/repository';
 import {
   construirPayload,
   diaPrevioIso,
@@ -41,98 +43,138 @@ export interface ResultadoContabilidad {
 export async function handleContabilidadDaily(
   env: Env,
   fechaCorte?: string
-): Promise<ResultadoContabilidad> {
+): Promise<ResultadoContabilidad[]> {
   const timeZone = env.TZ ?? 'America/Mexico_City';
   const fecha = fechaCorte ?? diaPrevioIso(timeZone);
 
   logger.info('Cron contable ejecutado', { fecha_corte: fecha });
 
-  // ── Fase 0: reconciliación de cortes que quedaron a medio camino ──
-  let reconciliacion: ResultadoReconciliacion | undefined;
-  try {
-    reconciliacion = await reconciliarCortesPendientes(env);
-  } catch (error) {
-    const mensaje = error instanceof Error ? error.message : String(error);
-    await logEvent(env, 'alegra_sync', {
-      payload: { fecha_corte: fecha, status: 'reconciliacion_fallida', error: mensaje },
-    });
-    logger.error('Falló la reconciliación previa', { fecha_corte: fecha, error: mensaje });
-  }
+  // Obtener todos los tenants activos
+  const tenants = await listTenants(env);
+  const resultados: ResultadoContabilidad[] = [];
 
-  let construccion: ResultadoBuild;
-  try {
-    construccion = await construirPayload(fecha, env);
-  } catch (error) {
-    const mensaje = error instanceof Error ? error.message : String(error);
-    await logEvent(env, 'alegra_sync', {
-      payload: { fecha_corte: fecha, status: 'failed', error: mensaje },
-    });
-    logger.error('No se pudo construir el payload contable', {
-      fecha_corte: fecha,
-      error: mensaje,
-    });
-    return { fecha, payloadGuardado: false, enviado: false, error: mensaje };
-  }
+  for (const tenant of tenants) {
+    if (tenant.status !== 'active') continue;
 
-  const { payload } = construccion;
-
-  // ── R2: el JSON normalizado siempre queda para auditoría ──
-  let payloadGuardado = false;
-  try {
-    await guardarPayloadEnR2(env, fecha, payload);
-    payloadGuardado = true;
-  } catch (error) {
-    const mensaje = error instanceof Error ? error.message : String(error);
-    await logEvent(env, 'alegra_sync', {
-      payload: {
-        fecha_corte: fecha,
-        status: 'failed',
-        error: `no se pudo guardar en R2: ${mensaje}`,
-      },
-    });
-    logger.error('Falló el guardado del payload en R2', { fecha_corte: fecha, error: mensaje });
-  }
-
-  // ── Ledger roto: no se envía, se alerta ──
-  if (!payload.ledger_integrity.verificado) {
-    await logEvent(env, 'alegra_sync', {
-      payload: {
-        fecha_corte: fecha,
-        idempotency_key: payload.idempotency_key,
-        status: 'skipped',
-        motivo: 'ledger_broken',
-        aviso: 'el ledger no verifica: los asientos NO se enviaron a Alegra',
-      },
-    });
-    logger.error('Contabilidad detenida: el ledger no verifica', { fecha_corte: fecha });
-    return { fecha, payloadGuardado, enviado: false, error: 'ledger_broken' };
-  }
-
-  // ── Checkpoint del día (baseline del ledger para las próximas corridas) ──
-  try {
-    await guardarCheckpoint(
+    const ctx = {
       env,
-      fecha,
-      construccion.checkpoint.hash,
-      construccion.checkpoint.total
-    );
-  } catch (error) {
-    logger.warn('No se pudo guardar el checkpoint del ledger', {
-      fecha_corte: fecha,
-      error: error instanceof Error ? error.message : String(error),
-    });
+      tenantId: tenant.id,
+      tenant,
+      config: {
+        tz: tenant.tz,
+        horaInicio: tenant.send_window_start,
+        horaFin: tenant.send_window_end,
+        maxContactos24h: tenant.max_contacts_per_day,
+        montoToleranciaCents: tenant.legal_monto_tolerancia_cents,
+        horarioEnRespuestas: tenant.legal_horario_en_respuestas === 1,
+        dominiosPermitidos: tenant.allowed_payment_domains.split(',').filter(Boolean),
+        condusef: tenant.condusef_registro,
+        nombreLegal: tenant.razon_social,
+        rateLimitRpm: tenant.rate_limit_rpm,
+        dedupeWindowHours: tenant.dedupe_window_hours,
+        scoreAmountCeilingCents: tenant.score_amount_ceiling_cents,
+        agentMode: tenant.agent_mode,
+        agentAutoThresholdCents: tenant.agent_auto_threshold_cents,
+        dryRun: tenant.dry_run === 1,
+        cronAutoFire: tenant.cron_auto_fire === 1,
+      },
+      channels: [],
+      principal: { kind: 'platform' as const, actorId: 'cron', tenantId: null, role: 'platform_admin', scopes: [] },
+    } as TenantContext;
+
+    // ── Fase 0: reconciliación de cortes que quedaron a medio camino ──
+    let reconciliacion: ResultadoReconciliacion | undefined;
+    try {
+      reconciliacion = await reconciliarCortesPendientes(ctx);
+    } catch (error) {
+      const mensaje = error instanceof Error ? error.message : String(error);
+      await logEvent(ctx, 'alegra_sync', {
+        payload: { fecha_corte: fecha, status: 'reconciliacion_fallida', error: mensaje },
+      });
+      logger.error('Falló la reconciliación previa', { fecha_corte: fecha, tenantId: tenant.id, error: mensaje });
+    }
+
+    let construccion: ResultadoBuild;
+    try {
+      construccion = await construirPayload(ctx, fecha);
+    } catch (error) {
+      const mensaje = error instanceof Error ? error.message : String(error);
+      await logEvent(ctx, 'alegra_sync', {
+        payload: { fecha_corte: fecha, status: 'failed', error: mensaje },
+      });
+      logger.error('No se pudo construir el payload contable', {
+        fecha_corte: fecha,
+        tenantId: tenant.id,
+        error: mensaje,
+      });
+      resultados.push({ fecha, payloadGuardado: false, enviado: false, error: mensaje });
+      continue;
+    }
+
+    const { payload } = construccion;
+
+    // ── R2: el JSON normalizado siempre queda para auditoría ──
+    let payloadGuardado = false;
+    try {
+      await guardarPayloadEnR2(ctx, fecha, payload);
+      payloadGuardado = true;
+    } catch (error) {
+      const mensaje = error instanceof Error ? error.message : String(error);
+      await logEvent(ctx, 'alegra_sync', {
+        payload: {
+          fecha_corte: fecha,
+          status: 'failed',
+          error: `no se pudo guardar en R2: ${mensaje}`,
+        },
+      });
+      logger.error('Falló el guardado del payload en R2', { fecha_corte: fecha, tenantId: tenant.id, error: mensaje });
+    }
+
+    // ── Ledger roto: no se envía, se alerta ──
+    if (!payload.ledger_integrity.verificado) {
+      await logEvent(ctx, 'alegra_sync', {
+        payload: {
+          fecha_corte: fecha,
+          idempotency_key: payload.idempotency_key,
+          status: 'skipped',
+          motivo: 'ledger_broken',
+          aviso: 'el ledger no verifica: los asientos NO se enviaron a Alegra',
+        },
+      });
+      logger.error('Contabilidad detenida: el ledger no verifica', { fecha_corte: fecha, tenantId: tenant.id });
+      resultados.push({ fecha, payloadGuardado, enviado: false, error: 'ledger_broken' });
+      continue;
+    }
+
+    // ── Checkpoint del día (baseline del ledger para las próximas corridas) ──
+    try {
+      await guardarCheckpoint(
+        ctx,
+        fecha,
+        construccion.checkpoint.hash,
+        construccion.checkpoint.total
+      );
+    } catch (error) {
+      logger.warn('No se pudo guardar el checkpoint del ledger', {
+        fecha_corte: fecha,
+        tenantId: tenant.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // ── Envío a Alegra ──
+    try {
+      const resultado = await sendToAlegra(payload, ctx);
+      resultados.push({ fecha, payloadGuardado, enviado: resultado.ok, resultado, reconciliacion });
+    } catch (error) {
+      const mensaje = error instanceof Error ? error.message : String(error);
+      await logEvent(ctx, 'alegra_sync', {
+        payload: { fecha_corte: fecha, status: 'failed', error: mensaje },
+      });
+      logger.error('Falló el cron contable', { fecha_corte: fecha, tenantId: tenant.id, error: mensaje });
+      resultados.push({ fecha, payloadGuardado, enviado: false, error: mensaje, reconciliacion });
+    }
   }
 
-  // ── Envío a Alegra ──
-  try {
-    const resultado = await sendToAlegra(payload, env);
-    return { fecha, payloadGuardado, enviado: resultado.ok, resultado, reconciliacion };
-  } catch (error) {
-    const mensaje = error instanceof Error ? error.message : String(error);
-    await logEvent(env, 'alegra_sync', {
-      payload: { fecha_corte: fecha, status: 'failed', error: mensaje },
-    });
-    logger.error('Falló el cron contable', { fecha_corte: fecha, error: mensaje });
-    return { fecha, payloadGuardado, enviado: false, error: mensaje, reconciliacion };
-  }
+  return resultados;
 }

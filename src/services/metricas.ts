@@ -1,45 +1,46 @@
 import type { DailyMetrics } from '../types/cobranza';
 import type { Env } from '../types/env';
+import type { TenantContext } from '../tenancy/types';
 import { countPromisesByDay } from './promesas';
 
-export async function dailyMetrics(env: Env, date: string): Promise<DailyMetrics> {
-  const totalRow = await env.DB.prepare('SELECT COUNT(*) AS total FROM cases WHERE case_date = ?')
-    .bind(date)
+export async function dailyMetrics(ctx: TenantContext, date: string): Promise<DailyMetrics> {
+  const totalRow = await ctx.env.DB.prepare('SELECT COUNT(*) AS total FROM cases WHERE tenant_id = ? AND case_date = ?')
+    .bind(ctx.tenantId, date)
     .first<{ total: number }>();
 
-  const outboundRow = await env.DB.prepare(
-    `SELECT COUNT(*) AS total FROM messages WHERE direction = 'outbound' AND created_at LIKE ?`
+  const outboundRow = await ctx.env.DB.prepare(
+    `SELECT COUNT(*) AS total FROM messages WHERE tenant_id = ? AND direction = 'outbound' AND created_at LIKE ?`
   )
-    .bind(`${date}%`)
+    .bind(ctx.tenantId, `${date}%`)
     .first<{ total: number }>();
 
-  const inboundRow = await env.DB.prepare(
-    `SELECT COUNT(*) AS total FROM messages WHERE direction = 'inbound' AND created_at LIKE ?`
+  const inboundRow = await ctx.env.DB.prepare(
+    `SELECT COUNT(*) AS total FROM messages WHERE tenant_id = ? AND direction = 'inbound' AND created_at LIKE ?`
   )
-    .bind(`${date}%`)
+    .bind(ctx.tenantId, `${date}%`)
     .first<{ total: number }>();
 
-  const collectedRow = await env.DB.prepare(
-    `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM promises WHERE status = 'kept' AND created_at LIKE ?`
+  const collectedRow = await ctx.env.DB.prepare(
+    `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM promises WHERE tenant_id = ? AND status = 'kept' AND created_at LIKE ?`
   )
-    .bind(`${date}%`)
+    .bind(ctx.tenantId, `${date}%`)
     .first<{ total: number }>();
 
-  const promises = await countPromisesByDay(env, date);
+  const promises = await countPromisesByDay(ctx, date);
 
-  const estados = await env.DB.prepare(
-    'SELECT status, COUNT(*) AS total FROM cases WHERE case_date = ? GROUP BY status'
+  const estados = await ctx.env.DB.prepare(
+    'SELECT status, COUNT(*) AS total FROM cases WHERE tenant_id = ? AND case_date = ? GROUP BY status'
   )
-    .bind(date)
+    .bind(ctx.tenantId, date)
     .all<{ status: string; total: number }>();
 
   const por_estado: Record<string, number> = {};
   for (const row of estados.results ?? []) por_estado[row.status] = Number(row.total);
 
-  const intake = await env.DB.prepare(
-    'SELECT created_at, file_name FROM intakes WHERE source = ? ORDER BY created_at DESC LIMIT 1'
+  const intake = await ctx.env.DB.prepare(
+    'SELECT created_at, file_name FROM intakes WHERE tenant_id = ? AND source = ? ORDER BY created_at DESC LIMIT 1'
   )
-    .bind('csv')
+    .bind(ctx.tenantId, 'csv')
     .first<{ created_at: string; file_name: string | null }>();
 
   return {

@@ -4,6 +4,7 @@ import { normalizePhone } from '../lib/phone';
 import { formatMXNShort } from '../lib/money';
 import type { CsvRow } from '../lib/csv';
 import type { Env } from '../types/env';
+import type { TenantContext } from '../tenancy/types';
 import { upsertCase } from './casos';
 import { findOrCreateClient } from './clientes';
 import { createDebt, listPendingDebts } from './deudas';
@@ -39,12 +40,12 @@ export interface IntakeOptions {
  * Idempotente por (cliente, fecha): reprocesar el mismo archivo no duplica casos.
  */
 export async function ingestRows(
-  env: Env,
+  ctx: TenantContext,
   rows: CsvRow[],
   options: IntakeOptions = {}
 ): Promise<IntakeResult> {
   const source = options.source ?? 'csv';
-  const caseDate = options.caseDate ?? todayIso(options.tz ?? env.TZ);
+  const caseDate = options.caseDate ?? todayIso(options.tz ?? ctx.config.tz);
   const intakeId = newId('int');
 
   const seen = new Map<string, CsvRow>();
@@ -64,7 +65,7 @@ export async function ingestRows(
 
   for (const [phone, row] of seen) {
     try {
-      const client = await findOrCreateClient(env, {
+      const client = await findOrCreateClient(ctx, {
         name: row.nombre,
         phone,
         email: row.email,
@@ -74,13 +75,14 @@ export async function ingestRows(
       const dueDate = row.vencimiento ?? caseDate;
       const amountCents = row.montoCents;
 
-      const pending = await listPendingDebts(env, client.id);
+      const pending = await listPendingDebts(ctx, client.id);
       const sameDebt = pending.find(
         (debt) => debt.amount_cents === amountCents && debt.due_date === dueDate
       );
 
       if (!sameDebt) {
-        await createDebt(env, {
+        await createDebt(ctx, {
+          tenantId: ctx.tenantId,
           clientId: client.id,
           amountCents,
           dueDate,
@@ -97,10 +99,11 @@ export async function ingestRows(
         amountCents: totalCents,
         dueDate,
         now: new Date(),
-        ceilingCents: options.scoreCeilingCents ?? Number(env.SCORE_AMOUNT_CEILING_CENTS ?? 200000),
+        ceilingCents: options.scoreCeilingCents ?? ctx.config.scoreAmountCeilingCents,
       });
 
-      await upsertCase(env, {
+      await upsertCase(ctx, {
+        tenantId: ctx.tenantId,
         caseDate,
         clientId: client.id,
         debtId: sameDebt?.id ?? null,
@@ -131,13 +134,13 @@ export async function ingestRows(
     }
   }
 
-  await env.DB.prepare(
-    'INSERT INTO intakes (id, source, file_name, rows_total, rows_accepted, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+  await ctx.env.DB.prepare(
+    'INSERT INTO intakes (id, tenant_id, source, file_name, rows_total, rows_accepted, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
   )
-    .bind(intakeId, source, options.fileName ?? null, rows.length, accepted, nowIso())
+    .bind(intakeId, ctx.tenantId, source, options.fileName ?? null, rows.length, accepted, nowIso())
     .run();
 
-  await logEvent(env, 'intake.csv', {
+  await logEvent(ctx, 'intake.csv', {
     payload: { intakeId, total: rows.length, accepted, skipped, fileName: options.fileName },
   });
 

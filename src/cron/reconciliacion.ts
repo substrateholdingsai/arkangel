@@ -23,8 +23,10 @@
  */
 
 import type { Env } from '../types/env';
+import type { TenantContext } from '../tenancy/types';
 import { logger } from '../lib/logger';
 import { logEvent } from '../services/eventos';
+import { listTenants } from '../tenancy/repository';
 import { crearClienteAlegra, type AlegraApi } from '../contabilidad/alegraClient';
 import {
   actualizarSync,
@@ -58,143 +60,179 @@ export interface OpcionesReconciliacion {
 export async function reconciliarCortesPendientes(
   env: Env,
   opciones: OpcionesReconciliacion = {}
-): Promise<ResultadoReconciliacion> {
-  const resultado: ResultadoReconciliacion = {
-    revisados: 0,
-    reconciliados: 0,
-    reenviados: 0,
-    sinConfirmar: 0,
-  };
+): Promise<ResultadoReconciliacion[]> {
+  const tenants = await listTenants(env);
+  const resultados: ResultadoReconciliacion[] = [];
 
-  const pendientes = await listarSyncPendientes(env);
-  const limite = opciones.limite ?? 20;
-  const cliente = opciones.cliente ?? crearClienteAlegra(env);
+  for (const tenant of tenants) {
+    if (tenant.status !== 'active') continue;
 
-  for (const corte of pendientes.slice(0, limite)) {
-    resultado.revisados += 1;
+    const ctx = {
+      env,
+      tenantId: tenant.id,
+      tenant,
+      config: {
+        tz: tenant.tz,
+        horaInicio: tenant.send_window_start,
+        horaFin: tenant.send_window_end,
+        maxContactos24h: tenant.max_contacts_per_day,
+        montoToleranciaCents: tenant.legal_monto_tolerancia_cents,
+        horarioEnRespuestas: tenant.legal_horario_en_respuestas === 1,
+        dominiosPermitidos: tenant.allowed_payment_domains.split(',').filter(Boolean),
+        condusef: tenant.condusef_registro,
+        nombreLegal: tenant.razon_social,
+        rateLimitRpm: tenant.rate_limit_rpm,
+        dedupeWindowHours: tenant.dedupe_window_hours,
+        scoreAmountCeilingCents: tenant.score_amount_ceiling_cents,
+        agentMode: tenant.agent_mode,
+        agentAutoThresholdCents: tenant.agent_auto_threshold_cents,
+        dryRun: tenant.dry_run === 1,
+        cronAutoFire: tenant.cron_auto_fire === 1,
+      },
+      channels: [],
+      principal: { kind: 'platform' as const, actorId: 'cron', tenantId: null, role: 'platform_admin', scopes: [] },
+    } as TenantContext;
 
-    try {
-      const lineas = await listarLineas(env, corte.idempotency_key);
+    const resultado: ResultadoReconciliacion = {
+      revisados: 0,
+      reconciliados: 0,
+      reenviados: 0,
+      sinConfirmar: 0,
+    };
 
-      // Sin líneas: no se creó nada en Alegra → se reenvía el corte completo.
-      if (lineas.length === 0) {
-        const reenviado = await reenviarCorte(env, corte, cliente);
-        if (reenviado) resultado.reenviados += 1;
-        continue;
-      }
+    const pendientes = await listarSyncPendientes(ctx);
+    const limite = opciones.limite ?? 20;
+    const cliente = opciones.cliente ?? crearClienteAlegra(ctx.env);
 
-      // Con líneas: se pregunta a Alegra qué existe realmente.
-      if (!cliente.listJournalEntries) {
-        await registrarSinConfirmar(env, corte, 'el cliente MCP no expone list_journal_entries');
-        resultado.sinConfirmar += 1;
-        continue;
-      }
+    for (const corte of pendientes.slice(0, limite)) {
+      resultado.revisados += 1;
 
-      const existentes = await cliente.listJournalEntries(corte.idempotency_key);
-      if (existentes.length === 0) {
-        await registrarSinConfirmar(
-          env,
-          corte,
-          'Alegra no devolvió asientos para esta idempotency key: no se re-asienta'
-        );
-        resultado.sinConfirmar += 1;
-        continue;
-      }
+      try {
+        const lineas = await listarLineas(ctx, corte.idempotency_key);
 
-      const ids = new Set(existentes.map((asiento) => asiento.id));
-      const faltantes = lineas.filter((linea) => !ids.has(linea.alegra_journal_id));
+        // Sin líneas: no se creó nada en Alegra → se reenvía el corte completo.
+        if (lineas.length === 0) {
+          const reenviado = await reenviarCorte(ctx, corte, cliente);
+          if (reenviado) resultado.reenviados += 1;
+          continue;
+        }
 
-      if (faltantes.length === 0) {
+        // Con líneas: se pregunta a Alegra qué existe realmente.
+        if (!cliente.listJournalEntries) {
+          await registrarSinConfirmar(ctx, corte, 'el cliente MCP no expone list_journal_entries');
+          resultado.sinConfirmar += 1;
+          continue;
+        }
+
+        const existentes = await cliente.listJournalEntries(corte.idempotency_key);
+        if (existentes.length === 0) {
+          await registrarSinConfirmar(
+            ctx,
+            corte,
+            'Alegra no devolvió asientos para esta idempotency key: no se re-asienta'
+          );
+          resultado.sinConfirmar += 1;
+          continue;
+        }
+
+        const ids = new Set(existentes.map((asiento) => asiento.id));
+        const faltantes = lineas.filter((linea) => !ids.has(linea.alegra_journal_id));
+
+        if (faltantes.length === 0) {
+          await actualizarSync(
+            ctx,
+            corte.idempotency_key,
+            'reconciled',
+            lineas[0]?.alegra_journal_id ?? corte.alegra_journal_id,
+            null
+          );
+          await logEvent(ctx, 'alegra_sync', {
+            payload: {
+              fecha_corte: corte.fecha_corte,
+              idempotency_key: corte.idempotency_key,
+              status: 'reconciled',
+              asientos: lineas.length,
+              aviso: 'los asientos ya existían en Alegra: no se duplicó ninguno',
+            },
+          });
+          resultado.reconciliados += 1;
+          continue;
+        }
+
+        // Sólo falta(n) algunos: se re-crean esos y el resto se omite.
+        const payload = await leerPayloadDesdeR2(ctx, corte.fecha_corte);
+        if (!payload) {
+          await registrarSinConfirmar(ctx, corte, 'payload no encontrado en R2');
+          resultado.sinConfirmar += 1;
+          continue;
+        }
+
+        for (const linea of faltantes) {
+          const asiento = payload.asientos.find(
+            (item) => item.legal_audit_id === linea.legal_audit_id
+          );
+          if (!asiento) continue;
+          const creado = await cliente.createJournalEntry(asiento, payload);
+          await actualizarLinea(ctx, corte.idempotency_key, linea, creado.id);
+        }
+
         await actualizarSync(
-          env,
+          ctx,
           corte.idempotency_key,
           'reconciled',
           lineas[0]?.alegra_journal_id ?? corte.alegra_journal_id,
           null
         );
-        await logEvent(env, 'alegra_sync', {
+        await logEvent(ctx, 'alegra_sync', {
           payload: {
             fecha_corte: corte.fecha_corte,
             idempotency_key: corte.idempotency_key,
             status: 'reconciled',
-            asientos: lineas.length,
-            aviso: 'los asientos ya existían en Alegra: no se duplicó ninguno',
+            recreados: faltantes.length,
           },
         });
         resultado.reconciliados += 1;
-        continue;
-      }
-
-      // Sólo falta(n) algunos: se re-crean esos y el resto se omite.
-      const payload = await leerPayloadDesdeR2(env, corte.fecha_corte);
-      if (!payload) {
-        await registrarSinConfirmar(env, corte, 'payload no encontrado en R2');
-        resultado.sinConfirmar += 1;
-        continue;
-      }
-
-      for (const linea of faltantes) {
-        const asiento = payload.asientos.find(
-          (item) => item.legal_audit_id === linea.legal_audit_id
-        );
-        if (!asiento) continue;
-        const creado = await cliente.createJournalEntry(asiento, payload);
-        await actualizarLinea(env, corte.idempotency_key, linea, creado.id);
-      }
-
-      await actualizarSync(
-        env,
-        corte.idempotency_key,
-        'reconciled',
-        lineas[0]?.alegra_journal_id ?? corte.alegra_journal_id,
-        null
-      );
-      await logEvent(env, 'alegra_sync', {
-        payload: {
+      } catch (error) {
+        const mensaje = error instanceof Error ? error.message : String(error);
+        await logEvent(ctx, 'alegra_sync', {
+          payload: {
+            fecha_corte: corte.fecha_corte,
+            idempotency_key: corte.idempotency_key,
+            status: 'reconciliacion_fallida',
+            error: mensaje,
+          },
+        });
+        logger.error('Falló la reconciliación de un corte', {
           fecha_corte: corte.fecha_corte,
-          idempotency_key: corte.idempotency_key,
-          status: 'reconciled',
-          recreados: faltantes.length,
-        },
-      });
-      resultado.reconciliados += 1;
-    } catch (error) {
-      const mensaje = error instanceof Error ? error.message : String(error);
-      await logEvent(env, 'alegra_sync', {
-        payload: {
-          fecha_corte: corte.fecha_corte,
-          idempotency_key: corte.idempotency_key,
-          status: 'reconciliacion_fallida',
+          tenantId: tenant.id,
           error: mensaje,
-        },
-      });
-      logger.error('Falló la reconciliación de un corte', {
-        fecha_corte: corte.fecha_corte,
-        error: mensaje,
-      });
+        });
+      }
     }
+
+    if (resultado.revisados > 0) {
+      logger.info('Reconciliación contable terminada', { tenantId: tenant.id, ...resultado });
+    }
+
+    resultados.push(resultado);
   }
 
-  if (resultado.revisados > 0) {
-    logger.info('Reconciliación contable terminada', { ...resultado });
-  }
-
-  return resultado;
+  return resultados;
 }
 
 /** Reenvía un corte que no llegó a crear ningún asiento. */
-async function reenviarCorte(env: Env, corte: SyncRow, cliente: AlegraApi): Promise<boolean> {
-  const payload = await leerPayloadDesdeR2(env, corte.fecha_corte);
+async function reenviarCorte(ctx: TenantContext, corte: SyncRow, cliente: AlegraApi): Promise<boolean> {
+  const payload = await leerPayloadDesdeR2(ctx, corte.fecha_corte);
   if (!payload) {
-    await registrarSinConfirmar(env, corte, 'payload no encontrado en R2');
+    await registrarSinConfirmar(ctx, corte, 'payload no encontrado en R2');
     return false;
   }
-  const resultado = await sendToAlegra(payload as AccountingPayload, env, { cliente });
+  const resultado = await sendToAlegra(payload as AccountingPayload, ctx, { cliente });
   return resultado.ok;
 }
 
-async function registrarSinConfirmar(env: Env, corte: SyncRow, motivo: string): Promise<void> {
-  await logEvent(env, 'alegra_reconciliacion_sin_confirmacion', {
+async function registrarSinConfirmar(ctx: TenantContext, corte: SyncRow, motivo: string): Promise<void> {
+  await logEvent(ctx, 'alegra_reconciliacion_sin_confirmacion', {
     payload: {
       fecha_corte: corte.fecha_corte,
       idempotency_key: corte.idempotency_key,
@@ -205,22 +243,23 @@ async function registrarSinConfirmar(env: Env, corte: SyncRow, motivo: string): 
   });
   logger.warn('Reconciliación sin confirmación: no se re-asienta', {
     fecha_corte: corte.fecha_corte,
+    tenantId: ctx.tenantId,
     motivo,
   });
 }
 
 const SQL_ACTUALIZAR_LINEA = `UPDATE alegra_journal_lines
   SET alegra_journal_id = ?
-  WHERE idempotency_key = ? AND legal_audit_id = ?`;
+  WHERE tenant_id = ? AND idempotency_key = ? AND legal_audit_id = ?`;
 
 /** Actualiza el journal id de una línea (el asiento sí existía pero cambió de id). */
 async function actualizarLinea(
-  env: Env,
+  ctx: TenantContext,
   idempotencyKey: string,
   linea: LineaRow,
   journalId: string
 ): Promise<void> {
-  await env.DB.prepare(SQL_ACTUALIZAR_LINEA)
-    .bind(journalId, idempotencyKey, linea.legal_audit_id)
+  await ctx.env.DB.prepare(SQL_ACTUALIZAR_LINEA)
+    .bind(journalId, ctx.tenantId, idempotencyKey, linea.legal_audit_id)
     .run();
 }

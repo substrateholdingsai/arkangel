@@ -13,6 +13,7 @@
  */
 
 import type { Env } from '../types/env';
+import type { TenantContext } from '../tenancy/types';
 import { logEvent } from '../services/eventos';
 import { logger } from '../lib/logger';
 import { todayIso } from '../services/db';
@@ -39,54 +40,57 @@ export const LIMITE_LEDGER = 50000;
 export const ESTADOS_INGRESO_RECONOCIDO = ['delivered', 'read', 'promise_made'] as const;
 
 /** Consultas del módulo (expuestas para pruebas y para el runbook). */
-export const SQL_AUDITORIA_DIA = `SELECT id, regla_id, ley, articulo, castigo, accion, detalle, evidencia, case_id, client_id, canal, created_at
+export const SQL_AUDITORIA_DIA = `SELECT id, tenant_id, regla_id, ley, articulo, castigo, accion, detalle, evidencia, case_id, client_id, canal, created_at
   FROM legal_audit
-  WHERE replace(created_at, ' ', 'T') >= ? AND replace(created_at, ' ', 'T') < ?
+  WHERE tenant_id = ? AND replace(created_at, ' ', 'T') >= ? AND replace(created_at, ' ', 'T') < ?
   ORDER BY created_at ASC, id ASC`;
 
-export const SQL_LEDGER_HISTORIA = `SELECT id, regla_id, accion, created_at, detalle, evidencia, castigo, articulo, ley
+export const SQL_LEDGER_HISTORIA = `SELECT id, tenant_id, regla_id, accion, created_at, detalle, evidencia, castigo, articulo, ley
   FROM legal_audit
-  WHERE replace(created_at, ' ', 'T') < ?
+  WHERE tenant_id = ? AND replace(created_at, ' ', 'T') < ?
   ORDER BY created_at ASC, id ASC
   LIMIT ?`;
 
-export const SQL_MAP_CONTABLE = `SELECT regla_id, cuenta_debito, cuenta_credito, tipo_asiento, descripcion
-  FROM legal_accounting_map`;
+export const SQL_MAP_CONTABLE = `SELECT tenant_id, regla_id, cuenta_debito, cuenta_credito, tipo_asiento, descripcion
+  FROM tenant_accounting_map
+  WHERE tenant_id = ?`;
 
-export const SQL_CASOS = `SELECT id, client_id, amount_cents, status FROM cases WHERE id IN (%IDS%)`;
+export const SQL_CASOS = `SELECT id, tenant_id, client_id, amount_cents, status FROM cases WHERE tenant_id = ? AND id IN (%IDS%)`;
 
-export const SQL_CONTRATOS_CLIENTE = `SELECT id, client_id, monto_pactado_cents FROM contracts WHERE client_id IN (%IDS%) ORDER BY updated_at DESC`;
+export const SQL_CONTRATOS_CLIENTE = `SELECT id, tenant_id, client_id, monto_pactado_cents FROM contracts WHERE tenant_id = ? AND client_id IN (%IDS%) ORDER BY updated_at DESC`;
 
-export const SQL_CFDI_CONTRATOS = `SELECT contract_id, cfdi_uuid FROM contract_cfdi WHERE contract_id IN (%IDS%)`;
+export const SQL_CFDI_CONTRATOS = `SELECT contract_id, cfdi_uuid FROM contract_cfdi WHERE tenant_id = ? AND contract_id IN (%IDS%)`;
 
 export const SQL_INGRESOS_DIA = `SELECT m.client_id AS client_id, c.id AS contract_id, c.monto_pactado_cents AS monto_pactado_cents, COUNT(m.id) AS mensajes
   FROM messages m
-  JOIN contracts c ON c.client_id = m.client_id
-  WHERE m.direction = 'outbound'
+  JOIN contracts c ON c.tenant_id = m.tenant_id AND c.client_id = m.client_id
+  WHERE m.tenant_id = ?
+    AND m.direction = 'outbound'
     AND m.status IN (${ESTADOS_INGRESO_RECONOCIDO.map(() => '?').join(', ')})
     AND replace(m.created_at, ' ', 'T') >= ? AND replace(m.created_at, ' ', 'T') < ?
   GROUP BY m.client_id, c.id`;
 
-export const SQL_CHECKPOINT = `SELECT fecha_corte, hash_cadena, total_registros, verificado
+export const SQL_CHECKPOINT = `SELECT tenant_id, fecha_corte, hash_cadena, total_registros, verificado
   FROM ledger_checkpoint
-  WHERE fecha_corte <= ?
+  WHERE tenant_id = ? AND fecha_corte <= ?
   ORDER BY fecha_corte DESC
   LIMIT 1`;
 
-export const SQL_CHECKPOINT_FECHA = `SELECT fecha_corte, hash_cadena, total_registros, verificado
+export const SQL_CHECKPOINT_FECHA = `SELECT tenant_id, fecha_corte, hash_cadena, total_registros, verificado
   FROM ledger_checkpoint
-  WHERE fecha_corte = ?
+  WHERE tenant_id = ? AND fecha_corte = ?
   LIMIT 1`;
 
-export const SQL_UPSERT_CHECKPOINT = `INSERT OR IGNORE INTO ledger_checkpoint (fecha_corte, hash_cadena, total_registros, verificado)
-  VALUES (?, ?, ?, 1)`;
+export const SQL_UPSERT_CHECKPOINT = `INSERT OR IGNORE INTO ledger_checkpoint (tenant_id, fecha_corte, hash_cadena, total_registros, verificado)
+  VALUES (?, ?, ?, ?, 1)`;
 
 export const SQL_REBASAR_CHECKPOINT = `UPDATE ledger_checkpoint
   SET hash_cadena = ?, total_registros = ?, verificado = 1
-  WHERE fecha_corte = ?`;
+  WHERE tenant_id = ? AND fecha_corte = ?`;
 
 export interface AuditoriaRow {
   id: string;
+  tenant_id: string;
   regla_id: string;
   ley: string | null;
   articulo: string | null;
@@ -102,6 +106,7 @@ export interface AuditoriaRow {
 
 export interface LedgerRow {
   id: string;
+  tenant_id: string;
   regla_id: string;
   accion: string;
   created_at: string;
@@ -113,6 +118,7 @@ export interface LedgerRow {
 }
 
 export interface MapaContable {
+  tenant_id: string;
   regla_id: string;
   cuenta_debito: string;
   cuenta_credito: string;
@@ -122,6 +128,7 @@ export interface MapaContable {
 
 export interface CasoRow {
   id: string;
+  tenant_id: string;
   client_id: string;
   amount_cents: number;
   status: string;
@@ -129,11 +136,13 @@ export interface CasoRow {
 
 export interface ContratoRow {
   id: string;
+  tenant_id: string;
   client_id: string;
   monto_pactado_cents: number;
 }
 
 export interface Checkpoint {
+  tenant_id: string;
   fecha_corte: string;
   hash_cadena: string;
   total_registros: number;
@@ -399,23 +408,23 @@ export interface ResultadoBuild {
  * Construye el payload contable del corte. Lanza si el JSON no valida con Zod:
  * un payload inválido nunca llega a R2 ni a Alegra.
  */
-export async function buildAccountingPayload(fecha: string, env: Env): Promise<AccountingPayload> {
-  const resultado = await construirPayload(fecha, env);
+export async function buildAccountingPayload(ctx: TenantContext, fecha: string): Promise<AccountingPayload> {
+  const resultado = await construirPayload(ctx, fecha);
   return resultado.payload;
 }
 
-export async function construirPayload(fecha: string, env: Env): Promise<ResultadoBuild> {
-  const timeZone = env.TZ ?? 'America/Mexico_City';
+export async function construirPayload(ctx: TenantContext, fecha: string): Promise<ResultadoBuild> {
+  const timeZone = ctx.config.tz;
   const ventana = ventanaDeDia(fecha, timeZone);
   const desde = ventana.inicio_utc;
   const hasta = ventana.fin_utc;
 
   const [auditoria, mapa, ingresos, checkpointPrevio, checkpointDia, historia] = await Promise.all([
-    conReintentos(() => env.DB.prepare(SQL_AUDITORIA_DIA).bind(desde, hasta).all<AuditoriaRow>()),
-    conReintentos(() => env.DB.prepare(SQL_MAP_CONTABLE).bind().all<MapaContable>()),
+    conReintentos(() => ctx.env.DB.prepare(SQL_AUDITORIA_DIA).bind(ctx.tenantId, desde, hasta).all<AuditoriaRow>()),
+    conReintentos(() => ctx.env.DB.prepare(SQL_MAP_CONTABLE).bind(ctx.tenantId).all<MapaContable>()),
     conReintentos(() =>
-      env.DB.prepare(SQL_INGRESOS_DIA)
-        .bind(...ESTADOS_INGRESO_RECONOCIDO, desde, hasta)
+      ctx.env.DB.prepare(SQL_INGRESOS_DIA)
+        .bind(ctx.tenantId, ...ESTADOS_INGRESO_RECONOCIDO, desde, hasta)
         .all<{
           client_id: string;
           contract_id: string;
@@ -423,10 +432,10 @@ export async function construirPayload(fecha: string, env: Env): Promise<Resulta
           mensajes: number;
         }>()
     ),
-    conReintentos(() => env.DB.prepare(SQL_CHECKPOINT).bind(fecha).first<Checkpoint>()),
-    conReintentos(() => env.DB.prepare(SQL_CHECKPOINT_FECHA).bind(fecha).first<Checkpoint>()),
+    conReintentos(() => ctx.env.DB.prepare(SQL_CHECKPOINT).bind(ctx.tenantId, fecha).first<Checkpoint>()),
+    conReintentos(() => ctx.env.DB.prepare(SQL_CHECKPOINT_FECHA).bind(ctx.tenantId, fecha).first<Checkpoint>()),
     conReintentos(() =>
-      env.DB.prepare(SQL_LEDGER_HISTORIA).bind(hasta, LIMITE_LEDGER).all<LedgerRow>()
+      ctx.env.DB.prepare(SQL_LEDGER_HISTORIA).bind(ctx.tenantId, hasta, LIMITE_LEDGER).all<LedgerRow>()
     ),
   ]);
 
@@ -437,17 +446,17 @@ export async function construirPayload(fecha: string, env: Env): Promise<Resulta
 
   // ── Ledger: cadena de hashes + verificación contra el checkpoint ──
   const cadena = await calcularCadenaLedger(filasHistoria, fecha);
-  const integridad = await verificarLedger(env, fecha, cadena, checkpointPrevio, checkpointDia);
+  const integridad = await verificarLedger(ctx, fecha, cadena, checkpointPrevio, checkpointDia);
   const cabeza = cabezaAlCorte(cadena, fecha);
 
   // ── Montos por caso y contratos ──
   const caseIds = idsUnicos(filasAuditoria.map((fila) => fila.case_id));
   const clientIds = idsUnicos(filasAuditoria.map((fila) => fila.client_id));
 
-  const casos = await cargarCasos(env, caseIds);
-  const contratos = await cargarContratos(env, clientIds);
+  const casos = await cargarCasos(ctx, caseIds);
+  const contratos = await cargarContratos(ctx, clientIds);
   const cfdis = await cargarCfdis(
-    env,
+    ctx,
     contratos.map((contrato) => contrato.id)
   );
 
@@ -514,7 +523,7 @@ export async function construirPayload(fecha: string, env: Env): Promise<Resulta
 
   // ── Resumen ──
   const ingresosCents = ingresosUnicos(filasIngresos);
-  const ivaPct = Number(env.ALEGRA_IVA_PCT ?? IVA_PCT_DEFAULT);
+  const ivaPct = Number(ctx.env.ALEGRA_IVA_PCT ?? IVA_PCT_DEFAULT);
   const gastosCents = asientos
     .filter((asiento) => asiento.tipo_asiento === 'gasto')
     .reduce((suma, asiento) => suma + Math.round(asiento.monto * 100), 0);
@@ -535,7 +544,7 @@ export async function construirPayload(fecha: string, env: Env): Promise<Resulta
     fecha,
     integridad.total_registros,
     integridad.hash_ultimo_registro,
-    env.ALEGRA_IDEMPOTENCY_SALT
+    ctx.env.ALEGRA_IDEMPOTENCY_SALT
   );
 
   const payload = {
@@ -568,7 +577,7 @@ export async function construirPayload(fecha: string, env: Env): Promise<Resulta
   }
 
   if (reglasSinMapa.size > 0) {
-    await logEvent(env, 'contabilidad.regla_sin_mapa', {
+    await logEvent(ctx, 'contabilidad.regla_sin_mapa', {
       payload: { fecha_corte: fecha, reglas: [...reglasSinMapa] },
     });
     logger.warn('Reglas legales sin mapeo contable', {
@@ -607,7 +616,7 @@ export async function calcularIdempotencyKey(
  *   3. el checkpoint no aparece en la cadena             → el ledger fue alterado.
  */
 async function verificarLedger(
-  env: Env,
+  ctx: TenantContext,
   fecha: string,
   cadena: CadenaLedger,
   checkpointPrevio: Checkpoint | null,
@@ -633,8 +642,8 @@ async function verificarLedger(
 
     // El checkpoint no es la cabeza actual: ¿es un ancestro (alta legítima)?
     if (cabeza && cadena.hashes.has(checkpoint.hash_cadena)) {
-      await rebasarCheckpoint(env, checkpoint.fecha_corte, cabeza.hash, cabeza.total);
-      await logEvent(env, 'ledger_rebasado', {
+      await rebasarCheckpoint(ctx, checkpoint.fecha_corte, cabeza.hash, cabeza.total);
+      await logEvent(ctx, 'ledger_rebasado', {
         payload: {
           fecha_corte: fecha,
           checkpoint_fecha: checkpoint.fecha_corte,
@@ -651,7 +660,7 @@ async function verificarLedger(
   }
 
   if (!verificado) {
-    await logEvent(env, 'ledger_broken', {
+    await logEvent(ctx, 'ledger_broken', {
       payload: { fecha_corte: fecha, motivos, total_registros: cadena.totalRegistros },
     });
     logger.error('Integridad del ledger comprometida', { fecha_corte: fecha, motivos });
@@ -665,34 +674,34 @@ async function verificarLedger(
   };
 }
 
-async function cargarCasos(env: Env, caseIds: string[]): Promise<CasoRow[]> {
+async function cargarCasos(ctx: TenantContext, caseIds: string[]): Promise<CasoRow[]> {
   if (caseIds.length === 0) return [];
   const sql = SQL_CASOS.replace('%IDS%', placeholders(caseIds.length));
   const result = await conReintentos(() =>
-    env.DB.prepare(sql)
-      .bind(...caseIds)
+    ctx.env.DB.prepare(sql)
+      .bind(ctx.tenantId, ...caseIds)
       .all<CasoRow>()
   );
   return result.results ?? [];
 }
 
-async function cargarContratos(env: Env, clientIds: string[]): Promise<ContratoRow[]> {
+async function cargarContratos(ctx: TenantContext, clientIds: string[]): Promise<ContratoRow[]> {
   if (clientIds.length === 0) return [];
   const sql = SQL_CONTRATOS_CLIENTE.replace('%IDS%', placeholders(clientIds.length));
   const result = await conReintentos(() =>
-    env.DB.prepare(sql)
-      .bind(...clientIds)
+    ctx.env.DB.prepare(sql)
+      .bind(ctx.tenantId, ...clientIds)
       .all<ContratoRow>()
   );
   return result.results ?? [];
 }
 
-async function cargarCfdis(env: Env, contractIds: string[]): Promise<Map<string, string>> {
+async function cargarCfdis(ctx: TenantContext, contractIds: string[]): Promise<Map<string, string>> {
   if (contractIds.length === 0) return new Map();
   const sql = SQL_CFDI_CONTRATOS.replace('%IDS%', placeholders(contractIds.length));
   const result = await conReintentos(() =>
-    env.DB.prepare(sql)
-      .bind(...contractIds)
+    ctx.env.DB.prepare(sql)
+      .bind(ctx.tenantId, ...contractIds)
       .all<{ contract_id: string; cfdi_uuid: string }>()
   );
   return new Map((result.results ?? []).map((fila) => [fila.contract_id, fila.cfdi_uuid]));
@@ -770,12 +779,12 @@ function conceptoDe(params: {
  * de manipulación y debe permanecer para la auditoría.
  */
 export async function guardarCheckpoint(
-  env: Env,
+  ctx: TenantContext,
   fecha: string,
   hash: string,
   total: number
 ): Promise<void> {
-  await env.DB.prepare(SQL_UPSERT_CHECKPOINT).bind(fecha, hash, total).run();
+  await ctx.env.DB.prepare(SQL_UPSERT_CHECKPOINT).bind(ctx.tenantId, fecha, hash, total).run();
 }
 
 /**
@@ -785,10 +794,10 @@ export async function guardarCheckpoint(
  * como evidencia.
  */
 export async function rebasarCheckpoint(
-  env: Env,
+  ctx: TenantContext,
   fecha: string,
   hash: string,
   total: number
 ): Promise<void> {
-  await env.DB.prepare(SQL_REBASAR_CHECKPOINT).bind(hash, total, fecha).run();
+  await ctx.env.DB.prepare(SQL_REBASAR_CHECKPOINT).bind(hash, total, ctx.tenantId, fecha).run();
 }

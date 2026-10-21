@@ -173,6 +173,16 @@ export async function getTenantByProviderAccountId(
 }
 
 /**
+ * Lista todos los tenants activos (para el cron contable multi-tenant).
+ */
+export async function listTenants(env: Env): Promise<Tenant[]> {
+  const result = await env.DB.prepare('SELECT * FROM tenants WHERE status = ? ORDER BY created_at ASC')
+    .bind('active')
+    .all<TenantRow>();
+  return (result.results ?? []).map(mapTenant);
+}
+
+/**
  * ¿Es el usuario un administrador de plataforma?
  *
  * Los admins de plataforma tienen alcance transversal: pueden actuar sobre

@@ -12,6 +12,7 @@
  */
 
 import type { Env } from '../types/env';
+import type { TenantContext } from '../tenancy/types';
 import { logEvent } from '../services/eventos';
 import { logger } from '../lib/logger';
 import { newId } from '../services/db';
@@ -42,6 +43,7 @@ export interface SendResult {
 
 export interface SyncRow {
   id: string;
+  tenant_id: string;
   fecha_corte: string;
   idempotency_key: string;
   status: string;
@@ -59,30 +61,30 @@ export interface LineaRow {
   alegra_journal_id: string;
 }
 
-const SQL_LEER_SYNC = `SELECT id, fecha_corte, idempotency_key, status, payload_r2_key, alegra_journal_id, error_message
+const SQL_LEER_SYNC = `SELECT id, tenant_id, fecha_corte, idempotency_key, status, payload_r2_key, alegra_journal_id, error_message
   FROM alegra_sync
-  WHERE idempotency_key = ?
+  WHERE tenant_id = ? AND idempotency_key = ?
   LIMIT 1`;
 
-const SQL_LISTAR_SYNC_PENDIENTES = `SELECT id, fecha_corte, idempotency_key, status, payload_r2_key, alegra_journal_id, error_message
+const SQL_LISTAR_SYNC_PENDIENTES = `SELECT id, tenant_id, fecha_corte, idempotency_key, status, payload_r2_key, alegra_journal_id, error_message
   FROM alegra_sync
-  WHERE status IN ('pending', 'failed')
+  WHERE tenant_id = ? AND status IN ('pending', 'failed')
   ORDER BY created_at ASC
   LIMIT 50`;
 
 const SQL_LEER_LINEAS = `SELECT legal_audit_id, alegra_journal_id
   FROM alegra_journal_lines
-  WHERE idempotency_key = ?
+  WHERE tenant_id = ? AND idempotency_key = ?
   LIMIT 1`;
 
 const SQL_LISTAR_LINEAS = `SELECT alegra_sync_id, linea_numero, idempotency_key, legal_audit_id, alegra_journal_id
   FROM alegra_journal_lines
-  WHERE idempotency_key = ?
+  WHERE tenant_id = ? AND idempotency_key = ?
   ORDER BY linea_numero ASC`;
 
-const SQL_UPSERT_SYNC = `INSERT INTO alegra_sync (id, fecha_corte, idempotency_key, status, payload_r2_key, alegra_journal_id, error_message, created_at, updated_at)
-  VALUES (?, ?, ?, 'pending', ?, NULL, NULL, datetime('now'), datetime('now'))
-  ON CONFLICT(idempotency_key) DO UPDATE SET
+const SQL_UPSERT_SYNC = `INSERT INTO alegra_sync (id, tenant_id, fecha_corte, idempotency_key, status, payload_r2_key, alegra_journal_id, error_message, created_at, updated_at)
+  VALUES (?, ?, ?, ?, 'pending', ?, NULL, NULL, datetime('now'), datetime('now'))
+  ON CONFLICT(tenant_id, idempotency_key) DO UPDATE SET
     status = 'pending',
     payload_r2_key = excluded.payload_r2_key,
     error_message = NULL,
@@ -90,10 +92,10 @@ const SQL_UPSERT_SYNC = `INSERT INTO alegra_sync (id, fecha_corte, idempotency_k
 
 const SQL_ACTUALIZAR_SYNC = `UPDATE alegra_sync
   SET status = ?, alegra_journal_id = COALESCE(?, alegra_journal_id), error_message = ?, updated_at = datetime('now')
-  WHERE idempotency_key = ?`;
+  WHERE tenant_id = ? AND idempotency_key = ?`;
 
-const SQL_INSERTAR_LINEA = `INSERT OR IGNORE INTO alegra_journal_lines (alegra_sync_id, linea_numero, idempotency_key, legal_audit_id, alegra_journal_id, created_at)
-  VALUES (?, ?, ?, ?, ?, datetime('now'))`;
+const SQL_INSERTAR_LINEA = `INSERT OR IGNORE INTO alegra_journal_lines (alegra_sync_id, tenant_id, linea_numero, idempotency_key, legal_audit_id, alegra_journal_id, created_at)
+  VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`;
 
 /** Clave KV del catálogo de cuentas del día (TTL 24 h). */
 export const KV_CUENTAS_ALEGRA = 'alegra:accounts';
@@ -101,19 +103,19 @@ export const TTL_CUENTAS_ALEGRA = 86400;
 
 // ────────────────────────────── R2 ──────────────────────────────
 
-/** Ruta canónica del payload en R2. */
-export function claveR2(fecha: string): string {
-  return `${R2_PREFIX}/${fecha}.json`;
+/** Ruta canónica del payload en R2 (con tenant scope). */
+export function claveR2(ctx: TenantContext, fecha: string): string {
+  return `${R2_PREFIX}/${ctx.tenantId}/${fecha}.json`;
 }
 
 /** Guarda el payload normalizado en R2 (auditoría + fuente del reintento). */
 export async function guardarPayloadEnR2(
-  env: Env,
+  ctx: TenantContext,
   fecha: string,
   payload: AccountingPayload
 ): Promise<string> {
-  const key = claveR2(fecha);
-  await env.R2.put(key, JSON.stringify(payload, null, 2), {
+  const key = claveR2(ctx, fecha);
+  await ctx.env.R2.put(key, JSON.stringify(payload, null, 2), {
     httpMetadata: { contentType: 'application/json' },
   });
   return key;
@@ -121,16 +123,17 @@ export async function guardarPayloadEnR2(
 
 /** Lee el payload de un corte desde R2. */
 export async function leerPayloadDesdeR2(
-  env: Env,
+  ctx: TenantContext,
   fecha: string
 ): Promise<AccountingPayload | null> {
-  const objeto = await env.R2.get(claveR2(fecha));
+  const objeto = await ctx.env.R2.get(claveR2(ctx, fecha));
   if (!objeto) return null;
   try {
     return JSON.parse(await objeto.text()) as AccountingPayload;
   } catch (error) {
     logger.error('Payload contable ilegible en R2', {
       fecha,
+      tenantId: ctx.tenantId,
       error: error instanceof Error ? error.message : String(error),
     });
     return null;
@@ -142,16 +145,16 @@ export async function leerPayloadDesdeR2(
  * de rezago (T+1), así que "hoy" todavía no existe como payload.
  */
 export async function leerUltimoPayload(
-  env: Env
+  ctx: TenantContext
 ): Promise<{ fecha: string; payload: AccountingPayload } | null> {
-  const listado = await env.R2.list({ prefix: `${R2_PREFIX}/`, limit: 100 });
+  const listado = await ctx.env.R2.list({ prefix: `${R2_PREFIX}/${ctx.tenantId}/`, limit: 100 });
   const claves = (listado.objects ?? [])
     .map((objeto) => objeto.key)
     .filter((clave) => clave.endsWith('.json'))
     .sort((a, b) => b.localeCompare(a));
 
   for (const clave of claves) {
-    const objeto = await env.R2.get(clave);
+    const objeto = await ctx.env.R2.get(clave);
     if (!objeto) continue;
     try {
       const payload = JSON.parse(await objeto.text()) as AccountingPayload;
@@ -165,56 +168,56 @@ export async function leerUltimoPayload(
 
 // ────────────────────────────── persistencia ──────────────────────────────
 
-async function leerSync(env: Env, idempotencyKey: string): Promise<SyncRow | null> {
-  const fila = await env.DB.prepare(SQL_LEER_SYNC).bind(idempotencyKey).first<SyncRow>();
+async function leerSync(ctx: TenantContext, idempotencyKey: string): Promise<SyncRow | null> {
+  const fila = await ctx.env.DB.prepare(SQL_LEER_SYNC).bind(ctx.tenantId, idempotencyKey).first<SyncRow>();
   return fila ?? null;
 }
 
 export async function actualizarSync(
-  env: Env,
+  ctx: TenantContext,
   idempotencyKey: string,
   status: EstadoSync,
   journalId: string | null,
   errorMessage: string | null
 ): Promise<void> {
-  await env.DB.prepare(SQL_ACTUALIZAR_SYNC)
-    .bind(status, journalId, errorMessage, idempotencyKey)
+  await ctx.env.DB.prepare(SQL_ACTUALIZAR_SYNC)
+    .bind(status, journalId, errorMessage, ctx.tenantId, idempotencyKey)
     .run();
 }
 
 async function journalIdDeLinea(
-  env: Env,
+  ctx: TenantContext,
   idempotencyKey: string,
   legalAuditId: string
 ): Promise<string | null> {
-  const fila = await env.DB.prepare(SQL_LEER_LINEAS)
-    .bind(idempotencyKey, legalAuditId)
+  const fila = await ctx.env.DB.prepare(SQL_LEER_LINEAS)
+    .bind(ctx.tenantId, idempotencyKey, legalAuditId)
     .first<{ legal_audit_id: string; alegra_journal_id: string }>();
   return fila?.alegra_journal_id ?? null;
 }
 
 async function registrarLinea(
-  env: Env,
+  ctx: TenantContext,
   syncId: string,
   lineaNumero: number,
   idempotencyKey: string,
   legalAuditId: string,
   journalId: string
 ): Promise<void> {
-  await env.DB.prepare(SQL_INSERTAR_LINEA)
-    .bind(syncId, lineaNumero, idempotencyKey, legalAuditId, journalId)
+  await ctx.env.DB.prepare(SQL_INSERTAR_LINEA)
+    .bind(syncId, ctx.tenantId, lineaNumero, idempotencyKey, legalAuditId, journalId)
     .run();
 }
 
 /** Líneas de trazabilidad de un corte (para la reconciliación). */
-export async function listarLineas(env: Env, idempotencyKey: string): Promise<LineaRow[]> {
-  const result = await env.DB.prepare(SQL_LISTAR_LINEAS).bind(idempotencyKey).all<LineaRow>();
+export async function listarLineas(ctx: TenantContext, idempotencyKey: string): Promise<LineaRow[]> {
+  const result = await ctx.env.DB.prepare(SQL_LISTAR_LINEAS).bind(ctx.tenantId, idempotencyKey).all<LineaRow>();
   return result.results ?? [];
 }
 
 /** Cortes que quedaron a medio camino (pendientes o fallidos). */
-export async function listarSyncPendientes(env: Env): Promise<SyncRow[]> {
-  const result = await env.DB.prepare(SQL_LISTAR_SYNC_PENDIENTES).all<SyncRow>();
+export async function listarSyncPendientes(ctx: TenantContext): Promise<SyncRow[]> {
+  const result = await ctx.env.DB.prepare(SQL_LISTAR_SYNC_PENDIENTES).bind(ctx.tenantId).all<SyncRow>();
   return result.results ?? [];
 }
 
@@ -223,29 +226,29 @@ export async function listarSyncPendientes(env: Env): Promise<SyncRow[]> {
  * consulta una vez al día, no una vez por asiento.
  */
 export async function listarCuentasConCache(
-  env: Env,
+  ctx: TenantContext,
   cliente: AlegraApi,
   fechaCorte: string
 ): Promise<{ cuentas: AlegraCuenta[]; desdeCache: boolean }> {
-  const clave = `${KV_CUENTAS_ALEGRA}:${fechaCorte}`;
-  const enCache = await env.KV.get(clave, 'json');
+  const clave = `${KV_CUENTAS_ALEGRA}:${ctx.tenantId}:${fechaCorte}`;
+  const enCache = await ctx.env.KV.get(clave, 'json');
   if (enCache && Array.isArray(enCache)) {
     return { cuentas: enCache as AlegraCuenta[], desdeCache: true };
   }
 
   const cuentas = await cliente.listAccounts();
-  await env.KV.put(clave, JSON.stringify(cuentas), { expirationTtl: TTL_CUENTAS_ALEGRA });
+  await ctx.env.KV.put(clave, JSON.stringify(cuentas), { expirationTtl: TTL_CUENTAS_ALEGRA });
   return { cuentas, desdeCache: false };
 }
 
 // ────────────────────────────── cuentas ──────────────────────────────
 
-function cuentaContingenciaPorDefecto(env: Env): string {
-  return env.ALEGRA_CUENTA_CONTINGENCIA ?? CUENTA_CONTINGENCIA_DEFAULT;
+function cuentaContingenciaPorDefecto(ctx: TenantContext): string {
+  return ctx.env.ALEGRA_CUENTA_CONTINGENCIA ?? CUENTA_CONTINGENCIA_DEFAULT;
 }
 
-function cuentaProvisionPorDefecto(env: Env): string {
-  return env.ALEGRA_CUENTA_CONTINGENCIA_CREDITO ?? CUENTA_PROVISION_CREDITO_DEFAULT;
+function cuentaProvisionPorDefecto(ctx: TenantContext): string {
+  return ctx.env.ALEGRA_CUENTA_CONTINGENCIA_CREDITO ?? CUENTA_PROVISION_CREDITO_DEFAULT;
 }
 
 /** Sustitución de una cuenta inexistente en Alegra (queda accionable en events). */
@@ -263,7 +266,7 @@ export interface SustitucionCuenta {
  * y se deja un warning accionable en `events`.
  */
 export function validarCuentas(
-  env: Env,
+  ctx: TenantContext,
   asientos: AsientoContable[],
   cuentas: AlegraCuenta[]
 ): { asientos: AsientoContable[]; sustituciones: SustitucionCuenta[] } {
@@ -281,7 +284,7 @@ export function validarCuentas(
         legal_audit_id: asiento.legal_audit_id,
         regla_id: asiento.regla_id,
         cuenta_esperada: asiento.cuenta_debito,
-        cuenta_usada: cuentaContingenciaPorDefecto(env),
+        cuenta_usada: cuentaContingenciaPorDefecto(ctx),
         lado: 'debito',
       });
     }
@@ -290,15 +293,15 @@ export function validarCuentas(
         legal_audit_id: asiento.legal_audit_id,
         regla_id: asiento.regla_id,
         cuenta_esperada: asiento.cuenta_credito,
-        cuenta_usada: cuentaProvisionPorDefecto(env),
+        cuenta_usada: cuentaProvisionPorDefecto(ctx),
         lado: 'credito',
       });
     }
 
     return {
       ...asiento,
-      cuenta_debito: faltaDebito ? cuentaContingenciaPorDefecto(env) : asiento.cuenta_debito,
-      cuenta_credito: faltaCredito ? cuentaProvisionPorDefecto(env) : asiento.cuenta_credito,
+      cuenta_debito: faltaDebito ? cuentaContingenciaPorDefecto(ctx) : asiento.cuenta_debito,
+      cuenta_credito: faltaCredito ? cuentaProvisionPorDefecto(ctx) : asiento.cuenta_credito,
     };
   });
 
@@ -313,13 +316,13 @@ export function validarCuentas(
  * otro (timeout, red), se devuelve `null` y el flujo reintenta el corte entero.
  */
 export function reemplazoPorCuentaInvalida(
-  env: Env,
+  ctx: TenantContext,
   asiento: AsientoContable,
   mensajeError: string
 ): AsientoContable | null {
   if (!/cuenta|account|chart/i.test(mensajeError)) return null;
-  const debe = cuentaContingenciaPorDefecto(env);
-  const haber = cuentaProvisionPorDefecto(env);
+  const debe = cuentaContingenciaPorDefecto(ctx);
+  const haber = cuentaProvisionPorDefecto(ctx);
   if (asiento.cuenta_debito === debe && asiento.cuenta_credito === haber) return null;
   return { ...asiento, cuenta_debito: debe, cuenta_credito: haber };
 }
@@ -329,7 +332,7 @@ export interface SendOptions {
   intento?: number;
   /** Cliente MCP inyectable (pruebas). */
   cliente?: AlegraApi;
-  /** Clave en R2 del payload (por defecto `contabilidad/{fecha}.json`). */
+  /** Clave en R2 del payload (por defecto `contabilidad/{tenantId}/{fecha}.json`). */
   payloadR2Key?: string;
 }
 
@@ -339,15 +342,15 @@ export interface SendOptions {
  */
 export async function sendToAlegra(
   payload: AccountingPayload,
-  env: Env,
+  ctx: TenantContext,
   opciones: SendOptions = {}
 ): Promise<SendResult> {
   const intento = opciones.intento ?? 1;
-  const payloadR2Key = opciones.payloadR2Key ?? claveR2(payload.fecha_corte);
+  const payloadR2Key = opciones.payloadR2Key ?? claveR2(ctx, payload.fecha_corte);
 
   // ── Fail-closed: ledger roto → no se manda nada ──
   if (!payload.ledger_integrity.verificado) {
-    await logEvent(env, 'alegra_sync', {
+    await logEvent(ctx, 'alegra_sync', {
       payload: {
         fecha_corte: payload.fecha_corte,
         idempotency_key: payload.idempotency_key,
@@ -357,14 +360,15 @@ export async function sendToAlegra(
     });
     logger.error('No se envía a Alegra: el ledger no verifica', {
       fecha_corte: payload.fecha_corte,
+      tenantId: ctx.tenantId,
     });
     return { ok: false, estado: 'skipped', motivo: 'ledger_broken', asientosEnviados: 0 };
   }
 
   // ── Idempotencia ──
-  const existente = await leerSync(env, payload.idempotency_key);
+  const existente = await leerSync(ctx, payload.idempotency_key);
   if (existente && (existente.status === 'sent' || existente.status === 'reconciled')) {
-    await logEvent(env, 'alegra_sync', {
+    await logEvent(ctx, 'alegra_sync', {
       payload: {
         fecha_corte: payload.fecha_corte,
         idempotency_key: payload.idempotency_key,
@@ -374,6 +378,7 @@ export async function sendToAlegra(
     });
     logger.info('Asiento ya enviado a Alegra: se omite', {
       fecha_corte: payload.fecha_corte,
+      tenantId: ctx.tenantId,
       idempotency_key: payload.idempotency_key,
     });
     return {
@@ -386,14 +391,14 @@ export async function sendToAlegra(
   }
   // ── Fase 1: el corte queda registrado como pendiente ANTES de llamar a Alegra ──
   const syncId = existente?.id ?? newId('alg');
-  await env.DB.prepare(SQL_UPSERT_SYNC)
-    .bind(syncId, payload.fecha_corte, payload.idempotency_key, payloadR2Key)
+  await ctx.env.DB.prepare(SQL_UPSERT_SYNC)
+    .bind(syncId, ctx.tenantId, payload.fecha_corte, payload.idempotency_key, payloadR2Key)
     .run();
 
   // ── Corte sin asientos: se reconcilia sin tocar Alegra ──
   if (payload.asientos.length === 0) {
-    await actualizarSync(env, payload.idempotency_key, 'reconciled', null, null);
-    await logEvent(env, 'alegra_sync', {
+    await actualizarSync(ctx, payload.idempotency_key, 'reconciled', null, null);
+    await logEvent(ctx, 'alegra_sync', {
       payload: {
         fecha_corte: payload.fecha_corte,
         idempotency_key: payload.idempotency_key,
@@ -404,14 +409,14 @@ export async function sendToAlegra(
     return { ok: true, estado: 'reconciled', asientosEnviados: 0 };
   }
 
-  const cliente = opciones.cliente ?? crearClienteAlegra(env);
+  const cliente = opciones.cliente ?? crearClienteAlegra(ctx.env);
   const mappings: { legal_audit_id: string; alegra_journal_id: string }[] = [];
 
   try {
     // El catálogo de cuentas se cachea 24 h: una llamada al día, no una por asiento.
-    const { cuentas } = await listarCuentasConCache(env, cliente, payload.fecha_corte);
+    const { cuentas } = await listarCuentasConCache(ctx, cliente, payload.fecha_corte);
     if (cuentas.length === 0) {
-      await logEvent(env, 'alegra_sync', {
+      await logEvent(ctx, 'alegra_sync', {
         payload: {
           fecha_corte: payload.fecha_corte,
           status: 'warning',
@@ -420,9 +425,9 @@ export async function sendToAlegra(
       });
     }
 
-    const { asientos, sustituciones } = validarCuentas(env, payload.asientos, cuentas);
+    const { asientos, sustituciones } = validarCuentas(ctx, payload.asientos, cuentas);
     for (const sustitucion of sustituciones) {
-      await logEvent(env, 'alegra_account_fallback', {
+      await logEvent(ctx, 'alegra_account_fallback', {
         payload: {
           fecha_corte: payload.fecha_corte,
           legal_audit_id: sustitucion.legal_audit_id,
@@ -438,7 +443,7 @@ export async function sendToAlegra(
 
     let primerJournalId: string | null = null;
     for (const [indice, asiento] of asientos.entries()) {
-      const yaCreado = await journalIdDeLinea(env, payload.idempotency_key, asiento.legal_audit_id);
+      const yaCreado = await journalIdDeLinea(ctx, payload.idempotency_key, asiento.legal_audit_id);
       if (yaCreado) {
         mappings.push({ legal_audit_id: asiento.legal_audit_id, alegra_journal_id: yaCreado });
         primerJournalId = primerJournalId ?? yaCreado;
@@ -451,15 +456,15 @@ export async function sendToAlegra(
       } catch (error) {
         // Alegra rechazó la cuenta: se reintenta con la cuenta de contingencia legal.
         const mensaje = error instanceof Error ? error.message : String(error);
-        const reemplazo = reemplazoPorCuentaInvalida(env, asiento, mensaje);
+        const reemplazo = reemplazoPorCuentaInvalida(ctx, asiento, mensaje);
         if (!reemplazo) throw error;
-        await logEvent(env, 'alegra_account_fallback', {
+        await logEvent(ctx, 'alegra_account_fallback', {
           payload: {
             fecha_corte: payload.fecha_corte,
             legal_audit_id: asiento.legal_audit_id,
             regla_id: asiento.regla_id,
             cuenta_esperada: asiento.cuenta_debito,
-            cuenta_usada: cuentaContingenciaPorDefecto(env),
+            cuenta_usada: cuentaContingenciaPorDefecto(ctx),
             motivo: 'alegra_rechazo_cuenta',
             accion_requerida: 'Verificar catálogo de cuentas en Alegra',
             error: mensaje,
@@ -471,7 +476,7 @@ export async function sendToAlegra(
       // Fase 2a: la línea se escribe ANTES de actualizar `alegra_sync`.
       // Si el UPDATE falla, la reconciliación encuentra la línea y no reasienta.
       await registrarLinea(
-        env,
+        ctx,
         syncId,
         indice + 1,
         payload.idempotency_key,
@@ -482,8 +487,8 @@ export async function sendToAlegra(
       primerJournalId = primerJournalId ?? creado.id;
     }
 
-    await actualizarSync(env, payload.idempotency_key, 'sent', primerJournalId, null);
-    await logEvent(env, 'alegra_sync', {
+    await actualizarSync(ctx, payload.idempotency_key, 'sent', primerJournalId, null);
+    await logEvent(ctx, 'alegra_sync', {
       payload: {
         fecha_corte: payload.fecha_corte,
         idempotency_key: payload.idempotency_key,
@@ -509,15 +514,16 @@ export async function sendToAlegra(
 
     // Si D1 tampoco responde, el error original no debe quedar tapado.
     try {
-      await actualizarSync(env, payload.idempotency_key, 'failed', null, mensaje);
+      await actualizarSync(ctx, payload.idempotency_key, 'failed', null, mensaje);
     } catch (errorSync) {
       logger.error('No se pudo marcar el corte como fallido', {
         fecha_corte: payload.fecha_corte,
+        tenantId: ctx.tenantId,
         error: errorSync instanceof Error ? errorSync.message : String(errorSync),
       });
     }
 
-    await logEvent(env, 'alegra_sync', {
+    await logEvent(ctx, 'alegra_sync', {
       payload: {
         fecha_corte: payload.fecha_corte,
         idempotency_key: payload.idempotency_key,
@@ -531,13 +537,14 @@ export async function sendToAlegra(
     });
     logger.error('Falló el envío a Alegra', {
       fecha_corte: payload.fecha_corte,
+      tenantId: ctx.tenantId,
       intento,
       error: mensaje,
     });
 
     const reintentoProgramado = definitivo
       ? false
-      : await programarReintento(env, payload, intento);
+      : await programarReintento(ctx, payload, intento);
     return {
       ok: false,
       estado: 'failed',
@@ -553,14 +560,14 @@ export async function sendToAlegra(
  * usando la cola existente: el mensaje vuelve al consumidor con el delay.
  */
 export async function programarReintento(
-  env: Env,
+  ctx: TenantContext,
   payload: AccountingPayload,
   intento: number
 ): Promise<boolean> {
   const indice = Math.min(intento - 1, BACKOFF_REINTENTOS_SEG.length - 1);
   const delaySeconds = BACKOFF_REINTENTOS_SEG[indice] ?? BACKOFF_REINTENTOS_SEG[0];
   try {
-    await env.COBRANZA_QUEUE.send(
+    await ctx.env.COBRANZA_QUEUE.send(
       {
         type: 'contabilidad.reintento',
         fechaCorte: payload.fecha_corte,
@@ -572,12 +579,13 @@ export async function programarReintento(
     );
     logger.warn('Reintento de Alegra programado', {
       fecha_corte: payload.fecha_corte,
+      tenantId: ctx.tenantId,
       intento: intento + 1,
       delaySeconds,
     });
     return true;
   } catch (error) {
-    await logEvent(env, 'alegra_sync', {
+    await logEvent(ctx, 'alegra_sync', {
       payload: {
         fecha_corte: payload.fecha_corte,
         status: 'failed',
@@ -595,18 +603,18 @@ export async function programarReintento(
  * El payload es idéntico ⇒ mismo `idempotency_key` ⇒ no se duplican asientos.
  */
 export async function reintentarEnvioAlegra(
-  env: Env,
+  ctx: TenantContext,
   fecha: string,
   intento: number
 ): Promise<SendResult> {
-  const payload = await leerPayloadDesdeR2(env, fecha);
+  const payload = await leerPayloadDesdeR2(ctx, fecha);
   if (!payload) {
-    await logEvent(env, 'alegra_sync', {
+    await logEvent(ctx, 'alegra_sync', {
       payload: { fecha_corte: fecha, status: 'failed', error: 'payload no encontrado en R2' },
     });
     return { ok: false, estado: 'failed', motivo: 'payload_no_encontrado', asientosEnviados: 0 };
   }
-  return sendToAlegra(payload, env, { intento });
+  return sendToAlegra(payload, ctx, { intento });
 }
 
 /** Reexporta el error de Alegra para que el consumidor lo distinga. */

@@ -59,11 +59,10 @@ function diasDeRetraso(dueDate: string): number {
  * y registra el resultado. Respeta opt-in, dedupe 24h, ventana legal y throttling.
  */
 export async function processCase(
-  env: Env,
-  msg: CobranzaQueueMessage,
-  ctx: TenantContext
+  ctx: TenantContext,
+  msg: CobranzaQueueMessage
 ): Promise<void> {
-  const collectionCase = await getCase(env, msg.caseId);
+  const collectionCase = await getCase(ctx, msg.caseId);
   if (!collectionCase) {
     logger.warn('Caso no encontrado', { caseId: msg.caseId });
     return;
@@ -73,20 +72,20 @@ export async function processCase(
     return;
   }
 
-  const client = await getClient(env, collectionCase.client_id);
+  const client = await getClient(ctx, collectionCase.client_id);
   if (!client) {
     logger.warn('Cliente no encontrado', { clientId: collectionCase.client_id });
     return;
   }
 
   if (client.do_not_disturb) {
-    await updateCase(env, collectionCase.id, { status: 'human' });
-    await logEvent(env, 'cobranza.dnd', { caseId: collectionCase.id, clientId: client.id });
+    await updateCase(ctx, collectionCase.id, { status: 'human' });
+    await logEvent(ctx, 'cobranza.dnd', { caseId: collectionCase.id, clientId: client.id });
     return;
   }
 
-  if (await hasOpenPromise(env, client.id)) {
-    await updateCase(env, collectionCase.id, { status: 'promised' });
+  if (await hasOpenPromise(ctx, client.id)) {
+    await updateCase(ctx, collectionCase.id, { status: 'promised' });
     return;
   }
 
@@ -98,8 +97,8 @@ export async function processCase(
 
   const channels = resolveChannels(client, collectionCase.score_band);
   if (channels.length === 0) {
-    await updateCase(env, collectionCase.id, { status: 'failed' });
-    await logEvent(env, 'cobranza.sin_canal', {
+    await updateCase(ctx, collectionCase.id, { status: 'failed' });
+    await logEvent(ctx, 'cobranza.sin_canal', {
       caseId: collectionCase.id,
       clientId: client.id,
       payload: { band: collectionCase.score_band },
@@ -107,14 +106,14 @@ export async function processCase(
     return;
   }
 
-  const locked = await acquireClientLock(env, client.id);
+  const locked = await acquireClientLock(ctx.env, client.id);
   if (!locked) {
     throw new DeferredError('Cliente ya tiene un envío en curso', 60);
   }
 
   try {
     const state: ChannelState = readChannelState(collectionCase.channel_state);
-    const debts = await listPendingDebts(env, client.id);
+    const debts = await listPendingDebts(ctx, client.id);
     const dueDate = debts[0]?.due_date ?? collectionCase.case_date;
     const amountCents =
       debts.reduce((sum, debt) => sum + debt.amount_cents, 0) || collectionCase.amount_cents;
@@ -123,9 +122,9 @@ export async function processCase(
     let sent = false;
 
     const legal = configLegal(ctx);
-    const contrato = await getContractByClient(env, client.id);
-    const contactos24h = await countContactos24h(env, client.id);
-    const logsReales = await countSentForCase(env, collectionCase.id);
+    const contrato = await getContractByClient(ctx, client.id);
+    const contactos24h = await countContactos24h(ctx, client.id);
+    const logsReales = await countSentForCase(ctx, collectionCase.id);
     const credenciales = mergeChannelCredentials(ctx.channels);
 
     for (const channel of channels) {
@@ -188,7 +187,7 @@ export async function processCase(
       });
 
       if (veredicto.violaciones.length > 0) {
-        await registrarViolaciones(env, veredicto.violaciones, {
+        await registrarViolaciones(ctx, veredicto.violaciones, {
           caseId: collectionCase.id,
           clientId: client.id,
           canal: channel,
@@ -197,13 +196,13 @@ export async function processCase(
 
       if (!veredicto.permitido) {
         // Fail-closed: no se lauda el mensaje por otro canal, el caso va a humano.
-        await env.KV.delete(dedupeKey);
+        await ctx.env.KV.delete(dedupeKey);
         state[channel] = `bloqueado:${veredicto.bloqueadoPor}`;
-        await updateCase(env, collectionCase.id, {
+        await updateCase(ctx, collectionCase.id, {
           status: 'human',
           channelState: state as unknown as Record<string, unknown>,
         });
-        await logEvent(env, 'cobranza.bloqueado_legal', {
+        await logEvent(ctx, 'cobranza.bloqueado_legal', {
           caseId: collectionCase.id,
           clientId: client.id,
           payload: {
@@ -219,7 +218,7 @@ export async function processCase(
         return;
       }
 
-      const result = await adapters[channel].send(env, {
+      const result = await adapters[channel].send(ctx.env, {
         to: destination,
         body: veredicto.mensaje,
         subject: drafted.subject,
@@ -231,7 +230,7 @@ export async function processCase(
         meta: { source: 'cobranza', ai: drafted.source },
       });
 
-      await recordMessage(env, {
+      await recordMessage(ctx, {
         caseId: collectionCase.id,
         clientId: client.id,
         channel,
@@ -253,11 +252,11 @@ export async function processCase(
         state.attempts = (state.attempts ?? 0) + 1;
         sent = true;
         if (veredicto.requiereHumano) {
-          await updateCase(env, collectionCase.id, {
+          await updateCase(ctx, collectionCase.id, {
             status: 'human',
             channelState: state as unknown as Record<string, unknown>,
           });
-          await logEvent(env, 'cobranza.escalado_legal', {
+          await logEvent(ctx, 'cobranza.escalado_legal', {
             caseId: collectionCase.id,
             clientId: client.id,
             payload: { canal: channel },
@@ -267,28 +266,28 @@ export async function processCase(
       }
 
       state[channel] = 'failed';
-      await env.KV.delete(dedupeKey);
-      await logEvent(env, 'cobranza.envio_fallido', {
+      await ctx.env.KV.delete(dedupeKey);
+      await logEvent(ctx, 'cobranza.envio_fallido', {
         caseId: collectionCase.id,
         clientId: client.id,
         payload: { channel, error: result.error },
       });
     }
 
-    await updateCase(env, collectionCase.id, {
+    await updateCase(ctx, collectionCase.id, {
       status: sent ? 'sent' : 'failed',
       channelState: state as unknown as Record<string, unknown>,
     });
 
     if (sent) {
-      await logEvent(env, 'cobranza.enviado', {
+      await logEvent(ctx, 'cobranza.enviado', {
         caseId: collectionCase.id,
         clientId: client.id,
         payload: { state },
       });
     }
   } finally {
-    await releaseClientLock(env, client.id);
+    await releaseClientLock(ctx.env, client.id);
   }
 }
 
@@ -315,7 +314,8 @@ export async function consumeBatch(
     // ── Módulo contable: reintento de Alegra ──
     if (body && body.type === 'contabilidad.reintento') {
       try {
-        const resultado = await reintentarEnvioAlegra(env, body.fechaCorte, body.attempt);
+        const ctx = await contextoPara(body.tenantId);
+        const resultado = await reintentarEnvioAlegra(ctx, body.fechaCorte, body.attempt);
         if (resultado.ok) {
           message.ack();
           continue;
@@ -338,7 +338,7 @@ export async function consumeBatch(
 
     try {
       const ctx = await contextoPara(body.tenantId);
-      await processCase(env, body as CobranzaQueueMessage, ctx);
+      await processCase(ctx, body as CobranzaQueueMessage);
       message.ack();
     } catch (error) {
       if (error instanceof DeferredError) {

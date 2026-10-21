@@ -58,7 +58,7 @@ ingest.post('/ingest/csv', async (c) => {
   if (!resultado.ok) return resultado.response;
   const ctx = resultado.ctx;
 
-  const result = await ingestRows(c.env, rows, {
+  const result = await ingestRows(ctx, rows, {
     source: 'csv',
     fileName,
     tz: ctx.config.tz,

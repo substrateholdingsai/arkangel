@@ -1,9 +1,11 @@
 import type { Env } from '../types/env';
+import type { TenantContext } from '../tenancy/types';
 import type { ContratoLegal } from '../legal/tipos';
 import { newId, nowIso } from './db';
 
 interface ContractRow {
   id: string;
+  tenant_id: string;
   client_id: string;
   monto_pactado_cents: number;
   tasa_pct: number | null;
@@ -30,18 +32,19 @@ function toContrato(row: ContractRow): ContratoLegal {
 
 /** Contrato vigente del cliente (el más reciente). Base de las reglas 8.1, 3.2 y 4.2. */
 export async function getContractByClient(
-  env: Env,
+  ctx: TenantContext,
   clientId: string
 ): Promise<ContratoLegal | null> {
-  const row = await env.DB.prepare(
-    'SELECT * FROM contracts WHERE client_id = ? ORDER BY updated_at DESC LIMIT 1'
+  const row = await ctx.env.DB.prepare(
+    'SELECT * FROM contracts WHERE tenant_id = ? AND client_id = ? ORDER BY updated_at DESC LIMIT 1'
   )
-    .bind(clientId)
+    .bind(ctx.tenantId, clientId)
     .first<ContractRow>();
   return row ? toContrato(row) : null;
 }
 
 export interface ContractInput {
+  tenantId: string;
   clientId: string;
   montoPactadoCents: number;
   tasaPct?: number | null;
@@ -50,16 +53,17 @@ export interface ContractInput {
   condusef?: string | null;
 }
 
-export async function upsertContract(env: Env, input: ContractInput): Promise<ContratoLegal> {
+export async function upsertContract(ctx: TenantContext, input: ContractInput): Promise<ContratoLegal> {
   const id = newId('con');
   const timestamp = nowIso();
 
-  await env.DB.prepare(
-    `INSERT INTO contracts (id, client_id, monto_pactado_cents, tasa_pct, clabe, nombre_legal, condusef, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  await ctx.env.DB.prepare(
+    `INSERT INTO contracts (id, tenant_id, client_id, monto_pactado_cents, tasa_pct, clabe, nombre_legal, condusef, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
+      ctx.tenantId,
       input.clientId,
       input.montoPactadoCents,
       input.tasaPct ?? null,
@@ -84,9 +88,9 @@ export async function upsertContract(env: Env, input: ContractInput): Promise<Co
   };
 }
 
-export async function listContracts(env: Env, limit = 100): Promise<ContratoLegal[]> {
-  const result = await env.DB.prepare('SELECT * FROM contracts ORDER BY updated_at DESC LIMIT ?')
-    .bind(limit)
+export async function listContracts(ctx: TenantContext, limit = 100): Promise<ContratoLegal[]> {
+  const result = await ctx.env.DB.prepare('SELECT * FROM contracts WHERE tenant_id = ? ORDER BY updated_at DESC LIMIT ?')
+    .bind(ctx.tenantId, limit)
     .all<ContractRow>();
   return (result.results ?? []).map(toContrato);
 }

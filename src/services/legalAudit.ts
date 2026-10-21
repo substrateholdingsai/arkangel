@@ -1,9 +1,11 @@
 import type { Env } from '../types/env';
+import type { TenantContext } from '../tenancy/types';
 import type { Violacion } from '../legal/tipos';
 import { newId, nowIso } from './db';
 
 export interface AuditoriaLegal {
   id: string;
+  tenant_id: string;
   regla_id: string;
   seccion: string | null;
   conducta: string | null;
@@ -27,16 +29,17 @@ export interface EntradaAuditoria {
 
 /** Bitácora de cumplimiento: cada violation queda con su base legal. */
 export async function registrarViolacion(
-  env: Env,
+  ctx: TenantContext,
   violacion: Violacion,
   entrada: EntradaAuditoria = {}
 ): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO legal_audit (id, regla_id, seccion, conducta, ley, articulo, castigo, accion, detalle, evidencia, case_id, client_id, canal, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  await ctx.env.DB.prepare(
+    `INSERT INTO legal_audit (id, tenant_id, regla_id, seccion, conducta, ley, articulo, castigo, accion, detalle, evidencia, case_id, client_id, canal, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       newId('leg'),
+      ctx.tenantId,
       violacion.reglaId,
       violacion.seccion,
       violacion.conducta,
@@ -55,12 +58,12 @@ export async function registrarViolacion(
 }
 
 export async function registrarViolaciones(
-  env: Env,
+  ctx: TenantContext,
   violaciones: Violacion[],
   entrada: EntradaAuditoria = {}
 ): Promise<void> {
   for (const violacion of violaciones) {
-    await registrarViolacion(env, violacion, entrada);
+    await registrarViolacion(ctx, violacion, entrada);
   }
 }
 
@@ -72,11 +75,11 @@ export interface ResumenCumplimiento {
   porRegla: Record<string, number>;
 }
 
-export async function resumenCumplimiento(env: Env, date: string): Promise<ResumenCumplimiento> {
-  const rows = await env.DB.prepare(
-    'SELECT regla_id, accion, COUNT(*) AS total FROM legal_audit WHERE created_at LIKE ? GROUP BY regla_id, accion'
+export async function resumenCumplimiento(ctx: TenantContext, date: string): Promise<ResumenCumplimiento> {
+  const rows = await ctx.env.DB.prepare(
+    'SELECT regla_id, accion, COUNT(*) AS total FROM legal_audit WHERE tenant_id = ? AND created_at LIKE ? GROUP BY regla_id, accion'
   )
-    .bind(`${date}%`)
+    .bind(ctx.tenantId, `${date}%`)
     .all<{ regla_id: string; accion: string; total: number }>();
 
   const porRegla: Record<string, number> = {};
@@ -97,9 +100,9 @@ export async function resumenCumplimiento(env: Env, date: string): Promise<Resum
   return { total, bloqueos, saneos, escalados, porRegla };
 }
 
-export async function listAudit(env: Env, limit = 50): Promise<AuditoriaLegal[]> {
-  const result = await env.DB.prepare('SELECT * FROM legal_audit ORDER BY created_at DESC LIMIT ?')
-    .bind(limit)
+export async function listAudit(ctx: TenantContext, limit = 50): Promise<AuditoriaLegal[]> {
+  const result = await ctx.env.DB.prepare('SELECT * FROM legal_audit WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?')
+    .bind(ctx.tenantId, limit)
     .all<AuditoriaLegal>();
   return result.results ?? [];
 }

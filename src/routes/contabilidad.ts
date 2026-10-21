@@ -8,9 +8,11 @@
 
 import { Hono } from 'hono';
 import type { Env } from '../types/env';
+import type { TenantContext } from '../tenancy/types';
 import { diaPrevioIso } from '../contabilidad/buildPayload';
 import { leerPayloadDesdeR2, leerUltimoPayload } from '../contabilidad/sendToAlegra';
 import { exigePrincipalConScope } from './guard';
+import { tenantContextDeRequest } from './tenant';
 
 export const contabilidad = new Hono<{ Bindings: Env }>();
 
@@ -25,7 +27,10 @@ contabilidad.get('/contabilidad/resumen', async (c) => {
   const guardia = await exigePrincipalConScope(c, 'accounting:read');
   if (!guardia.ok) return guardia.response;
 
-  const timeZone = c.env.TZ ?? 'America/Mexico_City';
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+
   const pedida = c.req.query('fecha');
 
   if (pedida && !/^\d{4}-\d{2}-\d{2}$/.test(pedida)) {
@@ -35,12 +40,12 @@ contabilidad.get('/contabilidad/resumen', async (c) => {
   // Sin fecha: se devuelve el último corte publicado (el cron publica con un
   // día de rezago, así que "ayer" todavía no existe como payload).
   if (!pedida) {
-    const ultimo = await leerUltimoPayload(c.env);
+    const ultimo = await leerUltimoPayload(ctx);
     if (!ultimo) {
       return c.json(
         {
           error: 'sin_payload',
-          fecha_corte: diaPrevioIso(timeZone),
+          fecha_corte: diaPrevioIso(ctx.config.tz),
           detalle: 'el cron contable todavía no publicó ningún corte',
         },
         404
@@ -49,7 +54,7 @@ contabilidad.get('/contabilidad/resumen', async (c) => {
     return c.json({ ok: true, ...ultimo.payload });
   }
 
-  const payload = await leerPayloadDesdeR2(c.env, pedida);
+  const payload = await leerPayloadDesdeR2(ctx, pedida);
   if (!payload) {
     return c.json(
       {
