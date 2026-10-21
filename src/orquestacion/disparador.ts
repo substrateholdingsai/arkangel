@@ -1,5 +1,4 @@
 import { logger } from '../lib/logger';
-import { IdempotencyKey } from '../lib/idempotencia';
 import type { Env } from '../types/env';
 import type { CollectionCase } from '../types/cobranza';
 import { listReadyCases } from '../services/casos';
@@ -15,7 +14,8 @@ export interface DispararResult {
 export async function enqueueCases(
   env: Env,
   cases: CollectionCase[],
-  channel?: string
+  channel?: string,
+  tenantId?: string
 ): Promise<DispararResult> {
   const result: DispararResult = { queued: 0, skipped: 0, caseIds: [] };
 
@@ -32,6 +32,7 @@ export async function enqueueCases(
       channel,
       attempt: 0,
       enqueuedAt: Date.now(),
+      ...(tenantId ? { tenantId } : {}),
     });
 
     result.queued++;
@@ -44,12 +45,11 @@ export async function enqueueCases(
 }
 
 /** Dispara todos los casos listos del día. Es el botón verde del dashboard. */
-export async function dispararHoy(env: Env, date: string): Promise<DispararResult> {
+export async function dispararHoy(
+  env: Env,
+  date: string,
+  tenantId?: string
+): Promise<DispararResult> {
   const cases = await listReadyCases(env, date);
-  return enqueueCases(env, cases);
-}
-
-/** Llave de idempotencia por caso/canal (expuesta para los tests). */
-export function caseChannelKey(caseId: string, channel: string): string {
-  return IdempotencyKey.forCase(caseId, channel);
+  return enqueueCases(env, cases, undefined, tenantId);
 }

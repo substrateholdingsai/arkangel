@@ -50,8 +50,11 @@ export function localHour(date: Date, timeZone = 'America/Mexico_City'): number 
 }
 
 /**
- * Ventana legal de contacto: 08:00–20:00 hora CDMX por defecto (NOM-184-SCFI-2012,
+ * Ventana legal de contacto: 08:00–22:00 hora CDMX por defecto (NOM-184-SCFI-2012,
  * numeral 5.1.2). Fuera de la ventana se difiere el envío (no se manda de madrugada).
+ *
+ * La zona horaria es la del tenant (`ctx.config.tz`), no una constante: el
+ * orquestador y el motor legal tienen que discrepar sobre la misma ventana.
  */
 export function isWithinSendWindow(
   now: Date,

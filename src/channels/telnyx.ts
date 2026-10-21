@@ -19,6 +19,7 @@ interface TelnyxPayload {
   text?: string;
   id?: string;
   status?: string;
+  messaging_profile_id?: string;
   media?: { url?: string }[];
 }
 
@@ -53,6 +54,7 @@ export function parseTelnyxPayload(payload: unknown): ParsedInbound {
     text: data.payload?.text ?? data.text ?? body.text,
     id: data.payload?.id ?? data.id ?? body.id,
     status: data.payload?.status ?? data.status ?? body.status,
+    messaging_profile_id: data.payload?.messaging_profile_id,
   };
 
   if (eventType === 'message.received' || (flat.text && flat.from)) {
@@ -64,7 +66,7 @@ export function parseTelnyxPayload(payload: unknown): ParsedInbound {
         to: flat.to,
         body: flat.text,
         receivedAt: new Date().toISOString(),
-        meta: { event_type: eventType },
+        meta: { event_type: eventType, messaging_profile_id: flat.messaging_profile_id },
       });
     }
   }
@@ -84,12 +86,17 @@ export function parseTelnyxPayload(payload: unknown): ParsedInbound {
 }
 
 export async function sendTelnyxSms(env: Env, params: SendParams): Promise<SendResult> {
-  if (!env.TELNYX_API_KEY || !env.TELNYX_MESSAGING_PROFILE_ID || !env.TELNYX_FROM_NUMBER) {
+  const apiKey = params.credentials?.sms?.api_key ?? env.TELNYX_API_KEY;
+  const messagingProfileId =
+    params.credentials?.sms?.messaging_profile_id ?? env.TELNYX_MESSAGING_PROFILE_ID;
+  const fromNumber = params.credentials?.sms?.from_number ?? env.TELNYX_FROM_NUMBER;
+
+  if (!apiKey || !messagingProfileId || !fromNumber) {
     logger.error('Credenciales de Telnyx incompletas', { caseId: params.caseId });
     return { ok: false, channel: 'sms', status: 'failed', error: 'Telnyx no configurado' };
   }
 
-  if (isDryRun(env)) {
+  if (isDryRun(env, params.dryRun)) {
     logger.info('DRY_RUN telnyx omitido', { to: params.to, caseId: params.caseId });
     return { ok: true, channel: 'sms', providerId: `dry_run_${params.caseId}`, status: 'sent' };
   }
@@ -100,12 +107,12 @@ export async function sendTelnyxSms(env: Env, params: SendParams): Promise<SendR
     errors?: Array<{ detail?: string }>;
   }>(url, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${env.TELNYX_API_KEY}` },
+    headers: { Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
-      from: env.TELNYX_FROM_NUMBER,
+      from: fromNumber,
       to: params.to,
       text: params.body,
-      messaging_profile_id: env.TELNYX_MESSAGING_PROFILE_ID,
+      messaging_profile_id: messagingProfileId,
       use_profile_webhooks: true,
       tags: ['arkangel', 'cobranza', `case-${params.caseId}`],
     }),

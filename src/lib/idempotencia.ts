@@ -1,6 +1,13 @@
 // Idempotency helpers backed by KV: evita disparos duplicados por caso/canal.
 
+import { tenantKvKey } from '../tenancy/keys';
+
 export class IdempotencyKey {
+  /**
+   * Llave **legacy** (sin tenant). Se sigue consultando durante la ventana de
+   * transición al namespace con prefijo de tenant, para no reiniciar las
+   * ventanas de dedupe ya reservadas.
+   */
   static forCase(caseId: string, channel: string): string {
     return `cobranza:${caseId}:${channel}`;
   }
@@ -9,12 +16,33 @@ export class IdempotencyKey {
     return `ingesta:${source}:${ref}`;
   }
 
+  /**
+   * Llave **legacy** (sin tenant). Se sigue consultando durante la ventana de
+   * transición al namespace con prefijo de tenant.
+   */
   static forInbound(provider: string, providerId: string): string {
     return `inbound:${provider}:${providerId}`;
   }
 
   static forDay(scope: string, day: string): string {
     return `dia:${scope}:${day}`;
+  }
+
+  // ── Variantes por tenant ──
+  // Mismo significado que las de arriba, pero con el prefijo `t:{tenantId}:`.
+  // El prefijo es lo único que impide que el dedupe de un cliente bloquee al
+  // otro, y que el throttle RPM de uno consuma el cupo del otro.
+
+  static forTenantCase(tenantId: string, caseId: string, channel: string): string {
+    return tenantKvKey(tenantId, 'cobranza', caseId, channel);
+  }
+
+  static forTenantInbound(tenantId: string, provider: string, providerId: string): string {
+    return tenantKvKey(tenantId, 'inbound', provider, providerId);
+  }
+
+  static forTenantRateLimit(tenantId: string, channel: string, minute: number): string {
+    return tenantKvKey(tenantId, 'rl', channel, String(minute));
   }
 
   static hash(input: string): string {
@@ -109,4 +137,28 @@ export async function reserveOnce(
     expirationTtl: Math.max(60, windowSeconds),
   });
   return true;
+}
+
+/**
+ * Reserva una llave teniendo en cuenta su equivalente **legacy** (sin tenant).
+ *
+ * Al migrar el namespace de claves de KV, las reservas hechas antes del
+ * despliegue siguen vivas (24 h para el envío, 7 días para el inbound) pero el
+ * código nuevo ya no las vería: la ventana de dedupe se reiniciaría y podría
+ * mandarse un segundo mensaje al mismo deudor. Esta función consulta la llave
+ * vieja antes de reservar la nueva.
+ *
+ * La llave legacy se consulta primero a propósito: si se reservara la nueva y
+ * después se encontrara la vieja, habría que liberar la nueva.
+ */
+export async function reserveOnceConLegado(
+  kv: KVNamespace,
+  key: string,
+  legacyKey: string,
+  windowSeconds: number,
+  payload?: unknown
+): Promise<boolean> {
+  const previo = await kv.get(legacyKey);
+  if (previo !== null) return false;
+  return reserveOnce(kv, key, windowSeconds, payload);
 }

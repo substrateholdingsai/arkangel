@@ -44,17 +44,20 @@ export function parseResendPayload(payload: unknown): ParsedInbound {
 }
 
 export async function sendResendEmail(env: Env, params: SendParams): Promise<SendResult> {
-  if (!env.RESEND_API_KEY) {
-    logger.error('RESEND_API_KEY no configurado', { caseId: params.caseId });
+  const apiKey = params.credentials?.email?.api_key ?? env.RESEND_API_KEY;
+  const fromEmail = params.credentials?.email?.from_email ?? env.RESEND_FROM_EMAIL;
+
+  if (!apiKey || !fromEmail) {
+    logger.error('Credenciales de Resend incompletas', { caseId: params.caseId });
     return {
       ok: false,
       channel: 'email',
       status: 'failed',
-      error: 'RESEND_API_KEY no configurado',
+      error: 'Resend no configurado',
     };
   }
 
-  if (isDryRun(env)) {
+  if (isDryRun(env, params.dryRun)) {
     logger.info('DRY_RUN resend omitido', { to: params.to, caseId: params.caseId });
     return { ok: true, channel: 'email', providerId: `dry_run_${params.caseId}`, status: 'sent' };
   }
@@ -62,9 +65,9 @@ export async function sendResendEmail(env: Env, params: SendParams): Promise<Sen
   const url = 'https://api.resend.com/emails';
   const response = await fetchJson<{ id?: string; message?: string }>(url, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${env.RESEND_API_KEY}` },
+    headers: { Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
-      from: env.RESEND_FROM_EMAIL,
+      from: fromEmail,
       to: [params.to],
       subject: params.subject ?? 'Recordatorio de pago',
       text: params.body,

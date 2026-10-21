@@ -4,6 +4,7 @@ import { dailyMetrics } from '../services/metricas';
 import { logEvent } from '../services/eventos';
 import { todayIso } from '../services/db';
 import { dispararHoy } from '../orquestacion/disparador';
+import { resolveTenantContext } from '../tenancy/context';
 
 /**
  * Cron de las 6:00 AM. Es la red de seguridad del flujo neandertal:
@@ -11,8 +12,13 @@ import { dispararHoy } from '../orquestacion/disparador';
  * dispara lo que haya quedado listo (si CRON_AUTO_FIRE está activo).
  */
 export async function handleScheduled(env: Env, scheduledTime: Date): Promise<void> {
-  const date = todayIso(env.TZ);
-  logger.info('Cron 6AM ejecutado', { date, scheduledTime: scheduledTime.toISOString() });
+  const ctx = await resolveTenantContext(env);
+  const date = todayIso(ctx.config.tz);
+  logger.info('Cron 6AM ejecutado', {
+    date,
+    scheduledTime: scheduledTime.toISOString(),
+    tenantId: ctx.tenantId,
+  });
 
   const metrics = await dailyMetrics(env, date);
 
@@ -22,13 +28,13 @@ export async function handleScheduled(env: Env, scheduledTime: Date): Promise<vo
     return;
   }
 
-  if ((env.CRON_AUTO_FIRE ?? 'false') !== 'true') {
+  if (!ctx.config.cronAutoFire) {
     await logEvent(env, 'cron.requiere_disparo_manual', {
       payload: { date, casos: metrics.total },
     });
     return;
   }
 
-  const result = await dispararHoy(env, date);
+  const result = await dispararHoy(env, date, ctx.tenantId);
   await logEvent(env, 'cron.disparo_automatico', { payload: { date, ...result } });
 }

@@ -529,10 +529,12 @@ export function TopNav({
   brand,
   subtitle,
   badges,
+  actions,
 }: {
   brand: ReactNode;
   subtitle?: ReactNode;
   badges?: ReactNode;
+  actions?: ReactNode;
 }) {
   return (
     <nav className="bg-white border-b border-slate-200 sticky top-0 z-50">
@@ -562,6 +564,7 @@ export function TopNav({
             </div>
           </div>
           {badges ? <div className="flex items-center gap-4 shrink-0">{badges}</div> : null}
+          {actions ? <div className="flex items-center gap-2 shrink-0">{actions}</div> : null}
         </div>
       </div>
     </nav>

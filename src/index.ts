@@ -19,9 +19,12 @@ const app = new Hono<{ Bindings: Env }>();
 app.use('/api/*', async (c, next) => {
   await next();
   c.header('Access-Control-Allow-Origin', c.req.header('origin') ?? '*');
+  // `Authorization` es lo que lleva la SPA (JWT de sesión de Clerk o token de
+  // máquina). `x-tenant-id` / `x-tenant-slug` sólo acotan el tenant: sin ellos
+  // el preflight del navegador bloquearía la petición.
   c.header(
     'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, x-admin-token, x-intake-token'
+    'Content-Type, Authorization, x-admin-token, x-intake-token, x-tenant-id, x-tenant-slug'
   );
   c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (c.req.method === 'OPTIONS') return c.body(null, 204);

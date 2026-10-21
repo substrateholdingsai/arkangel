@@ -7,6 +7,7 @@ import { logger } from '../lib/logger';
 import type { Env } from '../types/env';
 import { handleInbound } from '../orquestacion/inbound';
 import { updateMessageStatus } from '../services/mensajes';
+import { resolveTenantIdForInbound } from '../tenancy/context';
 
 export const webhooks = new Hono<{ Bindings: Env }>();
 
@@ -23,6 +24,9 @@ async function processParsed(
 
   for (const message of parsed.messages) {
     try {
+      // El tenant se deduce del enrutado del proveedor, no de lo que diga el
+      // cliente: es lo que evita que un deudor de la empresa A se atribuya a la B.
+      message.tenantId = await resolveTenantIdForInbound(env, message);
       await handleInbound(env, message);
     } catch (error) {
       logger.error('Error procesando inbound', {

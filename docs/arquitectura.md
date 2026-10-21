@@ -176,6 +176,13 @@ El panel consume `GET /api/v1/cases/today` (estado, último canal, intención de
 y próxima acción por caso) y `GET /api/v1/metrics/today` (KPIs + `por_estado`), y expone el
 mismo catálogo legal en `GET /api/v1/legal/catalogo`.
 
+El panel entra con **login de Clerk**: `ClerkProvider` (`frontend/src/main.tsx`) con
+`VITE_CLERK_PUBLISHABLE_KEY`; si la clave falta, la SPA muestra un aviso ("Clerk no está
+configurado") en vez de una pantalla en blanco. Sin sesión, `<Show when="signed-out">`
+muestra el login embebido (`<SignIn>`); con sesión, `<UserButton>` en la barra. La SPA
+manda `Authorization: Bearer <JWT de sesión>` —ya no `x-admin-token`— y traduce los
+errores: un 401 devuelve al login, un 403 muestra el mensaje de permiso.
+
 ## Modelo de datos (D1)
 
 | Tabla | Qué guarda | Claves |
@@ -194,9 +201,184 @@ mismo catálogo legal en `GET /api/v1/legal/catalogo`.
 | `alegra_journal_lines` | trazabilidad asiento por asiento (`legal_audit.id` → journal id) | `(idempotency_key, legal_audit_id)` |
 | `ledger_checkpoint` | cabeza de la cadena de hashes del ledger por día | `fecha_corte` |
 | `contract_cfdi` | UUID del CFDI timbrado por contrato (opcional) | `contract_id` |
+| `tenants` | catálogo de clientes: identidad legal, ventana, límites, modo de config | `id`; `slug` único; un solo `is_default`; `clerk_org_id` único |
+| `tenant_channels` | enrutado y credenciales por canal | `(channel, provider_account_id)` único |
+| `tenant_accounting_map` | mapa regla legal → cuentas, por tenant | `(tenant_id, regla_id)` |
+| `tenant_users` | **rol** del usuario de Clerk dentro del tenant | `(user_id, tenant_id)`; `role` con CHECK (`owner`/`compliance`/`operator`/`viewer`) |
+| `platform_users` | administradores de plataforma: alcance transversal, sin tenant | `user_id` |
 
 `opt_in` es **triestado**: `1` = acepta, `0` = rechaza explícito, `NULL` = desconocido
 (se permite el primer contacto a WhatsApp/SMS; el email exige `1`).
+
+## Multi-tenant
+
+Cada tenant es una **empresa de cobranza**: tiene su propia razón social, su
+registro ante CONDUSEF, sus dominios de pago, su ventana de contacto y sus
+límites. El Worker es la plataforma; el tenant es el cliente.
+
+### El contexto manda
+
+El aislamiento no se apoya en que cada consulta recuerde su `WHERE`: se apoya
+en que **el contexto travels explícito en la firma**.
+
+```ts
+export interface TenantContext {
+  env: Env;
+  tenantId: string;
+  tenant: Tenant;
+  config: TenantConfig;   // identidad legal + límites + operativa, ya resueltos
+  channels: TenantChannel[];
+  principal: Principal;   // quién pregunta y con qué scopes
+}
+```
+
+`configLegal(ctx)` —no `configLegal(env)`— es lo que garantiza que la razón
+social que se imprime al pie del mensaje (regla 1.1) sea la del tenant que
+emite. D1 no tiene RLS, así que el aislamiento depende de que **ningún
+servicio pueda tocar la base sin un contexto**.
+
+### De dónde sale la configuración
+
+| Modo | Fuente | Uso |
+|---|---|---|
+| `db` | la fila de `tenants` | modo normal. Fail-closed: lo que no está, no se inventa |
+| `platform_env` | las variables de entorno del Worker | puente de transición del tenant heredado; conserva el comportamiento anterior byte a byte |
+
+Los tenants nuevos nacen siempre en `db`: un tenant en `platform_env` heredaría
+la identidad legal de la plataforma, que es exactamente el defecto que el
+multi-tenant viene a corregir.
+
+La allowlist de dominios distingue dos casos que antes se confundían: la
+variable **no definida** usa el dominio por defecto; la variable **vacía**
+significa "ningún link permitido".
+
+### Identidad: Clerk
+
+Clerk es el proveedor de autenticación. La identidad humana de una petición sale
+de su sesión (`src/auth/clerk.ts`): `userId`, `sessionId` y la Organization
+activa. La sesión llega como cookie o como JWT en `Authorization: Bearer`.
+
+```
+sesión de Clerk
+   │
+   ├─ ¿el user_id está en `platform_users`?  → principal de plataforma (tenantId = null)
+   │
+   └─ Organization (`sesion.orgId`) → `tenants.clerk_org_id`
+          │
+          ├─ sin tenant mapeado   → 401 `org_sin_tenant`
+          └─ `tenant_users(user_id, tenant_id)` → el rol de D1
+                 │
+                 ├─ sin fila          → 401 `sin_acceso`
+                 └─ con fila          → principal de tenant
+```
+
+**El rol lo concede D1, no Clerk.** Estar en la Organization de Clerk **no
+basta**: `tenant_users` es la fuente de verdad del rol dentro del tenant y
+`platform_users` la de los administradores de plataforma (alcance transversal,
+sin tenant). Clerk aporta la identidad; Arkangel aporta el alcance.
+
+| Actor | Credencial | Alcance |
+|---|---|---|
+| Usuario de tenant | sesión de Clerk | su tenant y los scopes de su rol |
+| Administrador de plataforma | sesión de Clerk + fila en `platform_users` | todos los tenants |
+| Servicio de ingesta | `INTAKE_TOKEN` | `ingest:write`, acotado al tenant de la cabecera |
+| Servicio del agente | `GROK_BOT_TOKEN` | `agent:read`, `agent:decide`, `agent:dispatch`, `agent:audit`, acotado al tenant de la cabecera |
+| Break-glass | `ADMIN_TOKEN` | plataforma (todos los scopes) |
+
+Los tokens de máquina se conservan: el CRM (ingesta), el agente Grok y el
+`ADMIN_TOKEN` de emergencia. Los de servicio **nunca** obtienen alcance de
+plataforma: sin cabecera de tenant quedan sin acotar (`tenantId = null`) y es el
+contexto el que los acota al resolverlo.
+
+### Autorización: rol, scope y ruta
+
+| Nivel | Rol | Puede | No puede |
+|---|---|---|---|
+| 0 | `platform_admin` | crear/suspender tenants, impersonar (auditado), kill-switch global | — |
+| 1 | `owner` | todo dentro de su tenant | ver otros tenants |
+| 2 | `compliance` | config legal, exportar evidencia, liberar casos `human` | **disparar envíos**, gestionar usuarios |
+| 3 | `operator` | ver casos, disparar, registrar promesas | editar config legal, exportar evidencia |
+| 4 | `viewer` | sólo lectura | cualquier escritura |
+| 5 | servicios | `ingest:write`, `agent:*` | config, credenciales, evidencia |
+
+`compliance` y `operator` están separados a propósito: en un procedimiento ante
+CONDUSEF o PROFECO, quien edita la config legal no debería ser la misma persona
+que presiona "enviar".
+
+El rol es un **preset de scopes** (`src/auth/scopes.ts`); cada ruta declara el
+scope que necesita (`src/routes/guard.ts`):
+
+| Ruta | Scope |
+|---|---|
+| `GET /api/v1/metrics/today` | `metrics:read` |
+| `GET /api/v1/cases/today` · `GET /api/v1/cases/:id` | `cases:read` |
+| `POST /api/v1/disparar` | `cases:dispatch` |
+| `GET /api/v1/clients/:id` | `clients:read` |
+| `GET /api/v1/clients/:id/conversation` | `messages:read` |
+| `GET /api/v1/legal/catalogo` · `GET /api/v1/legal/hoy` | `legal:read` |
+| `GET /api/v1/contabilidad/resumen` | `accounting:read` |
+| `POST /api/v1/ingest/csv` | `ingest:write` |
+| `GET /api/v1/state` · `POST /api/v1/decide` · `/dispatch` · `/audit` | `agent:read` · `agent:decide` · `agent:dispatch` · `agent:audit` |
+
+Sin credencial → 401. Con credencial pero sin scope → 403
+`{"error":"forbidden","scope":"…"}`. La verificación de Clerk se hace **una sola
+vez** por petición: si se resolviera dos veces, el tenant con el que se opera
+podría no ser el del principal que la ruta ya autorizó.
+
+### Orden de resolución del principal
+
+`src/auth/guards.ts` decide quién es el actor y el orden es **sesión → token**:
+
+1. Si hay sesión de Clerk válida, esa manda. Si el usuario no llega a un
+   principal, la respuesta es 401 con el motivo (`unauthorized`, `org_sin_tenant`
+   o `sin_acceso`) y **no** se cae al token de máquina: reinterpretar la petición
+   convertiría "no autorizado" en "autorizado como otro actor".
+2. Si no hay sesión de Clerk (o Clerk no está configurado), se prueban los
+   tokens de máquina: `ADMIN_TOKEN` → plataforma, `INTAKE_TOKEN` → `service_ingest`,
+   `GROK_BOT_TOKEN` → `service_agent`.
+
+El **tenant se deduce de la credencial**, nunca de un header del cliente: un
+`X-Tenant-Id` confiado desde el navegador es suplantación trivial.
+
+> La cabecera `X-Tenant-Id` / `X-Tenant-Slug` **acota, nunca amplía**. Con sesión
+> de Clerk el tenant sale de la Organization del usuario: si la cabecera apunta a
+> otro tenant, la respuesta es 403 `tenant_mismatch` (fail-closed). Para la
+> plataforma y los tokens de servicio la cabecera sí decide el tenant, y en el
+> caso de la plataforma la operación queda auditada como impersonación (`events`
+> tipo `auth.impersonacion`). Un tenant inexistente responde 404
+> (`tenant_not_found`) y uno suspendido 403 (`tenant_suspended`): nunca la config
+> de otro.
+
+> **Límite real del aislamiento (Fase 4).** `exigeTenant` valida al principal
+> contra el tenant ya resuelto, y el mismatch de cabecera es fail-closed, pero las
+> tablas de negocio (`clients`, `debts`, `cases`, `messages`, `promises`,
+> `contracts`) **siguen sin `tenant_id`**: son globales. Por eso una lectura por
+> id (`/cases/:id`, `/clients/:id`) todavía puede tocar la fila de otro tenant.
+> El aislamiento completo llega con la Fase 4 (`tenant_id` en las tablas +
+> propagación de `ctx`); hasta entonces, un solo cliente.
+
+### Enrutado de canales
+
+| Dato | Dueño |
+|---|---|
+| token de la app de Meta, API key de Telnyx, key de Resend | **plataforma** |
+| `phone_number_id`, `messaging_profile_id`, dominio receptor | **tenant** |
+| credenciales de cuenta propia del cliente | **tenant** (opcional) |
+
+Lo que es del tenant es el *enrutado*: es lo que permite resolver de qué
+empresa es un mensaje entrante cuando un mismo teléfono deudor debe a dos
+empresas. Los webhooks lo usan: cada mensaje entrante se atribuye al tenant
+de `tenant_channels.provider_account_id` (`phone_number_id` de Meta,
+`messaging_profile_id` de Telnyx, dominio receptor de Resend) y nunca a un dato
+que mande el deudor.
+
+Las credenciales de canal se indexan por **canal** (`whatsapp`, `sms`, `email`),
+no por proveedor: es el mismo vocabulario que la tabla y su CHECK. Una clave mal
+escrita se descartaría en silencio y el envío saldría desde la cuenta de la
+plataforma, con la identidad equivocada ante el deudor. Una credencial vacía no
+puede sombrear la de la plataforma, y de varias filas del mismo canal gana la
+más reciente: mezclar el token de una con el número de otra es un rechazo
+opaco del proveedor.
 
 ## IA (Workers AI)
 
@@ -230,14 +412,24 @@ explícito y la cadena cae al siguiente canal.
 |---|---|---|
 | `UNIQUE (client_id, case_date)` | D1 | reprocesar el mismo CSV crea un caso, no dos |
 | `UNIQUE (curp)` | D1 | dos filas del CSV con el mismo cliente |
-| `KV cobranza:{case}:{canal}` (24 h) | KV | dos mensajes al mismo cliente por canal |
-| `KV inbound:{canal}:{providerId}` (7 d) | KV | webhook duplicado de Meta/Telnyx |
-| `KV rl:{canal}:{minuto}` | KV | más de `RATE_LIMIT_RPM` envíos por minuto |
+| `KV t:{tenant}:cobranza:{case}:{canal}` (24 h) | KV | dos mensajes al mismo cliente por canal |
+| `KV t:{tenant}:inbound:{canal}:{providerId}` (7 d) | KV | webhook duplicado de Meta/Telnyx |
+| `KV t:{tenant}:rl:{canal}:{minuto}` | KV | más de `RATE_LIMIT_RPM` envíos por minuto |
 | `CallLockDO` | Durable Object | dos envíos simultáneos al mismo cliente |
+
+Las claves de KV llevan el prefijo `t:{tenant}:` porque el dedupe y el throttle
+son **por cliente**: el límite de RPM pertenece a la cuenta del cliente, y con
+una clave compartida un tenant con volumen alto agotaba el cupo de los demás.
+
+> Los `UNIQUE` de D1 (`curp`, `client_id, case_date`) todavía son globales: con
+> dos empresas, el mismo deudor colisiona. Pasa a `UNIQUE (tenant_id, curp)` en
+> la Fase 4, junto con el `tenant_id` en el resto de las tablas.
 
 ## Legal y operativos
 
-- Ventana de contacto 9:00–20:00 CDMX; fuera de ventana el caso se difiere con `retry`.
+- Ventana de contacto 08:00–22:00 en la zona horaria del tenant (`tenants.tz`,
+  por defecto `America/Mexico_City`); fuera de ventana el caso se difiere con `retry`.
+  El orquestador y el motor legal evalúan la misma ventana con la misma zona.
 - Un mensaje por canal por caso cada 24 h.
 - Email solo con consentimiento explícito.
 - `do_not_disturb` apaga el contacto del cliente para siempre (hasta que un humano lo quite).

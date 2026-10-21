@@ -140,6 +140,22 @@ describe('regla 2.4 — horario prohibido', () => {
   it('permite a las 10:00 hora CDMX', () => {
     expect(evaluarMensaje(ctx()).permitido).toBe(true);
   });
+
+  it('la ventana se evalúa en la zona horaria del tenant', () => {
+    // 09:00 UTC = 03:00 CDMX (fuera) pero 03:00 UTC (dentro, de 8 a 22).
+    const instante = new Date('2026-10-20T09:00:00Z');
+
+    const enCdmx = evaluarMensaje(ctx({ ahora: instante, zonaHoraria: 'America/Mexico_City' }));
+    expect(enCdmx.permitido).toBe(false);
+
+    const enUtc = evaluarMensaje(ctx({ ahora: instante, zonaHoraria: 'UTC' }));
+    expect(enUtc.permitido).toBe(true);
+  });
+
+  it('sin zona declarada se usa la del marco normativo (CDMX)', () => {
+    const instante = new Date('2026-10-20T09:00:00Z');
+    expect(evaluarMensaje(ctx({ ahora: instante })).permitido).toBe(false);
+  });
 });
 
 describe('regla 3.1 — smishing', () => {

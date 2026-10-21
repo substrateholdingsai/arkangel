@@ -1,5 +1,4 @@
 import type { ChannelName } from '../channels/types';
-import { configLegal } from '../legal/config';
 import { logger } from '../lib/logger';
 import { formatDateMX, formatMXN } from '../lib/money';
 import type { ScoreBand } from '../lib/score';
@@ -77,6 +76,13 @@ export interface RedactParams {
   diasRetraso: number;
   band: ScoreBand;
   customMessage?: string;
+  /**
+   * Identidad legal del tenant que emite. La recibe el caller (que sí conoce el
+   * contexto) para que este módulo no dependa del tenant: sin razón social, el
+   * mensaje sale sin firma y el motor legal lo bloquea después (regla 1.1).
+   */
+  nombreLegal?: string;
+  condusef?: string;
 }
 
 export interface RedactResult {
@@ -141,7 +147,6 @@ export async function redactMessage(env: Env, params: RedactParams): Promise<Red
   const amountText = formatMXN(params.amountCents);
   const dueDateText = formatDateMX(`${params.dueDate}T12:00:00Z`);
   const fallback = templateMessage(params);
-  const legal = configLegal(env);
 
   const text = await runAI(
     env,
@@ -156,8 +161,8 @@ export async function redactMessage(env: Env, params: RedactParams): Promise<Red
       band: params.band,
       channel: params.channel,
       customMessage: params.customMessage,
-      nombreLegal: legal.nombreLegal || undefined,
-      condusef: legal.condusef || undefined,
+      nombreLegal: params.nombreLegal || undefined,
+      condusef: params.condusef || undefined,
     })
   );
 

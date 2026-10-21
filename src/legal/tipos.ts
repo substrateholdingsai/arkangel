@@ -77,6 +77,13 @@ export interface ContextoLegal {
   maxContactos24h: number;
   ventanaContacto: { inicio: number; fin: number };
   toleranciaCents: number;
+  /**
+   * Zona horaria en la que se evalúa la ventana de contacto. Por defecto,
+   * `America/Mexico_City`: es la del marco normativo (NOM-184). Un tenant con
+   * otra zona debe declararla para que el orquestador y el motor legal no
+   * discrepen sobre la misma ventana.
+   */
+  zonaHoraria?: string;
 
   // Contexto del intento
   caseId?: string | null;

@@ -3,18 +3,22 @@ import { rowsToCollectionRows, parseCsvRows } from '../lib/csv';
 import { logger } from '../lib/logger';
 import type { Env } from '../types/env';
 import { ingestRows } from '../services/ingesta';
-import { isIntake } from './auth';
+import { exigePrincipalConScope } from './guard';
+import { tenantContextDeRequest } from './tenant';
 
 export const ingest = new Hono<{ Bindings: Env }>();
 
 /**
  * Entrega del CSV de las 6:00 AM (CRM → Arkangel).
  * Acepta multipart/form-data (campo `file`), text/csv crudo o application/json { csv }.
+ *
+ * Exige el scope `ingest:write`, que tienen el token de ingesta
+ * (`INTAKE_TOKEN`, rol `service_ingest`) y el de administración. La
+ * autenticación por token no cambia: el token sigue siendo la credencial.
  */
 ingest.post('/ingest/csv', async (c) => {
-  if (!isIntake(c.req.raw, c.env)) {
-    return c.json({ error: 'unauthorized' }, 401);
-  }
+  const guardia = await exigePrincipalConScope(c, 'ingest:write');
+  if (!guardia.ok) return guardia.response;
 
   const contentType = c.req.header('content-type') ?? '';
   let csvText = '';
@@ -47,9 +51,26 @@ ingest.post('/ingest/csv', async (c) => {
     return c.json({ error: 'csv_sin_filas_utiles' }, 400);
   }
 
-  const result = await ingestRows(c.env, rows, { source: 'csv', fileName });
+  // El CSV se ingiere para el tenant que dice la cabecera. Sin cabecera, el
+  // tenant por defecto de la plataforma (el que operaba antes del multi-tenant).
+  // El principal ya viene resuelto por la guardia: no se vuelve a autenticar.
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
 
-  logger.info('CSV ingerido', { fileName, accepted: result.accepted, total: result.total });
+  const result = await ingestRows(c.env, rows, {
+    source: 'csv',
+    fileName,
+    tz: ctx.config.tz,
+    scoreCeilingCents: ctx.config.scoreAmountCeilingCents,
+  });
+
+  logger.info('CSV ingerido', {
+    tenantId: ctx.tenantId,
+    fileName,
+    accepted: result.accepted,
+    total: result.total,
+  });
 
   return c.json({
     ok: true,

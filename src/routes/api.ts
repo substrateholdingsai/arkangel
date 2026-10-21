@@ -18,25 +18,41 @@ import { listAudit, resumenCumplimiento } from '../services/legalAudit';
 import { dailyMetrics } from '../services/metricas';
 import { todayIso } from '../services/db';
 import { dispararHoy } from '../orquestacion/disparador';
-import { isAdmin } from './auth';
+import { exigeTenant } from '../auth/guards';
+import { exigePrincipalConScope } from './guard';
+import { tenantContextDeRequest } from './tenant';
 
 export const api = new Hono<{ Bindings: Env }>();
 
-api.use('*', async (c, next) => {
-  if (!isAdmin(c.req.raw, c.env)) {
-    return c.json({ error: 'unauthorized' }, 401);
-  }
-  await next();
-});
-
+/**
+ * Panel de cobranza.
+ *
+ * Cada ruta exige **su** scope: leer métricas no habilita a leer casos y
+ * despachar no habilita a leerlos. Antes era un `isAdmin` global que dejaba
+ * pasar cualquier token de administración a todo el router.
+ *
+ * El contexto de tenant se resuelve con el principal que la guardia ya
+ * autorizó (no se vuelve a autenticar) y, cuando la ruta lo resuelve, se
+ * comprueba con `exigeTenant` que el principal puede operar sobre ese tenant.
+ */
 api.get('/metrics/today', async (c) => {
-  const date = c.req.query('date') ?? todayIso(c.env.TZ);
+  const guardia = await exigePrincipalConScope(c, 'metrics:read');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const date = c.req.query('date') ?? todayIso(ctx.config.tz);
   const metrics = await dailyMetrics(c.env, date);
   return c.json({ ok: true, date, metrics });
 });
 
 api.get('/cases/today', async (c) => {
-  const date = c.req.query('date') ?? todayIso(c.env.TZ);
+  const guardia = await exigePrincipalConScope(c, 'cases:read');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const date = c.req.query('date') ?? todayIso(ctx.config.tz);
   const cases = await listCasesByDate(c.env, date);
 
   const rows = await Promise.all(
@@ -71,18 +87,45 @@ api.get('/cases/today', async (c) => {
 });
 
 api.post('/disparar', async (c) => {
-  const date = c.req.query('date') ?? todayIso(c.env.TZ);
-  const result = await dispararHoy(c.env, date);
+  const guardia = await exigePrincipalConScope(c, 'cases:dispatch');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const date = c.req.query('date') ?? todayIso(ctx.config.tz);
+  const result = await dispararHoy(c.env, date, ctx.tenantId);
   return c.json({ ok: true, date, ...result });
 });
 
+/**
+ * Caso por id.
+ *
+ * Estas rutas leen por id, así que además del scope hay que comprobar que el
+ * principal puede operar sobre el tenant con el que se está respondiendo: un
+ * usuario de la Organization A no puede pedir el caso de un id del tenant B
+ * poniéndole la cabecera del tenant B.
+ */
 api.get('/cases/:id', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'cases:read');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const denegado = exigeTenant(guardia.principal, resultado.ctx.tenantId);
+  if (denegado) return denegado;
+
   const item = await getCase(c.env, c.req.param('id'));
   if (!item) return c.json({ error: 'not_found' }, 404);
   return c.json({ ok: true, case: item });
 });
 
 api.get('/clients/:id', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'clients:read');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const denegado = exigeTenant(guardia.principal, resultado.ctx.tenantId);
+  if (denegado) return denegado;
+
   const client = await getClient(c.env, c.req.param('id'));
   if (!client) return c.json({ error: 'not_found' }, 404);
   const debts = await listPendingDebts(c.env, client.id);
@@ -90,17 +133,33 @@ api.get('/clients/:id', async (c) => {
 });
 
 api.get('/clients/:id/conversation', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'messages:read');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const denegado = exigeTenant(guardia.principal, resultado.ctx.tenantId);
+  if (denegado) return denegado;
+
   const limit = Number(c.req.query('limit') ?? 50);
   const messages = await listConversation(c.env, c.req.param('id'), limit);
   return c.json({ ok: true, messages });
 });
 
 /** Catálogo legal: la ley del agente, ejecutable y auditable. */
-api.get('/legal/catalogo', (c) => c.json({ ok: true, reglas: catalogoReglas() }));
+api.get('/legal/catalogo', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'legal:read');
+  if (!guardia.ok) return guardia.response;
+  return c.json({ ok: true, reglas: catalogoReglas() });
+});
 
 api.get('/legal/hoy', async (c) => {
-  const date = c.req.query('date') ?? todayIso(c.env.TZ);
-  const legal = configLegal(c.env);
+  const guardia = await exigePrincipalConScope(c, 'legal:read');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const date = c.req.query('date') ?? todayIso(ctx.config.tz);
+  const legal = configLegal(ctx);
   const resumen = await resumenCumplimiento(c.env, date);
   const auditoria = await listAudit(c.env, 20);
 

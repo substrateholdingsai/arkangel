@@ -28,6 +28,10 @@ export interface IntakeOptions {
   source?: string;
   fileName?: string | null;
   caseDate?: string;
+  /** Zona horaria del tenant al que se ingiere. */
+  tz?: string;
+  /** Techo de monto del scoring (banda "alto") para el tenant. */
+  scoreCeilingCents?: number;
 }
 
 /**
@@ -40,7 +44,7 @@ export async function ingestRows(
   options: IntakeOptions = {}
 ): Promise<IntakeResult> {
   const source = options.source ?? 'csv';
-  const caseDate = options.caseDate ?? todayIso(env.TZ);
+  const caseDate = options.caseDate ?? todayIso(options.tz ?? env.TZ);
   const intakeId = newId('int');
 
   const seen = new Map<string, CsvRow>();
@@ -93,7 +97,7 @@ export async function ingestRows(
         amountCents: totalCents,
         dueDate,
         now: new Date(),
-        ceilingCents: Number(env.SCORE_AMOUNT_CEILING_CENTS ?? 200000),
+        ceilingCents: options.scoreCeilingCents ?? Number(env.SCORE_AMOUNT_CEILING_CENTS ?? 200000),
       });
 
       await upsertCase(env, {

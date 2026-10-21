@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { parseResendPayload } from '../src/channels/resend';
 import { parseTelnyxPayload } from '../src/channels/telnyx';
 import { parseWhatsAppPayload } from '../src/channels/whatsapp';
+import { isDryRun } from '../src/channels/types';
+import type { Env } from '../src/types/env';
 
 describe('parseWhatsAppPayload', () => {
   const payload = {
@@ -79,6 +81,23 @@ describe('parseTelnyxPayload', () => {
     });
     expect(parsed.statuses[0]?.status).toBe('delivered');
   });
+
+  it('expone el `messaging_profile_id` para resolver el tenant', () => {
+    const parsed = parseTelnyxPayload({
+      data: {
+        event_type: 'message.received',
+        id: 'msg_1',
+        payload: {
+          from: '+525512345678',
+          to: '+5215550001111',
+          text: 'lo pago el lunes',
+          messaging_profile_id: 'tg_1',
+        },
+      },
+    });
+
+    expect(parsed.messages[0]?.meta?.messaging_profile_id).toBe('tg_1');
+  });
 });
 
 describe('parseResendPayload', () => {
@@ -97,5 +116,20 @@ describe('parseResendPayload', () => {
 
   it('ignora payloads sin cuerpo', () => {
     expect(parseResendPayload({ from: 'a@b.com' }).messages).toEqual([]);
+  });
+});
+
+describe('freno de ensayo (DRY_RUN)', () => {
+  function env(dryRun?: string): Env {
+    return { DRY_RUN: dryRun } as unknown as Env;
+  }
+
+  it('el freno global manda: ningún tenant puede desactivarlo', () => {
+    expect(isDryRun(env('true'), false)).toBe(true);
+  });
+
+  it('el flag del tenant sólo puede activarlo', () => {
+    expect(isDryRun(env('false'), true)).toBe(true);
+    expect(isDryRun(env('false'), false)).toBe(false);
   });
 });

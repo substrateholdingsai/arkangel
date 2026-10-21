@@ -3,7 +3,7 @@ import { adapters } from '../channels';
 import type { InboundMessage } from '../channels/types';
 import { configLegal } from '../legal/config';
 import { evaluarMensaje } from '../legal/motor';
-import { IdempotencyKey, reserveOnce } from '../lib/idempotencia';
+import { IdempotencyKey, reserveOnceConLegado } from '../lib/idempotencia';
 import { logger } from '../lib/logger';
 import { normalizePhone } from '../lib/phone';
 import type { Env } from '../types/env';
@@ -20,6 +20,9 @@ import {
 import { registrarViolaciones } from '../services/legalAudit';
 import { recordPromise } from '../services/promesas';
 import { logEvent } from '../services/eventos';
+import { mergeChannelCredentials } from '../tenancy/channels';
+import { resolveTenantContext } from '../tenancy/context';
+import type { TenantContext } from '../tenancy/types';
 
 export interface InboundResult {
   handled: boolean;
@@ -33,8 +36,16 @@ export interface InboundResult {
  * y responde por el mismo canal cuando la confianza es suficiente.
  */
 export async function handleInbound(env: Env, inbound: InboundMessage): Promise<InboundResult> {
-  const dedupeKey = IdempotencyKey.forInbound(inbound.channel, inbound.providerId);
-  const isNew = await reserveOnce(env.KV, dedupeKey, 7 * 24 * 3600, { at: Date.now() });
+  const ctx = await resolveTenantContext(env, { tenantId: inbound.tenantId });
+  const dedupeKey = IdempotencyKey.forTenantInbound(
+    ctx.tenantId,
+    inbound.channel,
+    inbound.providerId
+  );
+  const legacyKey = IdempotencyKey.forInbound(inbound.channel, inbound.providerId);
+  const isNew = await reserveOnceConLegado(env.KV, dedupeKey, legacyKey, 7 * 24 * 3600, {
+    at: Date.now(),
+  });
   if (!isNew) return { handled: false, reason: 'duplicado' };
 
   const phone = normalizePhone(inbound.from);
@@ -110,6 +121,7 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
       await updateCase(env, caseId, { status: 'paid' });
       replied = await reply(
         env,
+        ctx,
         inbound,
         client.id,
         caseId,
@@ -135,6 +147,7 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
       await updateCase(env, caseId, { status: 'promised' });
       replied = await reply(
         env,
+        ctx,
         inbound,
         client.id,
         caseId,
@@ -151,6 +164,7 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
       await updateCase(env, caseId, { status: 'human' });
       replied = await reply(
         env,
+        ctx,
         inbound,
         client.id,
         caseId,
@@ -168,6 +182,7 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
       await updateCase(env, caseId, { status: 'human' });
       replied = await reply(
         env,
+        ctx,
         inbound,
         client.id,
         caseId,
@@ -183,6 +198,7 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
       if (classification.confidence >= 0.6) {
         replied = await reply(
           env,
+          ctx,
           inbound,
           client.id,
           caseId,
@@ -202,6 +218,7 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
 
 async function reply(
   env: Env,
+  ctx: TenantContext,
   inbound: InboundMessage,
   clientId: string,
   caseId: string,
@@ -225,7 +242,7 @@ async function reply(
     if (!destination) return false;
 
     // ── Motor de cumplimiento también sobre la respuesta automática ──
-    const legal = configLegal(env);
+    const legal = configLegal(ctx);
     const contrato = await getContractByClient(env, clientId);
     const contactos24h = await countContactos24h(env, clientId);
     const logsReales = await countSentForCase(env, caseId);
@@ -249,6 +266,7 @@ async function reply(
       maxContactos24h: legal.maxContactos24h,
       ventanaContacto: { inicio: legal.horaInicio, fin: legal.horaFin },
       toleranciaCents: legal.montoToleranciaCents,
+      zonaHoraria: ctx.config.tz,
       caseId,
       esRespuesta: true,
       respuestaExenta: !legal.horarioEnRespuestas,
@@ -281,6 +299,8 @@ async function reply(
       subject: 'Re: tu mensaje',
       caseId,
       clientId,
+      credentials: mergeChannelCredentials(ctx.channels),
+      dryRun: ctx.config.dryRun,
       meta: { reply: true },
     });
 

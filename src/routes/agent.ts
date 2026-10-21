@@ -1,6 +1,5 @@
 import { Hono } from 'hono';
 import type { Env } from '../types/env';
-import { isAgent, isAdmin } from './auth';
 import { todayIso } from '../services/db';
 import { listCasesByDate } from '../services/casos';
 import { dailyMetrics } from '../services/metricas';
@@ -9,23 +8,31 @@ import { catalogoReglas } from '../legal/motor';
 import { resumenCumplimiento } from '../services/legalAudit';
 import { dispararHoy } from '../orquestacion/disparador';
 import { logEvent } from '../services/eventos';
+import { exigePrincipalConScope } from './guard';
+import { tenantContextDeRequest } from './tenant';
 
 export const agent = new Hono<{ Bindings: Env }>();
 
-agent.use('*', async (c, next) => {
-  if (!isAgent(c.req.raw, c.env) && !isAdmin(c.req.raw, c.env)) {
-    return c.json({ error: 'unauthorized' }, 401);
-  }
-  await next();
-});
-
+/**
+ * API del agente.
+ *
+ * Cada ruta exige su scope (`agent:read`, `agent:decide`, `agent:dispatch`,
+ * `agent:audit`). El token del bot (`GROK_BOT_TOKEN`, rol `service_agent`) los
+ * tiene los cuatro; el de administración, también. Antes bastaba con que la
+ * petición fuera del bot o del admin, sin distinguir qué se le pedía.
+ */
 agent.get('/state', async (c) => {
-  const date = c.req.query('date') ?? todayIso(c.env.TZ);
+  const guardia = await exigePrincipalConScope(c, 'agent:read');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const date = c.req.query('date') ?? todayIso(ctx.config.tz);
   const cases = await listCasesByDate(c.env, date);
   const metrics = await dailyMetrics(c.env, date);
-  const legal = configLegal(c.env);
+  const legal = configLegal(ctx);
   const cumplimiento = await resumenCumplimiento(c.env, date);
-  const mode = (c.env.AGENT_MODE ?? 'supervised').toLowerCase();
+  const mode = ctx.config.agentMode.toLowerCase();
   return c.json({
     ok: true,
     date,
@@ -53,10 +60,15 @@ agent.get('/state', async (c) => {
 });
 
 agent.post('/decide', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'agent:decide');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
   const body = await c.req.json().catch(() => ({}));
-  const date = (body?.date as string) ?? todayIso(c.env.TZ);
+  const date = (body?.date as string) ?? todayIso(ctx.config.tz);
   const cases = await listCasesByDate(c.env, date);
-  const threshold = Number(c.env.AGENT_AUTO_THRESHOLD_CENTS ?? 200000);
+  const threshold = ctx.config.agentAutoThresholdCents;
   const plan = cases.map((item) => {
     const escalado = item.amount_cents > threshold;
     return {
@@ -67,7 +79,8 @@ agent.post('/decide', async (c) => {
           ? 'monto_sobre_umbral'
           : 'caso_molesto'
         : 'dentro_de_reglas',
-      priority: item.score_band === 'alto' ? 'high' : item.score_band === 'medio' ? 'medium' : 'low',
+      priority:
+        item.score_band === 'alto' ? 'high' : item.score_band === 'medio' ? 'medium' : 'low',
     };
   });
   await logEvent(c.env, 'agent.decide', { payload: { date, count: plan.length } });
@@ -75,9 +88,14 @@ agent.post('/decide', async (c) => {
 });
 
 agent.post('/dispatch', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'agent:dispatch');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
   const body = await c.req.json().catch(() => ({}));
-  const date = (body?.date as string) ?? todayIso(c.env.TZ);
-  const mode = (body?.mode as string) ?? (c.env.AGENT_MODE ?? 'supervised');
+  const date = (body?.date as string) ?? todayIso(ctx.config.tz);
+  const mode = (body?.mode as string) ?? ctx.config.agentMode;
   const autonomous = mode.toLowerCase() === 'autonomous';
 
   if (!autonomous) {
@@ -91,12 +109,14 @@ agent.post('/dispatch', async (c) => {
     });
   }
 
-  const result = await dispararHoy(c.env, date);
+  const result = await dispararHoy(c.env, date, ctx.tenantId);
   await logEvent(c.env, 'agent.dispatch.autonomous', { payload: { date, ...result } });
   return c.json({ ok: true, mode: 'autonomous', date, ...result });
 });
 
 agent.post('/audit', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'agent:audit');
+  if (!guardia.ok) return guardia.response;
   const body = await c.req.json().catch(() => ({}));
   await logEvent(c.env, 'agent.audit', { payload: body ?? {} });
   return c.json({ ok: true });

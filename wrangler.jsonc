@@ -10,7 +10,6 @@
     "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "DEDUPE_WINDOW_HOURS": "24",
     "RATE_LIMIT_RPM": "42",
-    "MAX_CONCURRENCY": "10",
     "SEND_WINDOW_START": "8",
     "SEND_WINDOW_END": "22",
     "TZ": "America/Mexico_City",

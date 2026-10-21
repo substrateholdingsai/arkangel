@@ -1,4 +1,4 @@
-import type { Env } from '../types/env';
+import type { TenantContext } from '../tenancy/types';
 
 export interface ConfigLegal {
   nombreLegal: string;
@@ -11,28 +11,24 @@ export interface ConfigLegal {
   horarioEnRespuestas: boolean;
 }
 
-const DOMINIO_POR_DEFECTO = 'prestamoclaro.com';
-
-export function configLegal(env: Env): ConfigLegal {
-  // Allowlist vacía = ningún link permitido (política "sin links").
-  // Sólo si la variable NO está definida se usa el dominio por defecto.
-  const crudo = env.ALLOWED_PAYMENT_DOMAINS;
-  const dominios =
-    crudo === undefined
-      ? [DOMINIO_POR_DEFECTO]
-      : crudo
-          .split(',')
-          .map((d) => d.trim().toLowerCase())
-          .filter(Boolean);
-
+/**
+ * Configuración legal del tenant en curso.
+ *
+ * La identidad (razón social y registro CONDUSEF) es **por tenant**: cada
+ * empresa de cobranza se presenta ante el deudor con la suya. Por eso esta
+ * función recibe el contexto y no el `env`: leerla del entorno fue exactamente
+ * el defecto que el multi-tenant viene a corregir (regla 1.1).
+ */
+export function configLegal(ctx: TenantContext): ConfigLegal {
+  const config = ctx.config;
   return {
-    nombreLegal: (env.LEGAL_RAZON_SOCIAL ?? '').trim(),
-    condusef: (env.LEGAL_CONDUSEF_REGISTRO ?? '').trim(),
-    dominiosPermitidos: dominios,
-    horaInicio: Number(env.SEND_WINDOW_START ?? 8),
-    horaFin: Number(env.SEND_WINDOW_END ?? 22),
-    maxContactos24h: Number(env.MAX_CONTACTS_PER_DAY ?? 3),
-    montoToleranciaCents: Number(env.LEGAL_MONTO_TOLERANCIA_CENTS ?? 0),
-    horarioEnRespuestas: (env.LEGAL_HORARIO_EN_RESPUESTAS ?? 'false') === 'true',
+    nombreLegal: config.razonSocial,
+    condusef: config.condusef,
+    dominiosPermitidos: config.dominiosPermitidos,
+    horaInicio: config.horaInicio,
+    horaFin: config.horaFin,
+    maxContactos24h: config.maxContactos24h,
+    montoToleranciaCents: config.montoToleranciaCents,
+    horarioEnRespuestas: config.horarioEnRespuestas,
   };
 }

@@ -160,7 +160,7 @@ export const REGLAS: Regla[] = [
     ...META['1.1'],
     evaluar(ctx) {
       if (!ctx.nombreLegal) {
-        return 'El agente no tiene razón social configurada (LEGAL_RAZON_SOCIAL).';
+        return 'El agente no tiene razón social configurada para este tenant.';
       }
       if (!contieneIdentidadLegal(ctx.mensaje, ctx.nombreLegal)) {
         return 'El mensaje no incluye la razón social registrada ante CONDUSEF.';
@@ -223,16 +223,17 @@ export const REGLAS: Regla[] = [
     accion: 'BLOCK',
     evaluar(ctx) {
       if (ctx.respuestaExenta) return null;
+      const zonaHoraria = ctx.zonaHoraria ?? 'America/Mexico_City';
       const hora = Number(
         new Intl.DateTimeFormat('en-US', {
-          timeZone: 'America/Mexico_City',
+          timeZone: zonaHoraria,
           hour: '2-digit',
           hour12: false,
         }).format(ctx.ahora)
       );
       if (Number.isNaN(hora)) return null;
       if (hora < ctx.ventanaContacto.inicio || hora >= ctx.ventanaContacto.fin) {
-        return `Contacto fuera de la ventana legal (${ctx.ventanaContacto.inicio}:00–${ctx.ventanaContacto.fin}:00 CDMX): ${hora}:00.`;
+        return `Contacto fuera de la ventana legal (${ctx.ventanaContacto.inicio}:00–${ctx.ventanaContacto.fin}:00 ${zonaHoraria}): ${hora}:00.`;
       }
       return null;
     },

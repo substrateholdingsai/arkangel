@@ -10,18 +10,21 @@ import { Hono } from 'hono';
 import type { Env } from '../types/env';
 import { diaPrevioIso } from '../contabilidad/buildPayload';
 import { leerPayloadDesdeR2, leerUltimoPayload } from '../contabilidad/sendToAlegra';
-import { isAdmin } from './auth';
+import { exigePrincipalConScope } from './guard';
 
 export const contabilidad = new Hono<{ Bindings: Env }>();
 
-contabilidad.use('*', async (c, next) => {
-  if (!isAdmin(c.req.raw, c.env)) {
-    return c.json({ error: 'unauthorized' }, 401);
-  }
-  await next();
-});
-
+/**
+ * El resumen contable exige `accounting:read`.
+ *
+ * Ojo: `accounting:read` no está en `service_readonly` (sí en `viewer`): el
+ * corte contable de un cliente es información sensible de negocio y no se
+ * abre al rol de sólo lectura de los servicios.
+ */
 contabilidad.get('/contabilidad/resumen', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'accounting:read');
+  if (!guardia.ok) return guardia.response;
+
   const timeZone = c.env.TZ ?? 'America/Mexico_City';
   const pedida = c.req.query('fecha');
 

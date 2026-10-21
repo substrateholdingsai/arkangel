@@ -2,7 +2,7 @@ import { redactMessage } from '../ai/agent';
 import { adapters, resolveChannels } from '../channels';
 import { configLegal } from '../legal/config';
 import { evaluarMensaje } from '../legal/motor';
-import { IdempotencyKey, reserveOnce } from '../lib/idempotencia';
+import { IdempotencyKey, reserveOnceConLegado } from '../lib/idempotencia';
 import { logger } from '../lib/logger';
 import { isWithinSendWindow } from '../lib/score';
 import type { Env } from '../types/env';
@@ -17,6 +17,9 @@ import { hasOpenPromise } from '../services/promesas';
 import { logEvent } from '../services/eventos';
 import { reintentarEnvioAlegra } from '../contabilidad/sendToAlegra';
 import { acquireClientLock, releaseClientLock } from '../durable/call-lock';
+import { mergeChannelCredentials } from '../tenancy/channels';
+import { resolveTenantContext } from '../tenancy/context';
+import type { TenantContext } from '../tenancy/types';
 
 export class DeferredError extends Error {
   constructor(
@@ -28,14 +31,20 @@ export class DeferredError extends Error {
   }
 }
 
-/** Throttle suave por proveedor: máximo N envíos por minuto y canal. */
-async function acquireRateSlot(env: Env, channel: string): Promise<boolean> {
-  const rpm = Number(env.RATE_LIMIT_RPM ?? 42);
+/**
+ * Throttle suave por proveedor: máximo N envíos por minuto y canal.
+ *
+ * El contador es POR TENANT: el límite de RPM pertenece a la cuenta del
+ * cliente, no a la plataforma. Con la clave global, un tenant con volumen alto
+ * agotaba el cupo de los demás sin que nadie supiera por qué.
+ */
+async function acquireRateSlot(ctx: TenantContext, channel: string): Promise<boolean> {
+  const rpm = ctx.config.rateLimitRpm;
   const minute = Math.floor(Date.now() / 60000);
-  const key = `rl:${channel}:${minute}`;
-  const current = Number((await env.KV.get(key)) ?? 0);
+  const key = IdempotencyKey.forTenantRateLimit(ctx.tenantId, channel, minute);
+  const current = Number((await ctx.env.KV.get(key)) ?? 0);
   if (current >= rpm) return false;
-  await env.KV.put(key, String(current + 1), { expirationTtl: 180 });
+  await ctx.env.KV.put(key, String(current + 1), { expirationTtl: 180 });
   return true;
 }
 
@@ -49,7 +58,11 @@ function diasDeRetraso(dueDate: string): number {
  * Procesa un caso de cobranza: redacta con IA, envía por el canal disponible
  * y registra el resultado. Respeta opt-in, dedupe 24h, ventana legal y throttling.
  */
-export async function processCase(env: Env, msg: CobranzaQueueMessage): Promise<void> {
+export async function processCase(
+  env: Env,
+  msg: CobranzaQueueMessage,
+  ctx: TenantContext
+): Promise<void> {
   const collectionCase = await getCase(env, msg.caseId);
   if (!collectionCase) {
     logger.warn('Caso no encontrado', { caseId: msg.caseId });
@@ -77,9 +90,9 @@ export async function processCase(env: Env, msg: CobranzaQueueMessage): Promise<
     return;
   }
 
-  const startHour = Number(env.SEND_WINDOW_START ?? 9);
-  const endHour = Number(env.SEND_WINDOW_END ?? 20);
-  if (!isWithinSendWindow(new Date(), startHour, endHour, env.TZ ?? 'America/Mexico_City')) {
+  const startHour = ctx.config.horaInicio;
+  const endHour = ctx.config.horaFin;
+  if (!isWithinSendWindow(new Date(), startHour, endHour, ctx.config.tz)) {
     throw new DeferredError('Fuera de la ventana legal de contacto', 1800);
   }
 
@@ -106,17 +119,21 @@ export async function processCase(env: Env, msg: CobranzaQueueMessage): Promise<
     const amountCents =
       debts.reduce((sum, debt) => sum + debt.amount_cents, 0) || collectionCase.amount_cents;
 
-    const dedupeWindow = Number(env.DEDUPE_WINDOW_HOURS ?? 24) * 3600;
+    const dedupeWindow = ctx.config.dedupeWindowHours * 3600;
     let sent = false;
 
-    const legal = configLegal(env);
+    const legal = configLegal(ctx);
     const contrato = await getContractByClient(env, client.id);
     const contactos24h = await countContactos24h(env, client.id);
     const logsReales = await countSentForCase(env, collectionCase.id);
+    const credenciales = mergeChannelCredentials(ctx.channels);
 
     for (const channel of channels) {
-      const dedupeKey = IdempotencyKey.forCase(collectionCase.id, channel);
-      const reserved = await reserveOnce(env.KV, dedupeKey, dedupeWindow, { at: Date.now() });
+      const dedupeKey = IdempotencyKey.forTenantCase(ctx.tenantId, collectionCase.id, channel);
+      const legacyKey = IdempotencyKey.forCase(collectionCase.id, channel);
+      const reserved = await reserveOnceConLegado(env.KV, dedupeKey, legacyKey, dedupeWindow, {
+        at: Date.now(),
+      });
       if (!reserved) {
         state[channel] = 'duplicado';
         continue;
@@ -128,7 +145,7 @@ export async function processCase(env: Env, msg: CobranzaQueueMessage): Promise<
         continue;
       }
 
-      if (!(await acquireRateSlot(env, channel))) {
+      if (!(await acquireRateSlot(ctx, channel))) {
         await env.KV.delete(dedupeKey);
         throw new DeferredError(`Throttle de ${channel}`, 60);
       }
@@ -140,6 +157,8 @@ export async function processCase(env: Env, msg: CobranzaQueueMessage): Promise<
         dueDate,
         diasRetraso: diasDeRetraso(dueDate),
         band: collectionCase.score_band,
+        nombreLegal: legal.nombreLegal,
+        condusef: legal.condusef,
       });
 
       // ── Motor de cumplimiento: la ley como código ejecutable ──
@@ -163,6 +182,7 @@ export async function processCase(env: Env, msg: CobranzaQueueMessage): Promise<
         maxContactos24h: legal.maxContactos24h,
         ventanaContacto: { inicio: legal.horaInicio, fin: legal.horaFin },
         toleranciaCents: legal.montoToleranciaCents,
+        zonaHoraria: ctx.config.tz,
         caseId: collectionCase.id,
         esRespuesta: false,
       });
@@ -206,6 +226,8 @@ export async function processCase(env: Env, msg: CobranzaQueueMessage): Promise<
         caseId: collectionCase.id,
         clientId: client.id,
         idempotencyKey: dedupeKey,
+        credentials: credenciales,
+        dryRun: ctx.config.dryRun,
         meta: { source: 'cobranza', ai: drafted.source },
       });
 
@@ -275,6 +297,18 @@ export async function consumeBatch(
   batch: MessageBatch<CobranzaQueueMessage | ContabilidadRetryMessage>,
   env: Env
 ): Promise<void> {
+  const contextos = new Map<string, TenantContext>();
+
+  const contextoPara = async (tenantId?: string): Promise<TenantContext> => {
+    const clave = tenantId ?? 'default';
+    let ctx = contextos.get(clave);
+    if (!ctx) {
+      ctx = await resolveTenantContext(env, { tenantId });
+      contextos.set(clave, ctx);
+    }
+    return ctx;
+  };
+
   for (const message of batch.messages) {
     const body = message.body;
 
@@ -303,7 +337,8 @@ export async function consumeBatch(
     }
 
     try {
-      await processCase(env, body as CobranzaQueueMessage);
+      const ctx = await contextoPara(body.tenantId);
+      await processCase(env, body as CobranzaQueueMessage, ctx);
       message.ack();
     } catch (error) {
       if (error instanceof DeferredError) {

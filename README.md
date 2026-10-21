@@ -62,7 +62,7 @@ npm run db:migrate       # aplica migraciones D1 en remoto
 Secrets (vía `wrangler secret put`, valores locales en `.dev.vars` — **gitignored**):
 
 ```bash
-npx wrangler secret put ADMIN_TOKEN          # token del dashboard (x-admin-token)
+npx wrangler secret put ADMIN_TOKEN          # break-glass: token de plataforma (x-admin-token)
 npx wrangler secret put INTAKE_TOKEN         # token del CRM para entregar el CSV
 npx wrangler secret put RESEND_API_KEY
 npx wrangler secret put TELNYX_API_KEY
@@ -102,24 +102,109 @@ Bucket de R2 (crear una vez):
 npx wrangler r2 bucket create arkangel-contabilidad
 ```
 
+### Variables de Clerk
+
+| Var | Dónde va | Qué hace |
+|---|---|---|
+| `CLERK_SECRET_KEY` | secret (`wrangler secret put`) | Clave de backend de Clerk. Habilita la verificación de sesión en el Worker: sin ella, Clerk queda deshabilitado (`clerkActivo` = false) y sólo valen los tokens de máquina |
+| `CLERK_PUBLISHABLE_KEY` | `wrangler.jsonc` → `vars` | Clave pública de la instancia de Clerk; la usa el backend para validar la sesión |
+| `CLERK_JWT_KEY` | secret (`wrangler secret put`, opcional) | PEM público: la verificación del JWT es local, sin llamar a la API de Clerk |
+| `CLERK_AUTHORIZED_PARTIES` | `wrangler.jsonc` → `vars` | CSV de orígenes permitidos para el claim `azp` de la sesión |
+| `VITE_CLERK_PUBLISHABLE_KEY` | `frontend/.env.local` | Clave pública para la SPA. **Mismo valor** que `CLERK_PUBLISHABLE_KEY` |
+
+```bash
+npx wrangler secret put CLERK_SECRET_KEY     # clave de backend de Clerk
+npx wrangler secret put CLERK_JWT_KEY        # opcional: verificación de sesión sin red
+```
+
+El panel ya **no** pide el `ADMIN_TOKEN`: entra con login de Clerk. Ese token sigue
+existiendo como break-glass, igual que `INTAKE_TOKEN` (CRM) y `GROK_BOT_TOKEN`
+(agente).
+
+## Puesta en marcha (Clerk)
+
+El panel entra con **login de Clerk**: no se pega ningún token. Los pasos, en orden:
+
+1. **Autenticar el CLI de Clerk.** El login del Dashboard no basta: hay que
+   autenticar el CLI.
+
+   ```bash
+   npx -y clerk@latest auth login
+   ```
+
+2. **Cargar las claves.** `CLERK_SECRET_KEY` y `CLERK_JWT_KEY` (opcional) van como
+   secrets; `CLERK_PUBLISHABLE_KEY` y `CLERK_AUTHORIZED_PARTIES` en `wrangler.jsonc`
+   → `vars`; `VITE_CLERK_PUBLISHABLE_KEY` en `frontend/.env.local`, con el **mismo
+   valor** que `CLERK_PUBLISHABLE_KEY`.
+
+   ```bash
+   npx wrangler secret put CLERK_SECRET_KEY
+   npx wrangler secret put CLERK_JWT_KEY        # opcional: verificación sin red
+   ```
+
+3. **Aplicar la migración** (añade `tenants.clerk_org_id`, `tenant_users` y
+   `platform_users`).
+
+   ```bash
+   npx wrangler d1 migrations apply arkangel-cobranza-db --remote
+   ```
+
+4. **Mapear la Organization al tenant.**
+
+   ```bash
+   npx wrangler d1 execute arkangel-cobranza-db --remote --command \
+     "UPDATE tenants SET clerk_org_id = 'org_xxx' WHERE id = 't_xxx';"
+   ```
+
+5. **Dar de alta al primer usuario.** El rol lo concede D1, no Clerk: `owner`,
+   `compliance`, `operator` o `viewer` en `tenant_users`; para un administrador
+   de plataforma (alcance transversal, sin tenant), `platform_users`.
+
+   ```bash
+   npx wrangler d1 execute arkangel-cobranza-db --remote --command \
+     "INSERT INTO tenant_users (user_id, tenant_id, role) VALUES ('user_xxx','t_xxx','owner');"
+
+   npx wrangler d1 execute arkangel-cobranza-db --remote --command \
+     "INSERT INTO platform_users (user_id) VALUES ('user_xxx');"
+   ```
+
+De dónde salen los ids:
+
+| Id | Dónde se obtiene |
+|---|---|
+| `org_xxx` | Dashboard de Clerk → **Organizations** → id de la Organization |
+| `user_xxx` | Dashboard de Clerk → **Users** → id del usuario |
+| `t_xxx` | `npx wrangler d1 execute arkangel-cobranza-db --remote --command "SELECT id, slug FROM tenants;"` |
+
+> **Estar en la Organization de Clerk no basta.** El rol lo concede la tabla
+> `tenant_users`: un usuario que está en la Organization pero sin fila ahí recibe
+> 401 (`sin_acceso`) y no puede operar.
+
 ## API
 
-| Método | Ruta | Auth | Descripción |
+Auth = sesión de Clerk (`Authorization: Bearer <JWT de sesión>`) o token de máquina.
+Cada ruta exige **su** scope: sin credencial → 401, con credencial pero sin scope → 403.
+
+| Método | Ruta | Scope | Descripción |
 |---|---|---|---|
 | `GET` | `/api/v1/health` | público | Liveness del worker |
-| `POST` | `/api/v1/ingest/csv` | `x-intake-token` | Ingesta del CSV (multipart, `text/csv` o JSON `{csv}`) |
-| `GET` | `/api/v1/cases/today` | `x-admin-token` | Casos del día + vista previa (estado, canal, intención, próxima acción) |
-| `GET` | `/api/v1/metrics/today` | `x-admin-token` | Métricas del día (enviadas/respuestas/promesas) |
-| `POST` | `/api/v1/disparar` | `x-admin-token` | Encola todos los casos listos (el botón verde) |
-| `GET` | `/api/v1/cases/:id` | `x-admin-token` | Detalle de un caso |
-| `GET` | `/api/v1/clients/:id` | `x-admin-token` | Cliente + deudas pendientes |
-| `GET` | `/api/v1/clients/:id/conversation` | `x-admin-token` | Historial de mensajes |
-| `GET` | `/api/v1/legal/catalogo` | `x-admin-token` | Catálogo legal (12 reglas con ley, artículo y castigo) |
-| `GET` | `/api/v1/legal/hoy` | `x-admin-token` | Resumen de cumplimiento del día + auditoría reciente |
-| `GET` | `/api/v1/contabilidad/resumen` | `x-admin-token` | Corte contable del día (JSON de R2, sin abrir Alegra) |
+| `POST` | `/api/v1/ingest/csv` | `ingest:write` | Ingesta del CSV (multipart, `text/csv` o JSON `{csv}`) |
+| `GET` | `/api/v1/cases/today` | `cases:read` | Casos del día + vista previa (estado, canal, intención, próxima acción) |
+| `GET` | `/api/v1/metrics/today` | `metrics:read` | Métricas del día (enviadas/respuestas/promesas) |
+| `POST` | `/api/v1/disparar` | `cases:dispatch` | Encola todos los casos listos (el botón verde) |
+| `GET` | `/api/v1/cases/:id` | `cases:read` | Detalle de un caso |
+| `GET` | `/api/v1/clients/:id` | `clients:read` | Cliente + deudas pendientes |
+| `GET` | `/api/v1/clients/:id/conversation` | `messages:read` | Historial de mensajes |
+| `GET` | `/api/v1/legal/catalogo` | `legal:read` | Catálogo legal (12 reglas con ley, artículo y castigo) |
+| `GET` | `/api/v1/legal/hoy` | `legal:read` | Resumen de cumplimiento del día + auditoría reciente |
+| `GET` | `/api/v1/contabilidad/resumen` | `accounting:read` | Corte contable del día (JSON de R2, sin abrir Alegra) |
 | `GET/POST` | `/webhooks/whatsapp` | firma de Meta | Verificación y mensajes/estados entrantes |
-| `POST` | `/webhooks/telnyx` | firma Ed25519 | SMS entrante y estados |
+| `POST` | `/webhooks/telnyx` | firma Ed25519 | SMS entrantes y estados |
 | `POST` | `/webhooks/resend` | — | Email entrante |
+
+La cabecera `X-Tenant-Id` / `X-Tenant-Slug` acota el tenant: con sesión de Clerk sólo
+puede confirmar el tenant de tu Organization (si no, 403 `tenant_mismatch`).
+
 
 ## Flujo del día
 
@@ -378,6 +463,9 @@ D1 no los activa por defecto y, sin el PRAGMA, `contract_cfdi.contract_id` y
 curl -H "x-admin-token: $ADMIN_TOKEN" \
   "https://arkangel-cobranza.substrateholdingsai.workers.dev/api/v1/contabilidad/resumen?fecha=2026-10-19"
 ```
+
+El `ADMIN_TOKEN` es el camino break-glass por línea de comandos: el panel ya no lo
+pide, entra con la sesión de Clerk.
 
 Devuelve el mismo JSON que el cron dejó en R2 (`idempotency_key`, `ventana`,
 `resumen`, `desglose_bloqueos`, `asientos`, `ledger_integrity`, `metadata`). Sin

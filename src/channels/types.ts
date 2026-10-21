@@ -3,6 +3,37 @@ import type { Env } from '../types/env';
 
 export type ChannelName = Channel;
 
+/**
+ * Credenciales propias de un tenant para un canal.
+ *
+ * La clave es el **canal** (`whatsapp` | `sms` | `email`), el mismo vocabulario
+ * que usa `tenant_channels.channel` y el CHECK de la tabla. Un solo vocabulario:
+ * si el JSON se indexara por proveedor, una clave mal escrita se descartaría en
+ * silencio y el envío saldría desde la cuenta de la plataforma, con la
+ * identidad equivocada ante el deudor.
+ *
+ * Lo que es de la plataforma (el token de la app de Meta, la API key de Telnyx,
+ * la key de Resend) sigue viniendo del entorno. Lo que es del tenant es el
+ * enrutado y, si el cliente tiene cuenta propia, sus credenciales.
+ */
+export interface ChannelOverride {
+  whatsapp?: {
+    token?: string;
+    phone_number_id?: string;
+    template_name?: string;
+    template_lang?: string;
+  };
+  sms?: {
+    api_key?: string;
+    messaging_profile_id?: string;
+    from_number?: string;
+  };
+  email?: {
+    api_key?: string;
+    from_email?: string;
+  };
+}
+
 export interface SendParams {
   to: string;
   body: string;
@@ -11,6 +42,10 @@ export interface SendParams {
   clientId: string;
   idempotencyKey?: string;
   meta?: Record<string, unknown>;
+  /** Credenciales propias del tenant; lo que falte se toma de la plataforma. */
+  credentials?: ChannelOverride;
+  /** Modo de ensayo del tenant: no se envía, sólo se registra. */
+  dryRun?: boolean;
 }
 
 export interface SendResult {
@@ -30,6 +65,12 @@ export interface InboundMessage {
   receivedAt: string;
   contactName?: string;
   meta?: Record<string, unknown>;
+  /**
+   * Tenant al que pertenece el mensaje entrante. Lo resuelve el webhook a
+   * partir del identificador de enrutado del proveedor (phone_number_id,
+   * messaging_profile_id o dominio receptor).
+   */
+  tenantId?: string;
 }
 
 export interface StatusUpdate {
@@ -50,8 +91,16 @@ export interface ChannelAdapter {
   parseInbound(rawBody: string, headers: Record<string, string>): ParsedInbound;
 }
 
-export function isDryRun(env: Env): boolean {
-  return env.DRY_RUN === 'true';
+/**
+ * ¿Estamos en modo de ensayo?
+ *
+ * El freno global es `DRY_RUN` en el entorno del Worker: si está activo, **no
+ * sale nada**, ningún tenant puede desactivarlo. El flag del tenant sólo puede
+ * ACTIVAR el ensayo, nunca levantarlo: un tenant no debe poder desarmar el
+ * freno de emergencia de la plataforma.
+ */
+export function isDryRun(env: Env, tenantDryRun?: boolean): boolean {
+  return env.DRY_RUN === 'true' || tenantDryRun === true;
 }
 
 /** Mapea estados de proveedor a nuestro vocabulario. */

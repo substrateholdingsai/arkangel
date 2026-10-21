@@ -120,7 +120,10 @@ export function whatsappChallengeResponse(
 }
 
 export async function sendWhatsApp(env: Env, params: SendParams): Promise<SendResult> {
-  if (!env.WHATSAPP_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) {
+  const token = params.credentials?.whatsapp?.token ?? env.WHATSAPP_TOKEN;
+  const phoneNumberId =
+    params.credentials?.whatsapp?.phone_number_id ?? env.WHATSAPP_PHONE_NUMBER_ID;
+  if (!token || !phoneNumberId) {
     logger.error('Credenciales de WhatsApp incompletas', { caseId: params.caseId });
     return {
       ok: false,
@@ -130,7 +133,7 @@ export async function sendWhatsApp(env: Env, params: SendParams): Promise<SendRe
     };
   }
 
-  if (isDryRun(env)) {
+  if (isDryRun(env, params.dryRun)) {
     logger.info('DRY_RUN whatsapp omitido', { to: params.to, caseId: params.caseId });
     return {
       ok: true,
@@ -140,7 +143,10 @@ export async function sendWhatsApp(env: Env, params: SendParams): Promise<SendRe
     };
   }
 
-  const useTemplate = Boolean(env.WHATSAPP_TEMPLATE_NAME) && !params.meta?.reply;
+  const templateName = params.credentials?.whatsapp?.template_name ?? env.WHATSAPP_TEMPLATE_NAME;
+  const templateLang = params.credentials?.whatsapp?.template_lang ?? env.WHATSAPP_TEMPLATE_LANG;
+
+  const useTemplate = Boolean(templateName) && !params.meta?.reply;
   const payload = useTemplate
     ? {
         messaging_product: 'whatsapp',
@@ -148,8 +154,8 @@ export async function sendWhatsApp(env: Env, params: SendParams): Promise<SendRe
         to: params.to,
         type: 'template',
         template: {
-          name: env.WHATSAPP_TEMPLATE_NAME,
-          language: { code: env.WHATSAPP_TEMPLATE_LANG ?? 'es_MX' },
+          name: templateName,
+          language: { code: templateLang ?? 'es_MX' },
           components: [{ type: 'body', parameters: [{ type: 'text', text: params.body }] }],
         },
       }
@@ -161,13 +167,13 @@ export async function sendWhatsApp(env: Env, params: SendParams): Promise<SendRe
         text: { preview_url: false, body: params.body },
       };
 
-  const url = `https://graph.facebook.com/${GRAPH_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  const url = `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`;
   const response = await fetchJson<{
     messages?: Array<{ id?: string }>;
     error?: { message?: string };
   }>(url, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${env.WHATSAPP_TOKEN}` },
+    headers: { Authorization: `Bearer ${token}` },
     body: JSON.stringify(payload),
     idempotencyKey: params.idempotencyKey,
     retries: 1,

@@ -1,17 +1,34 @@
-const TOKEN_KEY = 'arkangel_admin_token';
+type TokenProvider = () => Promise<string | null>;
+let tokenProvider: TokenProvider = async () => null;
 
-export function getToken(): string {
-  return localStorage.getItem(TOKEN_KEY) ?? '';
+export function setTokenProvider(p: TokenProvider): void {
+  tokenProvider = p;
 }
 
-export function setToken(token: string): void {
-  if (token.trim()) localStorage.setItem(TOKEN_KEY, token.trim());
-  else localStorage.removeItem(TOKEN_KEY);
+export class ApiError extends Error {
+  status: number;
+  code: string;
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+  }
 }
+
+const MESSAGES: Record<string, string> = {
+  unauthorized: 'Sesión inválida o ausente. Inicia sesión de nuevo.',
+  forbidden: 'No tienes permiso para realizar esta acción.',
+  tenant_mismatch: 'La organización seleccionada no corresponde al tenant.',
+  org_sin_tenant: 'La organización o el usuario no están dados de alta.',
+  sin_acceso: 'No tienes acceso a este recurso.',
+  tenant_not_found: 'El tenant solicitado no existe.',
+};
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
-  headers.set('x-admin-token', getToken());
+  const token = await tokenProvider();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
   if (init.body && !(init.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
   }
@@ -21,8 +38,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const data = text ? (JSON.parse(text) as unknown) : {};
 
   if (!response.ok) {
-    const detail = (data as { error?: string }).error ?? response.statusText;
-    throw new Error(detail === 'unauthorized' ? 'Token inválido o ausente' : detail);
+    const code = (data as { error?: string }).error ?? response.statusText;
+    const message = MESSAGES[code] ?? code;
+    throw new ApiError(response.status, code, message);
   }
 
   return data as T;

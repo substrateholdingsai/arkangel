@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { IdempotencyKey, reserveOnce } from '../src/lib/idempotencia';
+import { IdempotencyKey, reserveOnce, reserveOnceConLegado } from '../src/lib/idempotencia';
 import { resolveChannels } from '../src/channels';
 import type { Client } from '../src/types/cobranza';
 
@@ -49,6 +49,29 @@ describe('reserveOnce', () => {
     expect(IdempotencyKey.forCase('cas_1', 'whatsapp')).not.toBe(
       IdempotencyKey.forCase('cas_1', 'sms')
     );
+  });
+});
+
+describe('reserveOnceConLegado', () => {
+  it('una reserva legacy viva bloquea la nueva: no se reinicia la ventana', async () => {
+    const kv = new FakeKV() as unknown as KVNamespace;
+    const nuevo = IdempotencyKey.forTenantCase('t_a', 'cas_1', 'whatsapp');
+    const legacy = IdempotencyKey.forCase('cas_1', 'whatsapp');
+
+    // Reserva hecha antes del despliegue con el namespace viejo.
+    await kv.put(legacy, '{"at":1}');
+
+    expect(await reserveOnceConLegado(kv, nuevo, legacy, 3600)).toBe(false);
+    expect(await kv.get(nuevo)).toBeNull();
+  });
+
+  it('sin reserva legacy reserva la nueva', async () => {
+    const kv = new FakeKV() as unknown as KVNamespace;
+    const nuevo = IdempotencyKey.forTenantCase('t_a', 'cas_1', 'whatsapp');
+    const legacy = IdempotencyKey.forCase('cas_1', 'whatsapp');
+
+    expect(await reserveOnceConLegado(kv, nuevo, legacy, 3600)).toBe(true);
+    expect(await kv.get(nuevo)).not.toBeNull();
   });
 });
 
