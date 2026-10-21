@@ -18,6 +18,8 @@ export interface Env {
   COBRANZA_QUEUE: Queue<CobranzaQueueMessage | ContabilidadRetryMessage>;
   CALL_LOCK: DurableObjectNamespace;
   RATE_LIMITER: DurableObjectNamespace;
+  /** DO del spike de voz: uno por llamada. */
+  CALL_SESSION: DurableObjectNamespace;
 
   // ── Tokens de acceso (no son secretos de proveedor, pero sí protegidos) ──
   ADMIN_TOKEN: string;
@@ -53,6 +55,23 @@ export interface Env {
   DRY_RUN?: string;
   AGENT_MODE?: string;
   AGENT_AUTO_THRESHOLD_CENTS?: string;
+
+  // ── Spike de voz (EXPERIMENTAL, apagado por defecto) ──
+  /** Flag del spike: si no es 'true', /spike/* no existe (404). */
+  SPIKE_VOZ_ENABLED?: string;
+  /** Deepgram: transcripción (STT) y síntesis (TTS). */
+  DEEPGRAM_API_KEY?: string;
+  /** Modelo de transcripción (Deepgram). */
+  SPIKE_STT_MODEL?: string;
+  /** Modelo de síntesis (Deepgram Aura). */
+  SPIKE_TTS_MODEL?: string;
+  /** Voz de síntesis (Deepgram Aura, español de México por defecto). */
+  SPIKE_TTS_VOICE?: string;
+  /** Cloudflare Realtime (el producto que hoy sustituye a Cloudflare Calls). */
+  CF_REALTIME_API_TOKEN?: string;
+  CF_REALTIME_APP_ID?: string;
+  CF_REALTIME_ACCOUNT_ID?: string;
+  CF_REALTIME_PRESET_NAME?: string;
 
   // ── Cumplimiento legal ──
   LEGAL_RAZON_SOCIAL?: string;

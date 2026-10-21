@@ -1,7 +1,7 @@
-# ARKANGEL — Mapa del proyecto y bitácora de sprints
+﻿# ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · 214 tests verdes · lint + typecheck + build limpios.
-> Última actualización: 2026-10-21 (Sprint 5: identidad nativa en D1, fin del proveedor externo).
+> **Estado**: `main` · 232 tests verdes · lint + typecheck + build limpios.
+> Última actualización: 2026-10-21 (Bloques A/B/C, CI real en GitHub Actions y spike de voz en curso).
 
 ## Vista general
 
@@ -201,11 +201,40 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
       (un reintento de corte en Alegra devolvía el journal id de **otro**
       asiento y se saltaba de enviarlo).
 
+### Bloques A/B/C + Tareas 0-2 — Cierre con CI real y spike de voz (2026-10-21)
+
+- [x] **Bloque A · config por tenant (Fase 6)**: migración `0009`, índices
+      compuestos por tenant, `assertTenantListoParaOperar()` fail-closed (sin
+      razón social ni CONDUSEF el tenant en modo `db` no opera),
+      `scripts/seed-tenant-config.ts` y 9 tests de config por tenant.
+- [x] **Bloque B · CI real**: `.github/workflows/ci.yml` (checkout +
+      setup-node + `npm ci` + `npm run verify` en `push` y `pull_request` a
+      `main`), contrato MCP de Alegra con 5 tests y `docs/alegra-mcp-contract.md`.
+      **PR #1 mergeado con run de Actions verde**
+      (<https://github.com/substrateholdingsai/arkangel/pull/1>, run
+      <https://github.com/substrateholdingsai/arkangel/actions/runs/39684812269>,
+      38 s). Antes era un "PR de prueba con CI verde (simulado local)": el
+      workflow nunca se había pushado y GitHub Actions nunca lo había corrido.
+- [x] **Bloque C · cambio de contraseña**: `changePassword()` con política
+      explícita — la contraseña nueva **debe ser distinta** de la actual (400)
+      y una sesión revocada no puede cambiar la contraseña (401). El `status`
+      viaja en el resultado en vez de deducirse del texto del mensaje.
+- [x] **Tarea 0 · cuadre del conteo**: la suite de `changePassword` quedó con
+      7 tests nuevos (4 de la suite + 1 de `revokeAllSessions` + 2 de esta
+      tanda: sesión revocada → 401 y nueva = actual → 400). Total: 207 + 7.
+- [~] **Tarea 2 · spike de voz**: implementado y en CI (`CallSessionDO`,
+      pipeline STT→LLM→TTS con barge-in, signaling tras `SPIKE_VOZ_ENABLED`,
+      cliente en `spike/index.html`, arnés de 20 llamadas, migración
+      `0010_spike_calls.sql`). **Sin llamada real**: faltan las credenciales
+      de Deepgram y de Cloudflare Realtime, así que **no hay p50/p95** ni
+      veredicto. Detalle, tarifas vigentes y riesgos legales en
+      `docs/spike-voz.md`.
+
 ## Verificación realizada
 
 | Qué | Cómo | Resultado |
 |---|---|---|
-| Suite unitaria | `npm test` (13 archivos) | 214/214 |
+| Suite unitaria | `npm test` (14 archivos) | 232/232 |
 | Estilo y tipos | `npm run lint` · `npm run typecheck` | limpios |
 | Build del worker | `npm run build:worker` | limpio |
 | Migraciones | `wrangler d1 migrations apply --local` (BD nueva) | 8 migraciones OK; esquema igual al que lee el código |
@@ -253,7 +282,7 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
 - **Publicación contable T+1**: el corte publicado a las 23:59 CDMX es el día hábil anterior (decisión del code review). Confirmar con el contador.
 - **`iva_acreditable_estimado`** es un cálculo provisional sobre gastos de Arkangel; hay que sustituirlo por el IVA acreditable real cuando exista el módulo de CFDI de proveedores.
 - **`promise_made`** está reservado en `ESTADOS_INGRESO_RECONOCIDO` pero nada lo escribe: las promesas viven en la tabla `promises`.
-- **Sin CI**: no hay `.github/workflows`. `npm run verify` corre format, lint, typecheck, test y build, pero sólo en local.
+- **Sin CI**: no hay `.github/workflows`. `npm run verify` corre format, lint, typecheck, test y build, pero sólo en local. → **Resuelto**: `.github/workflows/ci.yml` está en `main` y corre en GitHub Actions (PR #1, run verde).
 
 ## Próximos (por riesgo)
 
@@ -265,3 +294,4 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
 6. **Secretos + bucket R2 + primera corrida real** (las migraciones 003/004/005/006/007/008 ya están en remoto).
 7. **[x] Alinear el cron de cobranza** con el huso CDMX — `wrangler.jsonc` pasó de `"0 6 * * *"` (06:00 UTC = 00:00 CDMX) a `"0 12 * * *"` (12:00 UTC = 6 AM CDT).
 8. **[x] CI en GitHub Actions** — `.github/workflows/ci.yml` corre `npm run verify` (format, lint, typecheck, test, build) en `push` y `PR` a `main`.
+9. **[~] Ejecutar el spike de voz** — falta lo único que no se puede escribir: las credenciales de Deepgram y de Cloudflare Realtime. Con eso, `npx tsx scripts/spike-voz.ts` corre las 20 llamadas y da p50/p95. El veredicto (go / no-go) depende de eso: `docs/spike-voz.md`.
