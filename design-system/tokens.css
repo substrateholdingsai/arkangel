@@ -1,57 +1,74 @@
 /**
- * ARKANGEL DESIGN SYSTEM · tokens
+ * ARKANGEL DESIGN SYSTEM · Meridian Core v1.0 · tokens
  *
  * Única fuente de verdad de color, tipografía, radio, sombra y patrones.
- * Este archivo se comparte (copiado o por submódulo) entre el panel de cobranza
- * y cualquier proyecto futuro del ecosistema Arkangel.
+ * Especificación canónica: docs/ARKANGEL-MERIDIAN.md
  *
- * Paleta: escala Slate (estructura) + Emerald (acción/éxito) + acentos
- * semánticos por estado. Tipografía Inter (300–700) + monoespaciada para
- * datos duros.
+ * Principio rector: "La legibilidad es la única decoración permitida".
+ * Alto Contraste WCAG AAA para operadores de 8+ horas/día.
  */
 
 :root {
-  /* ── Superficies ── */
-  --ark-canvas: #f8fafc; /* slate-50 */
-  --ark-surface: #ffffff;
-  --ark-surface-muted: #f8fafc; /* slate-50 */
-  --ark-ink: #0f172a; /* slate-900 */
-  --ark-ink-soft: #334155; /* slate-700 */
-  --ark-muted: #64748b; /* slate-500 */
-  --ark-subtle: #94a3b8; /* slate-400 */
-  --ark-line: #e2e8f0; /* slate-200 */
-  --ark-line-strong: #cbd5e1; /* slate-300 */
+  /* ── 2.1 · Superficie (Lienzo de trabajo de 8 horas) ── */
+  --bg-canvas: #f8fafc; /* Slate 50 */
+  --bg-surface: #ffffff;
+  --bg-primary: #0f172a; /* Slate 900 */
+
+  /* ── 2.2 · Acento y Acción (Quirúrgico) ── */
+  --accent-500: #059669; /* Emerald 600 */
+  --accent-400: #10b981; /* Emerald 500 — hover acción primaria */
+  --accent-text: #ffffff; /* SIEMPRE blanco sobre botón de acento */
+
+  /* ── 2.3 · Semántica de Estado (Legal y Financiero) ── */
+  --danger-500: #dc2626; /* Red 600 — Riesgo Legal · Vencido · Fail-closed · Promesa rota */
+  --warning-500: #d97706; /* Amber 600 — Atención · Por vencer */
+  --info-500: #2563eb; /* Blue 600 — Informativo · En proceso */
+
+  /* ── 2.4 · Bordes y Estructura ── */
+  --border-line: #e2e8f0; /* Slate 200 */
+  --border-strong: #cbd5e1; /* Slate 300 */
+
+  /* ── Alias compatibles (--ark-*) ── */
+  --ark-canvas: var(--bg-canvas);
+  --ark-surface: var(--bg-surface);
+  --ark-surface-muted: #f8fafc;
+  --ark-ink: var(--bg-primary);
+  --ark-ink-soft: #334155;
+  --ark-muted: #64748b;
+  --ark-subtle: #94a3b8;
+  --ark-line: var(--border-line);
+  --ark-line-strong: var(--border-strong);
 
   /* ── Panel industrial (modo oscuro) ── */
-  --ark-dark: #0f172a; /* slate-900 */
-  --ark-dark-line: #1e293b; /* slate-800 */
-  --ark-dark-ink: #cbd5e1; /* slate-300 */
-  --ark-dark-muted: #94a3b8; /* slate-400 */
+  --ark-dark: var(--bg-primary);
+  --ark-dark-line: #1e293b;
+  --ark-dark-ink: #cbd5e1;
+  --ark-dark-muted: #94a3b8;
 
-  /* ── Acento y estados ── */
-  --ark-accent: #059669; /* emerald-600 */
-  --ark-accent-hover: #047857; /* emerald-700 */
-  --ark-accent-soft: #ecfdf5; /* emerald-50 */
-  --ark-accent-line: #a7f3d0; /* emerald-200 */
-  --ark-accent-ink: #065f46; /* emerald-800 */
-  --ark-accent-bright: #34d399; /* emerald-400 (sobre oscuro) */
+  /* ── Acento y estados extendidos ── */
+  --ark-accent: var(--accent-500);
+  --ark-accent-hover: var(--accent-400);
+  --ark-accent-soft: #ecfdf5;
+  --ark-accent-line: #a7f3d0;
+  --ark-accent-ink: #065f46;
+  --ark-accent-bright: #34d399;
 
-  --ark-info: #2563eb; /* blue-600 */
-  --ark-info-soft: #eff6ff; /* blue-50 */
-  --ark-info-line: #bfdbfe; /* blue-200 */
+  --ark-info: var(--info-500);
+  --ark-info-soft: #eff6ff;
+  --ark-info-line: #bfdbfe;
 
-  --ark-warn: #d97706; /* amber-600 */
-  --ark-warn-soft: #fffbeb; /* amber-50 */
-  --ark-warn-line: #fde68a; /* amber-200 */
+  --ark-warn: var(--warning-500);
+  --ark-warn-soft: #fffbeb;
+  --ark-warn-line: #fde68a;
 
-  --ark-danger: #e11d48; /* rose-600 */
-  --ark-danger-soft: #fff1f2; /* rose-50 */
-  --ark-danger-line: #fecdd3; /* rose-200 */
-  --ark-danger-bright: #fb7185; /* rose-400 (sobre oscuro) */
+  --ark-danger: var(--danger-500);
+  --ark-danger-soft: #fef2f2;
+  --ark-danger-line: #fecaca;
+  --ark-danger-bright: #f87171;
 
-  --ark-channel-sms: #475569; /* slate-600 */
-  --ark-channel-sms-soft: #f1f5f9; /* slate-100 */
-  --ark-channel-sms-line: #e2e8f0; /* slate-200 */
+  --ark-channel-sms: #475569;
+  --ark-channel-sms-soft: #f1f5f9;
+  --ark-channel-sms-line: #e2e8f0;
 
   /* ── Forma ── */
   --ark-radius-card: 0.75rem;
@@ -66,6 +83,24 @@
   --ark-grid-size: 24px;
 }
 
+/* ── 3.1 · Ley de las Cifras (No negociable) ── */
+.data-value {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings:
+    'tnum' 1,
+    'lnum' 1;
+  text-align: right; /* Alineación decimal estricta */
+}
+
+.data-mono {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings:
+    'tnum' 1,
+    'lnum' 1;
+}
+
 /* Patrón de puntos: fondo claro (Slate-200) y fondo oscuro (Slate-700) */
 .ark-grid {
   background-image: radial-gradient(circle, #cbd5e1 1px, transparent 1px);
@@ -77,7 +112,7 @@
   background-size: var(--ark-grid-size) var(--ark-grid-size);
 }
 
-/* Marca de agua institucional (asset generado por scripts/forge_arkangel_watermark.py) */
+/* Marca de agua institucional */
 .ark-watermark {
   background-repeat: no-repeat;
   background-position: center;

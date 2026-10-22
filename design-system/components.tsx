@@ -21,7 +21,7 @@ export type IconComponent = ComponentType<{ className?: string }>;
 const TONE_PILL: Record<Tone, string> = {
   ok: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   warn: 'bg-amber-50 text-amber-700 border-amber-200',
-  err: 'bg-rose-50 text-rose-700 border-rose-200',
+  err: 'bg-red-50 text-red-700 border-red-200',
   info: 'bg-blue-50 text-blue-700 border-blue-200',
   neutral: 'bg-slate-100 text-slate-600 border-slate-200',
 };
@@ -29,7 +29,7 @@ const TONE_PILL: Record<Tone, string> = {
 const TONE_TEXT: Record<Tone, string> = {
   ok: 'text-emerald-600',
   warn: 'text-amber-600',
-  err: 'text-rose-600',
+  err: 'text-red-600',
   info: 'text-blue-600',
   neutral: 'text-slate-600',
 };
@@ -37,10 +37,28 @@ const TONE_TEXT: Record<Tone, string> = {
 const TONE_TILE: Record<Tone, string> = {
   ok: 'bg-emerald-50 text-emerald-600',
   warn: 'bg-amber-50 text-amber-600',
-  err: 'bg-rose-50 text-rose-600',
+  err: 'bg-red-50 text-red-600',
   info: 'bg-blue-50 text-blue-600',
   neutral: 'bg-slate-100 text-slate-500',
 };
+
+/* ── Cifras tabulares (Meridian Core §3.1) ───────────────────────────── */
+
+export function DataValue({
+  children,
+  align = 'right',
+  className = '',
+}: {
+  children: ReactNode;
+  align?: 'right' | 'left';
+  className?: string;
+}) {
+  return (
+    <span className={`${align === 'right' ? 'data-value inline-block' : 'data-mono'} ${className}`}>
+      {children}
+    </span>
+  );
+}
 
 /* ── Superficies ─────────────────────────────────────────────────────── */
 
@@ -117,7 +135,7 @@ export function KpiCard({
       <div className="flex justify-between items-start">
         <div>
           <p className="text-sm font-medium text-slate-500">{label}</p>
-          <h3 className={`text-2xl font-bold mt-1 ${TONE_TEXT[tone]}`}>{value}</h3>
+          <h3 className={`text-2xl font-bold mt-1 data-mono ${TONE_TEXT[tone]}`}>{value}</h3>
         </div>
         {Icon ? (
           <div className={`p-2 rounded-lg ${TONE_TILE[tone]}`}>
@@ -217,10 +235,10 @@ export function StatusBadge({ status, tone }: { status: string; tone?: Tone }) {
 
 const BUTTON_VARIANT: Record<string, string> = {
   primary: 'bg-slate-900 text-white hover:bg-slate-800',
-  accent: 'bg-emerald-600 text-white hover:bg-emerald-700',
+  accent: 'bg-emerald-600 text-white hover:bg-emerald-500',
   secondary: 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50',
   ghost: 'bg-transparent text-slate-600 hover:bg-slate-50',
-  danger: 'bg-rose-600 text-white hover:bg-rose-700',
+  danger: 'bg-red-600 text-white hover:bg-red-700',
 };
 
 const BUTTON_SIZE: Record<string, string> = {
@@ -495,7 +513,7 @@ export function Alert({
   const styles: Record<Tone, string> = {
     ok: 'bg-emerald-50 border-emerald-200 text-emerald-800',
     warn: 'bg-amber-50 border-amber-200 text-amber-800',
-    err: 'bg-rose-50 border-rose-200 text-rose-700',
+    err: 'bg-red-50 border-red-200 text-red-700',
     info: 'bg-blue-50 border-blue-200 text-blue-800',
     neutral: 'bg-slate-50 border-slate-200 text-slate-700',
   };
@@ -541,21 +559,12 @@ export function TopNav({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-16 items-center gap-4">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="bg-slate-900 text-white p-2 rounded-lg shrink-0">
-              <svg
-                className="w-6 h-6"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.75"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z"
-                />
-              </svg>
-            </div>
+            <img
+              src="/assets/favicon.svg"
+              alt=""
+              aria-hidden="true"
+              className="w-10 h-10 rounded-lg shrink-0"
+            />
             <div className="min-w-0">
               <h1 className="text-xl font-bold tracking-tight text-slate-900 truncate">{brand}</h1>
               {subtitle ? (

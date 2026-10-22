@@ -38,6 +38,7 @@ import {
 } from './api';
 import { AuthGate } from './auth/AuthGate';
 import { useAuth } from './auth/AuthContext';
+import { OperatorDrawer } from './OperatorDrawer';
 
 const WATERMARK = '/assets/arkangel-watermark.png';
 const WATERMARK_DARK = '/assets/arkangel-watermark-dark.png';
@@ -74,6 +75,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [disparando, setDisparando] = useState(false);
+  const [bandeja, setBandeja] = useState<'all' | 'human' | 'resolved'>('all');
+  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
 
   const conectado = session !== null;
 
@@ -199,7 +202,8 @@ export default function App() {
     {
       key: 'deuda',
       header: 'Deuda',
-      render: (row) => <span className="font-semibold text-slate-900">{row.monto}</span>,
+      className: 'text-right',
+      render: (row) => <span className="data-value font-medium text-slate-900">{row.monto}</span>,
     },
     {
       key: 'canal',
@@ -224,14 +228,31 @@ export default function App() {
       key: 'accion',
       header: 'Próxima Acción',
       render: (row) => (
-        <span
-          className={`text-xs ${row.estado === 'human' ? 'text-rose-600 font-medium' : 'text-slate-500'}`}
-        >
-          {row.proxima_accion}
-        </span>
+        <div className="flex items-center justify-between gap-2">
+          <span
+            className={`text-xs ${row.estado === 'human' ? 'text-red-600 font-medium' : 'text-slate-500'}`}
+          >
+            {row.proxima_accion}
+          </span>
+          <Button
+            variant={row.estado === 'human' ? 'danger' : 'secondary'}
+            size="sm"
+            onClick={() => setSelectedCaseId(row.id)}
+          >
+            {row.estado === 'human' ? 'Atender' : 'Abrir'}
+          </Button>
+        </div>
       ),
     },
   ];
+
+  const casosFiltrados = cases.filter((c) => {
+    if (bandeja === 'human') return c.estado === 'human';
+    if (bandeja === 'resolved') return c.estado === 'promised' || c.estado === 'paid';
+    return true;
+  });
+  const countHuman = cases.filter((c) => c.estado === 'human').length;
+  const countResolved = cases.filter((c) => c.estado === 'promised' || c.estado === 'paid').length;
 
   const porEstado = metrics?.por_estado ?? {};
   const enCola = porEstado.ready ?? 0;
@@ -437,15 +458,57 @@ export default function App() {
                     </>
                   }
                 />
+                <div className="px-6 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBandeja('all')}
+                    className={`px-3 py-1 rounded-md text-xs font-semibold border transition-colors ${
+                      bandeja === 'all'
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'
+                    }`}
+                  >
+                    Todos ({cases.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBandeja('human')}
+                    className={`px-3 py-1 rounded-md text-xs font-semibold border transition-colors flex items-center gap-1.5 ${
+                      bandeja === 'human'
+                        ? 'bg-red-600 text-white border-red-600'
+                        : 'bg-white text-red-700 border-red-200 hover:bg-red-50'
+                    }`}
+                  >
+                    <span>Delegados a Humano</span>
+                    <span className="data-mono px-1.5 py-0.2 rounded bg-red-100 text-red-800 text-[11px]">
+                      {countHuman}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBandeja('resolved')}
+                    className={`px-3 py-1 rounded-md text-xs font-semibold border transition-colors ${
+                      bandeja === 'resolved'
+                        ? 'bg-emerald-600 text-white border-emerald-600'
+                        : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'
+                    }`}
+                  >
+                    Promesas / Pagados ({countResolved})
+                  </button>
+                </div>
                 <DataTable
                   columns={columnas}
-                  rows={cases}
-                  empty="Sin casos: sube el CSV de las 6:00 AM o espera la ingesta del CRM."
-                  rowClassName={(row) => (row.estado === 'human' ? 'bg-rose-50/30' : '')}
+                  rows={casosFiltrados}
+                  empty={
+                    bandeja === 'human'
+                      ? 'Sin casos delegados al humano en este momento.'
+                      : 'Sin casos: sube el CSV de las 6:00 AM o espera la ingesta del CRM.'
+                  }
+                  rowClassName={(row) => (row.estado === 'human' ? 'bg-red-50/40' : '')}
                 />
                 <div className="px-6 py-3 border-t border-slate-200 bg-slate-50 flex justify-between items-center text-xs text-slate-500">
                   <span>
-                    Mostrando {cases.length} de {cases.length} casos
+                    Mostrando {casosFiltrados.length} de {cases.length} casos
                   </span>
                   <div className="flex gap-1">
                     <button
@@ -525,6 +588,12 @@ export default function App() {
               </Card>
             </div>
           </div>
+
+          <OperatorDrawer
+            caseId={selectedCaseId}
+            onClose={() => setSelectedCaseId(null)}
+            onUpdated={() => void cargar()}
+          />
         </>
       ) : null}
     </PageShell>

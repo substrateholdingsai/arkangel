@@ -12,6 +12,7 @@
     "prebuild": "npm run assets:watermark || echo [assets] watermark omitido: python no disponible",
     "predeploy": "npm run assets:watermark || echo [assets] watermark omitido: python no disponible",
     "build": "npm run build:frontend && npm run build:worker",
+    "forge:assets": "python scripts/forge_meridian_assets.py",
     "build:frontend": "vite build",
     "build:worker": "wrangler deploy --dry-run --outdir=dist/worker",
     "deploy": "npm run build:frontend && wrangler deploy",

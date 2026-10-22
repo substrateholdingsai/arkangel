@@ -144,6 +144,7 @@ export const auth = {
 
 export interface CaseRow {
   id: string;
+  client_id?: string;
   nombre: string;
   telefono: string | null;
   email: string | null;
@@ -156,6 +157,80 @@ export interface CaseRow {
   ultimo_canal: string | null;
   intencion: string | null;
   proxima_accion: string;
+}
+
+export interface ConversationMessage {
+  id: string;
+  case_id: string;
+  client_id: string;
+  channel: 'whatsapp' | 'sms' | 'email';
+  direction: 'outbound' | 'inbound';
+  provider_id: string | null;
+  body: string;
+  status: string;
+  error: string | null;
+  meta: string | null;
+  created_at: string;
+}
+
+export interface ContractDetail {
+  id: string;
+  client_id: string;
+  monto_pactado_cents: number;
+  tasa_pct: number | null;
+  clabe: string | null;
+  nombre_legal: string | null;
+  condusef: string | null;
+}
+
+export interface CaseWorkspace {
+  ok: boolean;
+  case: {
+    id: string;
+    case_date: string;
+    client_id: string;
+    debt_id: string | null;
+    name: string;
+    phone: string | null;
+    email: string | null;
+    amount_cents: number;
+    status: string;
+    score: number;
+    score_band: string;
+  };
+  client: {
+    id: string;
+    name: string;
+    phone: string;
+    email: string | null;
+    curp: string | null;
+    do_not_disturb: number;
+  } | null;
+  debts: Array<{
+    id: string;
+    amount_cents: number;
+    due_date: string;
+    status: string;
+  }>;
+  contract: ContractDetail | null;
+  messages: ConversationMessage[];
+  contactos_24h: number;
+  legal: {
+    nombre_legal: string | null;
+    condusef: string | null;
+    ventana: { inicio: number; fin: number };
+    max_contactos_24h: number;
+  };
+}
+
+export interface LegalViolacion {
+  reglaId: string;
+  conducta: string;
+  ley: string;
+  articulo: string;
+  castigo: string;
+  accion: string;
+  evidencia: string;
 }
 
 export interface DailyMetrics {
@@ -228,5 +303,56 @@ export const api = {
   disparar: () =>
     request<{ ok: boolean; queued: number; skipped: number }>('/api/v1/disparar', {
       method: 'POST',
+    }),
+
+  caseWorkspace: (caseId: string) =>
+    request<CaseWorkspace>(`/api/v1/cases/${encodeURIComponent(caseId)}/workspace`),
+
+  replyCase: (
+    caseId: string,
+    input: { channel: 'whatsapp' | 'sms' | 'email'; body: string; subject?: string }
+  ) =>
+    request<{
+      ok: boolean;
+      message: ConversationMessage;
+      sanitized_body: string;
+      violaciones: LegalViolacion[];
+    }>(`/api/v1/cases/${encodeURIComponent(caseId)}/reply`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+
+  resolveCase: (
+    caseId: string,
+    input: {
+      action: 'promise' | 'paid' | 'return_ai' | 'dnd';
+      promised_date?: string;
+      promised_amount_cents?: number;
+    }
+  ) =>
+    request<{ ok: boolean; status: string; promised_date?: string; do_not_disturb?: boolean }>(
+      `/api/v1/cases/${encodeURIComponent(caseId)}/resolve`,
+      {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }
+    ),
+
+  callCase: (
+    caseId: string,
+    input:
+      | { phase: 'start' }
+      | { phase: 'complete'; duration_seconds: number; outcome: string; notes: string }
+  ) =>
+    request<{
+      ok: boolean;
+      call_id?: string;
+      phone?: string | null;
+      guion_obligatorio?: string;
+      clabe_autorizada?: string | null;
+      message?: ConversationMessage;
+    }>(`/api/v1/cases/${encodeURIComponent(caseId)}/call`, {
+      method: 'POST',
+      body: JSON.stringify(input),
     }),
 };

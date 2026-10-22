@@ -1,12 +1,13 @@
 /**
- * ARKANGEL DESIGN SYSTEM · preset de Tailwind v3
+ * ARKANGEL DESIGN SYSTEM · Meridian Core v1.0 · preset de Tailwind v3
  *
  * Uso:
  *   import arkangel from './design-system/tailwind.preset.js';
  *   export default { presets: [arkangel], content: [...] };
  *
- * Los colores de marca (`ark.*`) replican las variables de `tokens.css` para
- * poder usarlos como `bg-ark-accent`, `text-ark-muted`, etc.
+ * Incluye los tokens Meridian Core (`bg-canvas`, `bg-surface`, `bg-primary`,
+ * `accent-500`, `danger-500`, `warning-500`, `info-500`, `border-line`,
+ * `border-strong`) y el namespace `ark.*`.
  */
 
 export default {
@@ -14,9 +15,36 @@ export default {
     extend: {
       fontFamily: {
         sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
-        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+        mono: [
+          'JetBrains Mono',
+          'ui-monospace',
+          'SFMono-Regular',
+          'Menlo',
+          'Monaco',
+          'Consolas',
+          'monospace',
+        ],
       },
       colors: {
+        canvas: '#F8FAFC',
+        surface: '#FFFFFF',
+        primary: '#0F172A',
+        accent: {
+          400: '#10B981',
+          500: '#059669',
+          text: '#FFFFFF',
+        },
+        danger: {
+          500: '#DC2626',
+        },
+        warning: {
+          500: '#D97706',
+        },
+        info: {
+          500: '#2563EB',
+        },
+        'border-line': '#E2E8F0',
+        'border-strong': '#CBD5E1',
         ark: {
           canvas: '#f8fafc',
           surface: '#ffffff',
@@ -32,7 +60,7 @@ export default {
           'dark-ink': '#cbd5e1',
           'dark-muted': '#94a3b8',
           accent: '#059669',
-          'accent-hover': '#047857',
+          'accent-hover': '#10b981',
           'accent-soft': '#ecfdf5',
           'accent-line': '#a7f3d0',
           'accent-ink': '#065f46',
@@ -43,10 +71,10 @@ export default {
           warn: '#d97706',
           'warn-soft': '#fffbeb',
           'warn-line': '#fde68a',
-          danger: '#e11d48',
-          'danger-soft': '#fff1f2',
-          'danger-line': '#fecdd3',
-          'danger-bright': '#fb7185',
+          danger: '#dc2626',
+          'danger-soft': '#fef2f2',
+          'danger-line': '#fecaca',
+          'danger-bright': '#f87171',
           'channel-sms': '#475569',
           'channel-sms-soft': '#f1f5f9',
           'channel-sms-line': '#e2e8f0',

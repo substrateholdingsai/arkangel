@@ -1,6 +1,6 @@
 # ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · 248 tests verdes · lint + typecheck + build limpios.
+> **Estado**: `main` · 253 tests verdes · lint + typecheck + build limpios.
 > Última actualización: 2026-10-22 (mini-spike latencia: streaming LLM + modelo 8B + prompt voz implementados; **falta plan de pago Workers AI** para medir p50/p95 reales).
 
 ## Vista general

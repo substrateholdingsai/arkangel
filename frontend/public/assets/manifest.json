@@ -1,0 +1,22 @@
+{
+  "system": "Meridian Core",
+  "client": "Arkangel",
+  "assets": [
+    {
+      "file": "favicon.svg",
+      "kb": 0.33
+    },
+    {
+      "file": "logo-lockup.svg",
+      "kb": 0.45
+    },
+    {
+      "file": "grid-pattern.svg",
+      "kb": 0.18
+    },
+    {
+      "file": "icons-sprite.svg",
+      "kb": 1.99
+    }
+  ]
+}
