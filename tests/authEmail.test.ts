@@ -81,7 +81,7 @@ function entorno(db: DbTokens, extra: Partial<Env> = {}): Env {
     DB: db as unknown as D1Database,
     RESEND_API_KEY: 're_test',
     RESEND_FROM_EMAIL: 'Arkangel <cobranza@arksystems.site>',
-    AUTH_FROM_EMAIL: 'Arkangel <auth@arksystems.site>',
+    AUTH_FROM_EMAIL: 'Arkangel <no-reply@auth.arksystems.site>',
     APP_URL: 'https://panel.arksystems.site',
     ...extra,
   } as unknown as Env;
@@ -118,7 +118,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('correo de auth', () => {
   it('usa el remitente de auth, no el de cobranza', () => {
-    expect(remitenteAuth(entorno(new DbTokens()))).toContain('auth@arksystems.site');
+    expect(remitenteAuth(entorno(new DbTokens()))).toContain('no-reply@auth.arksystems.site');
     expect(remitenteAuth(entorno(new DbTokens(), { AUTH_FROM_EMAIL: undefined }))).toContain(
       'cobranza@'
     );
@@ -182,7 +182,7 @@ describe('restablecer contraseña', () => {
       to: string[];
       text: string;
     };
-    expect(envio.from).toContain('auth@arksystems.site');
+    expect(envio.from).toContain('no-reply@auth.arksystems.site');
     expect(envio.to).toEqual([usuario.email]);
     const token = /token=([0-9a-f]{64})/.exec(envio.text)?.[1] ?? '';
     expect(token).toHaveLength(64);

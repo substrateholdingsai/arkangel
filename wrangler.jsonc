@@ -24,7 +24,7 @@
     "LEGAL_HORARIO_EN_RESPUESTAS": "false",
     "ALEGRA_IVA_PCT": "16",
     "RESEND_FROM_EMAIL": "Arkangel <cobranza@arksystems.site>",
-    "AUTH_FROM_EMAIL": "Arkangel <auth@arksystems.site>",
+    "AUTH_FROM_EMAIL": "Arkangel <no-reply@auth.arksystems.site>",
     "APP_URL": "https://arkangel.arksystems.site",
     "SPIKE_VOZ_ENABLED": "false",
   },

@@ -49,8 +49,9 @@ export async function enviarCorreoAuth(
   token: string,
   origen: string
 ): Promise<boolean> {
-  const from = remitenteAuth(env);
-  if (!env.RESEND_API_KEY || !from) {
+  const apiKey = env.RESEND_API_KEY?.trim() ?? '';
+  const from = remitenteAuth(env).trim();
+  if (!apiKey || !from) {
     logger.error('Correo de auth NO enviado: falta RESEND_API_KEY o remitente', { accion });
     return false;
   }
@@ -63,7 +64,7 @@ export async function enviarCorreoAuth(
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -79,7 +80,12 @@ export async function enviarCorreoAuth(
       }),
     });
     if (!response.ok) {
-      logger.error('Resend rechazó el correo de auth', { accion, status: response.status });
+      const detalle = await response.text().catch(() => '');
+      logger.error('Resend rechazó el correo de auth', {
+        accion,
+        status: response.status,
+        detalle: detalle.slice(0, 300),
+      });
       return false;
     }
     return true;

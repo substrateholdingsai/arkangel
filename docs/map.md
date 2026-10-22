@@ -1,4 +1,4 @@
-﻿# ARKANGEL — Mapa del proyecto y bitácora de sprints
+# ARKANGEL — Mapa del proyecto y bitácora de sprints
 
 > **Estado**: `main` · 247 tests verdes · lint + typecheck + build limpios.
 > Última actualización: 2026-10-22 (mini-spike latencia: streaming LLM + modelo 8B + prompt voz implementados; **falta plan de pago Workers AI** para medir p50/p95 reales).
@@ -52,30 +52,30 @@ tests/                       13 archivos (unit + auth nativa + transporte MCP so
 Auth = sesión nativa (cookie `ark_session`) o token de máquina.
 Cada ruta exige **su** scope: sin credencial → 401, con credencial pero sin scope → 403.
 
-| Método | Ruta | Scope | Descripción |
-|---|---|---|---|
-| POST | `/api/auth/register` | — | **Cerrado** (403 `registro_cerrado`): el panel es por invitación; altas con `seed-owner` |
-| POST | `/api/auth/login` | público | Verifica la contraseña (PBKDF2) y emite la cookie `ark_session` |
-| POST | `/api/auth/logout` | sesión | Revoca la sesión en D1 y borra la cookie |
-| GET | `/api/auth/session` | público | Usuario y despachos, si la cookie es válida |
-| POST | `/api/auth/request-password-reset` | público | Envía el enlace de restablecimiento (siempre 202) |
-| POST | `/api/auth/reset-password` | público | Consume el enlace y fija la nueva contraseña |
-| GET | `/api/v1/health` | público | Liveness del worker |
-| POST | `/api/v1/ingest/csv` | `ingest:write` | Ingesta del CSV (multipart o JSON) |
-| GET | `/api/v1/cases/today` | `cases:read` | Casos del día + vista previa |
-| GET | `/api/v1/metrics/today` | `metrics:read` | Métricas del día |
-| POST | `/api/v1/disparar` | `cases:dispatch` | Encola los casos listos (botón verde) |
-| GET | `/api/v1/cases/:id` | `cases:read` | Detalle de un caso |
-| GET | `/api/v1/clients/:id` | `clients:read` | Cliente + deudas pendientes |
-| GET | `/api/v1/clients/:id/conversation` | `messages:read` | Historial de mensajes |
-| GET | `/api/v1/legal/catalogo` | `legal:read` | 12 reglas con ley, artículo y castigo |
-| GET | `/api/v1/legal/hoy` | `legal:read` | Resumen de cumplimiento + auditoría |
-| GET | `/api/v1/contabilidad/resumen` | `accounting:read` | Corte contable (JSON de R2) |
-| GET | `/api/v1/state` | `agent:read` | Estado del bot (modo, cola, pendientes) |
-| POST | `/api/v1/decide` · `/dispatch` · `/audit` | `agent:decide` · `agent:dispatch` · `agent:audit` | Decisión, envío y auditoría de acciones |
-| GET/POST | `/webhooks/whatsapp` | firma de Meta | Verificación del challenge + mensajes y estados |
-| POST | `/webhooks/telnyx` | firma Ed25519 | SMS entrante y estados |
-| POST | `/webhooks/resend` | — | Email entrante |
+| Método   | Ruta                                      | Scope                                             | Descripción                                                                              |
+| -------- | ----------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| POST     | `/api/auth/register`                      | —                                                 | **Cerrado** (403 `registro_cerrado`): el panel es por invitación; altas con `seed-owner` |
+| POST     | `/api/auth/login`                         | público                                           | Verifica la contraseña (PBKDF2) y emite la cookie `ark_session`                          |
+| POST     | `/api/auth/logout`                        | sesión                                            | Revoca la sesión en D1 y borra la cookie                                                 |
+| GET      | `/api/auth/session`                       | público                                           | Usuario y despachos, si la cookie es válida                                              |
+| POST     | `/api/auth/request-password-reset`        | público                                           | Envía el enlace de restablecimiento (siempre 202)                                        |
+| POST     | `/api/auth/reset-password`                | público                                           | Consume el enlace y fija la nueva contraseña                                             |
+| GET      | `/api/v1/health`                          | público                                           | Liveness del worker                                                                      |
+| POST     | `/api/v1/ingest/csv`                      | `ingest:write`                                    | Ingesta del CSV (multipart o JSON)                                                       |
+| GET      | `/api/v1/cases/today`                     | `cases:read`                                      | Casos del día + vista previa                                                             |
+| GET      | `/api/v1/metrics/today`                   | `metrics:read`                                    | Métricas del día                                                                         |
+| POST     | `/api/v1/disparar`                        | `cases:dispatch`                                  | Encola los casos listos (botón verde)                                                    |
+| GET      | `/api/v1/cases/:id`                       | `cases:read`                                      | Detalle de un caso                                                                       |
+| GET      | `/api/v1/clients/:id`                     | `clients:read`                                    | Cliente + deudas pendientes                                                              |
+| GET      | `/api/v1/clients/:id/conversation`        | `messages:read`                                   | Historial de mensajes                                                                    |
+| GET      | `/api/v1/legal/catalogo`                  | `legal:read`                                      | 12 reglas con ley, artículo y castigo                                                    |
+| GET      | `/api/v1/legal/hoy`                       | `legal:read`                                      | Resumen de cumplimiento + auditoría                                                      |
+| GET      | `/api/v1/contabilidad/resumen`            | `accounting:read`                                 | Corte contable (JSON de R2)                                                              |
+| GET      | `/api/v1/state`                           | `agent:read`                                      | Estado del bot (modo, cola, pendientes)                                                  |
+| POST     | `/api/v1/decide` · `/dispatch` · `/audit` | `agent:decide` · `agent:dispatch` · `agent:audit` | Decisión, envío y auditoría de acciones                                                  |
+| GET/POST | `/webhooks/whatsapp`                      | firma de Meta                                     | Verificación del challenge + mensajes y estados                                          |
+| POST     | `/webhooks/telnyx`                        | firma Ed25519                                     | SMS entrante y estados                                                                   |
+| POST     | `/webhooks/resend`                        | —                                                 | Email entrante                                                                           |
 
 Tokens de máquina: `ADMIN_TOKEN` (plataforma, break-glass), `INTAKE_TOKEN`
 (`service_ingest`) y `GROK_BOT_TOKEN` (`service_agent`). Los de servicio quedan
@@ -87,30 +87,31 @@ uno del que no es miembro es 403 `tenant_forbidden`, no un cambio de alcance.
 
 ## Datos
 
-| Tabla | Rol |
-|---|---|
-| `clients` · `debts` · `cases` | Cartera y casos del día |
-| `contracts` | Monto pactado, CLABE, razón legal (base de las reglas 8.1/3.2/4.2) |
-| `messages` · `promises` | Bitácora de mensajes y promesas de pago |
-| `events` | Auditoría append-only de cada acción |
-| `legal_audit` | **Ledger append-only** del cumplimiento (regla, ley, artículo, castigo) |
-| `alegra_sync` | Corte enviado a Alegra (idempotency key, estado, journal id) |
-| `legal_accounting_map` | Mapa regla legal → cuentas contables (12 reglas sembradas) |
-| `alegra_journal_lines` | Trazabilidad asiento por asiento (`legal_audit.id` → journal id) |
-| `ledger_checkpoint` | Cabeza de la cadena de hashes del ledger por día |
-| `contract_cfdi` | UUID del CFDI timbrado por contrato (opcional) |
-| `tenants` | **Catálogo de clientes**: razón social, CONDUSEF, ventana, límites, modo de config |
-| `tenant_channels` | Enrutado y credenciales por canal (phone_number_id, messaging_profile_id, dominio) |
-| `tenant_accounting_map` | Mapa regla legal → cuentas contables, por tenant |
-| `users` | Identidad humana: correo, hash PBKDF2, rol de plataforma |
-| `tenant_memberships` | **Rol** del usuario dentro de cada despacho (`owner`/`admin`/`member`) |
-| `auth_sessions` | Sesiones activas: `token_hash` (SHA-256), caducidad y revocación |
-| `auth_tokens` | Tokens de un solo uso (restablecer contraseña) |
-| `auth_rate_limits` | Ventana de intentos de acceso por correo e IP |
+| Tabla                         | Rol                                                                                |
+| ----------------------------- | ---------------------------------------------------------------------------------- |
+| `clients` · `debts` · `cases` | Cartera y casos del día                                                            |
+| `contracts`                   | Monto pactado, CLABE, razón legal (base de las reglas 8.1/3.2/4.2)                 |
+| `messages` · `promises`       | Bitácora de mensajes y promesas de pago                                            |
+| `events`                      | Auditoría append-only de cada acción                                               |
+| `legal_audit`                 | **Ledger append-only** del cumplimiento (regla, ley, artículo, castigo)            |
+| `alegra_sync`                 | Corte enviado a Alegra (idempotency key, estado, journal id)                       |
+| `legal_accounting_map`        | Mapa regla legal → cuentas contables (12 reglas sembradas)                         |
+| `alegra_journal_lines`        | Trazabilidad asiento por asiento (`legal_audit.id` → journal id)                   |
+| `ledger_checkpoint`           | Cabeza de la cadena de hashes del ledger por día                                   |
+| `contract_cfdi`               | UUID del CFDI timbrado por contrato (opcional)                                     |
+| `tenants`                     | **Catálogo de clientes**: razón social, CONDUSEF, ventana, límites, modo de config |
+| `tenant_channels`             | Enrutado y credenciales por canal (phone_number_id, messaging_profile_id, dominio) |
+| `tenant_accounting_map`       | Mapa regla legal → cuentas contables, por tenant                                   |
+| `users`                       | Identidad humana: correo, hash PBKDF2, rol de plataforma                           |
+| `tenant_memberships`          | **Rol** del usuario dentro de cada despacho (`owner`/`admin`/`member`)             |
+| `auth_sessions`               | Sesiones activas: `token_hash` (SHA-256), caducidad y revocación                   |
+| `auth_tokens`                 | Tokens de un solo uso (restablecer contraseña)                                     |
+| `auth_rate_limits`            | Ventana de intentos de acceso por correo e IP                                      |
 
 ## Sprints / bitácora
 
 ### Sprint 0 — Base
+
 - [x] Worker Hono + D1/KV/Queue/DO
 - [x] Canales WhatsApp/SMS/Email
 - [x] Workers AI redacción/respuestas + fallback
@@ -120,6 +121,7 @@ uno del que no es miembro es 403 `tenant_forbidden`, no un cambio de alcance.
 - [x] Cron 6 AM + ingesta CSV
 
 ### Sprint 1 — Grok Bot (agéntico)
+
 - [x] Auth por scope del bot (`GROK_BOT_TOKEN` → rol de servicio `service_agent`:
       `agent:read`, `agent:decide`, `agent:dispatch`, `agent:audit`). Ya no existe
       `isAgent`: la validación de tokens vive en `src/auth/guards.ts`
@@ -132,6 +134,7 @@ uno del que no es miembro es 403 `tenant_forbidden`, no un cambio de alcance.
 - [ ] Reporte diario automatizado
 
 ### Sprint 2 — Módulo contable (Alegra MCP) — **código listo, pendiente de producción**
+
 - [x] Migración 003: `alegra_sync`, `legal_accounting_map` (seed), `alegra_journal_lines`,
       `ledger_checkpoint`, `contract_cfdi` (FK + `PRAGMA foreign_keys = ON`)
 - [x] `buildAccountingPayload()`: JOIN D1, cadena de hashes del ledger, ventana del
@@ -153,7 +156,8 @@ uno del que no es miembro es 403 `tenant_forbidden`, no un cambio de alcance.
 - [ ] **Ensayo end-to-end** contra un Alegra de pruebas
 
 ### Sprint 4 — Tenant Isolation, Distributed Rate Limiter, Observabilidad (2026-10-21)
-- [x] **Multi-tenant Fase 4 (tenant_id en tablas de negocio)**: Migración `0006_tenant_isolation.sql` añade `tenant_id` a 17 tablas (`cases`, `clients`, `debts`, `messages`, `promises`, `events`, `contracts`, `legal_audit`, `intakes`, `alegra_sync`, `alegra_journal_lines`, `contract_cfdi`, `ledger_checkpoint`, `tenant_accounting_map`, `tenant_channels`, `tenant_users`, `platform_users`) con índices compuestos `(tenant_id, ...)`. Todos los servicios (`casos`, `clientes`, `deudas`, `mensajes`, `promesas`, `contratos`, `legalAudit`, `eventos`, `metricas`, `ingesta`) actualizados a `TenantContext`. Contabilidad, crons, rutas y orquestación propagan el contexto. *(Las dos últimas tablas de esa lista, `tenant_users` y `platform_users`, quedaron después sustituidas por `tenant_memberships` y `users.platform_role` en el Sprint 5.)*
+
+- [x] **Multi-tenant Fase 4 (tenant_id en tablas de negocio)**: Migración `0006_tenant_isolation.sql` añade `tenant_id` a 17 tablas (`cases`, `clients`, `debts`, `messages`, `promises`, `events`, `contracts`, `legal_audit`, `intakes`, `alegra_sync`, `alegra_journal_lines`, `contract_cfdi`, `ledger_checkpoint`, `tenant_accounting_map`, `tenant_channels`, `tenant_users`, `platform_users`) con índices compuestos `(tenant_id, ...)`. Todos los servicios (`casos`, `clientes`, `deudas`, `mensajes`, `promesas`, `contratos`, `legalAudit`, `eventos`, `metricas`, `ingesta`) actualizados a `TenantContext`. Contabilidad, crons, rutas y orquestación propagan el contexto. _(Las dos últimas tablas de esa lista, `tenant_users` y `platform_users`, quedaron después sustituidas por `tenant_memberships` y `users.platform_role` en el Sprint 5.)_
 - [x] **Rate Limiter distribuido (Durable Object)**: `RateLimiterDO` (nuevo `src/durable/rate-limiter.ts`) reemplaza KV check-then-act con contador atómico por `tenantId:channel` persistido en DO storage. Binding `RATE_LIMITER` en `wrangler.jsonc` + migración `v2`. `acquireRateSlot` en consumidor lanza `DeferredError` con `retryAfter` correcto.
 - [x] **Observabilidad (structured logging + OpenTelemetry traces)**: Logger extendido con `TraceContext` (W3C traceparent), `generateTraceId/spanId`, `extract/injectTraceContext`, `traceMiddleware` en Hono. Traza propagada en `fetch` → `queue` → `scheduled`. Tracer spans en `processCase` (por canal), `dispararHoy` (por caso encolado), crons (por tenant). Queue messages incluyen `traceId`/`spanId`. Logs JSON con `traceId`/`spanId` para correlación completa.
 
@@ -225,36 +229,36 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
   1. **Streaming LLM** (`runAIStream` + `redactMessageVozStream` en `src/ai/agent.ts`) — emite chunks conforme llegan.
   2. **Modelo chico** (`@cf/meta/llama-3.1-8b-instruct` via `DEFAULT_VOZ_MODEL` / `SPIKE_VOZ_MODEL`) — objetivo < 800 ms p95.
   3. **Prompt voz acortado** (`SYSTEM_REDACT_VOZ` en `src/ai/prompts.ts`) — ≤ 1 frase, ≤ 20 palabras, identificación de bot obligatoria.
-  Pipeline `voice.ts` reescrito para lanzar TTS al primer fin de frase. **`npm run verify` verde (239 tests)**.
-  **Bloqueante de medición**: la cuenta gratuita de Workers AI (10 000 neuronas/día) agotó antes de completar las 10 llamadas de prueba. **Requiere plan de pago** (cuesta centavos/día) para repetir el arnés y obtener p50/p95 reales.
+     Pipeline `voice.ts` reescrito para lanzar TTS al primer fin de frase. **`npm run verify` verde (239 tests)**.
+     **Bloqueante de medición**: la cuenta gratuita de Workers AI (10 000 neuronas/día) agotó antes de completar las 10 llamadas de prueba. **Requiere plan de pago** (cuesta centavos/día) para repetir el arnés y obtener p50/p95 reales.
 
 ## Verificación realizada
 
-| Qué | Cómo | Resultado |
-|---|---|---|
-| Suite unitaria | `npm test` (14 archivos) | 239/239 |
-| Estilo y tipos | `npm run lint` · `npm run typecheck` | limpios |
-| Build del worker | `npm run build:worker` | limpio |
-| Migraciones | `wrangler d1 migrations apply --local` (BD nueva) | 8 migraciones OK; esquema igual al que lee el código |
-| Foreign keys | insert con `tenant_id` inexistente | `SQLITE_CONSTRAINT_FOREIGNKEY` |
-| Backfill multi-tenant | `SELECT` sobre `tenants` y `tenant_accounting_map` | 1 tenant, 12 reglas contables copiadas |
-| Identidad por tenant | test de dos tenants con razón social distinta | cada uno firma con la suya; sin herencia de la plataforma |
-| Resolución de tenant | test con `tenants` inexistente | sin tenant explícito → tenant de respaldo (`t_arkangel`); con tenant explícito → 404, no hereda la config |
-| Enrutado del inbound | test de routing id por canal | WhatsApp/SMS/email se atribuyen al tenant de su `provider_account_id` |
-| Dedupe en la transición | test de `reserveOnceConLegado` | una reserva legacy viva bloquea la nueva: no se reinicia la ventana |
-| SQL contable | queries reales contra D1 local | ingreso reconoce sólo `delivered`/`read`; `sent` excluido |
-| Transporte MCP | servidor HTTP real (`tests/alegraMcp.test.ts`) | handshake, SSE, cache de sesión, mapeo de errores |
-| Auth por sesión (nativa) | test de `tests/authNative.test.ts` (D1 de mentira, sin red) | cookie válida → principal del usuario con su membresía; cabecera `X-Tenant-Id` de otro despacho → 403 `tenant_forbidden`; usuario sin membresías → 401 `sin_membresia`; sesión válida no cae al token de máquina |
-| Scopes por ruta | test de la guardia en cada router | sin credencial → 401 `unauthorized`; con credencial pero scope insuficiente → 403 `forbidden` + `scope`; un `viewer` lee casos pero no despacha |
-| **Aislamiento multi-tenant** | test de dos tenants accediendo a `/cases/:id` del otro | 403 `tenant_mismatch` en lectura por id; cada tenant ve solo sus datos |
-| **Rate limiter DO** | test de burst concurrente 100 req/tenant+canal | ≤ `rateLimitRpm` por minuto, sin race conditions |
-| **Trace propagation** | request → queue consumer → scheduled cron | mismo `traceId` en logs de toda la cadena; `spanId` único por operación |
-| **Hash de contraseña** | test de `src/auth/native.ts` | PBKDF2 con 25 000 iteraciones y sal de 16 bytes; la misma contraseña sale con distinta sal; un hash mal formado no verifica |
-| **Sesión nativa** | test de `tests/authNative.test.ts` (D1 de mentira) | en D1 sólo se guarda el SHA-256 del token; cookie inválida o sesión revocada no dan sesión |
-| **Ciclo de vida en producción** | `curl` contra el worker desplegado | login 200 + `Set-Cookie`; `session` 200; logout 200 y la cookie deja de servir; sin cookie → 401; despacho ajeno → 403 |
-| **CI en GitHub Actions** | 4 runs reales (`push` y `pull_request` a `main`) | PR #1 (run 39684812269, 38 s), push a `main` (39685011657, 33 s), PR #2 (39688865320, 33 s), push a `main` (39689054239, 31 s): los cuatro verdes |
-| **Spike de voz** | 25 tests de `tests/spikeVoz.test.ts` + **20 llamadas reales** (`npm run spike:voz`) | percentiles (nearest rank), DO (estado, métricas, barge-in, cierre), credenciales de voz y pipeline con dobles; y la corrida real: **16/20 llamadas con turnos medidos (32 turnos)** — `round_trip_ms` p50 2525 ms / **p95 3914 ms** (criterio < 1500 ms → **NO-GO por latencia**), `stt_final_ms` p50 1680 ms, `tts_first_chunk_ms` p50 799 ms. El LLM sin streaming se come el round-trip. Las 4 llamadas restantes chocaron con el tope de 10 000 neuronas/día de Workers AI |
-| **Mini-spike latencia** | `npm run verify` (239 tests) + código listo; arnés ejecutado pero **truncado por cuota gratuita** | 3 palancas aplicadas (streaming LLM, modelo 8B, prompt voz ≤20 palabras). **Falta: activar plan de pago Workers AI** y repetir `SPIKE_LLAMADAS=20 npm run spike:voz` para p50/p95 reales y veredicto definitivo. |
+| Qué                             | Cómo                                                                                              | Resultado                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Suite unitaria                  | `npm test` (14 archivos)                                                                          | 239/239                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Estilo y tipos                  | `npm run lint` · `npm run typecheck`                                                              | limpios                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Build del worker                | `npm run build:worker`                                                                            | limpio                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Migraciones                     | `wrangler d1 migrations apply --local` (BD nueva)                                                 | 8 migraciones OK; esquema igual al que lee el código                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Foreign keys                    | insert con `tenant_id` inexistente                                                                | `SQLITE_CONSTRAINT_FOREIGNKEY`                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Backfill multi-tenant           | `SELECT` sobre `tenants` y `tenant_accounting_map`                                                | 1 tenant, 12 reglas contables copiadas                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Identidad por tenant            | test de dos tenants con razón social distinta                                                     | cada uno firma con la suya; sin herencia de la plataforma                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Resolución de tenant            | test con `tenants` inexistente                                                                    | sin tenant explícito → tenant de respaldo (`t_arkangel`); con tenant explícito → 404, no hereda la config                                                                                                                                                                                                                                                                                                                                                                       |
+| Enrutado del inbound            | test de routing id por canal                                                                      | WhatsApp/SMS/email se atribuyen al tenant de su `provider_account_id`                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Dedupe en la transición         | test de `reserveOnceConLegado`                                                                    | una reserva legacy viva bloquea la nueva: no se reinicia la ventana                                                                                                                                                                                                                                                                                                                                                                                                             |
+| SQL contable                    | queries reales contra D1 local                                                                    | ingreso reconoce sólo `delivered`/`read`; `sent` excluido                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Transporte MCP                  | servidor HTTP real (`tests/alegraMcp.test.ts`)                                                    | handshake, SSE, cache de sesión, mapeo de errores                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Auth por sesión (nativa)        | test de `tests/authNative.test.ts` (D1 de mentira, sin red)                                       | cookie válida → principal del usuario con su membresía; cabecera `X-Tenant-Id` de otro despacho → 403 `tenant_forbidden`; usuario sin membresías → 401 `sin_membresia`; sesión válida no cae al token de máquina                                                                                                                                                                                                                                                                |
+| Scopes por ruta                 | test de la guardia en cada router                                                                 | sin credencial → 401 `unauthorized`; con credencial pero scope insuficiente → 403 `forbidden` + `scope`; un `viewer` lee casos pero no despacha                                                                                                                                                                                                                                                                                                                                 |
+| **Aislamiento multi-tenant**    | test de dos tenants accediendo a `/cases/:id` del otro                                            | 403 `tenant_mismatch` en lectura por id; cada tenant ve solo sus datos                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **Rate limiter DO**             | test de burst concurrente 100 req/tenant+canal                                                    | ≤ `rateLimitRpm` por minuto, sin race conditions                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **Trace propagation**           | request → queue consumer → scheduled cron                                                         | mismo `traceId` en logs de toda la cadena; `spanId` único por operación                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **Hash de contraseña**          | test de `src/auth/native.ts`                                                                      | PBKDF2 con 25 000 iteraciones y sal de 16 bytes; la misma contraseña sale con distinta sal; un hash mal formado no verifica                                                                                                                                                                                                                                                                                                                                                     |
+| **Sesión nativa**               | test de `tests/authNative.test.ts` (D1 de mentira)                                                | en D1 sólo se guarda el SHA-256 del token; cookie inválida o sesión revocada no dan sesión                                                                                                                                                                                                                                                                                                                                                                                      |
+| **Ciclo de vida en producción** | `curl` contra el worker desplegado                                                                | login 200 + `Set-Cookie`; `session` 200; logout 200 y la cookie deja de servir; sin cookie → 401; despacho ajeno → 403                                                                                                                                                                                                                                                                                                                                                          |
+| **CI en GitHub Actions**        | 4 runs reales (`push` y `pull_request` a `main`)                                                  | PR #1 (run 39684812269, 38 s), push a `main` (39685011657, 33 s), PR #2 (39688865320, 33 s), push a `main` (39689054239, 31 s): los cuatro verdes                                                                                                                                                                                                                                                                                                                               |
+| **Spike de voz**                | 25 tests de `tests/spikeVoz.test.ts` + **20 llamadas reales** (`npm run spike:voz`)               | percentiles (nearest rank), DO (estado, métricas, barge-in, cierre), credenciales de voz y pipeline con dobles; y la corrida real: **16/20 llamadas con turnos medidos (32 turnos)** — `round_trip_ms` p50 2525 ms / **p95 3914 ms** (criterio < 1500 ms → **NO-GO por latencia**), `stt_final_ms` p50 1680 ms, `tts_first_chunk_ms` p50 799 ms. El LLM sin streaming se come el round-trip. Las 4 llamadas restantes chocaron con el tope de 10 000 neuronas/día de Workers AI |
+| **Mini-spike latencia**         | `npm run verify` (239 tests) + código listo; arnés ejecutado pero **truncado por cuota gratuita** | 3 palancas aplicadas (streaming LLM, modelo 8B, prompt voz ≤20 palabras). **Falta: activar plan de pago Workers AI** y repetir `SPIKE_LLAMADAS=20 npm run spike:voz` para p50/p95 reales y veredicto definitivo.                                                                                                                                                                                                                                                                |
 
 ## Deuda técnica y riesgos abiertos
 
@@ -268,9 +272,9 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
 
 - **La identidad ya no depende de nadie.** Contraseña con PBKDF2 (SHA-256, 25 000 iteraciones) verificada dentro del Worker; la sesión es un token aleatorio que D1 guarda **hasheado** (`auth_sessions.token_hash`) y que en el navegador viaja sólo en la cookie `ark_session` (`HttpOnly`, `SameSite=Lax`, 30 días).
 - **Ya hay usuario owner en el entorno remoto** (`substrateholdingsai@gmail.com`, con membresía `owner` en `t_arkangel` y `admin` en `t_ark_systems`). Para dar de alta a otro: `npm run seed:owner:remote -- --email ... --password ... --tenant t_xxx --role owner`. Sin usuarios, el panel devuelve 401 y sólo funcionan los tokens de máquina.
-- **El rol lo concede la membresía, no la cabecera.** `tenant_memberships` es la fuente de verdad (`owner` → `owner`, `admin` → `operator`, `member` → `viewer`; tabla `ROLE_POR_MEMBRESIA` en `src/auth/native.ts`). `X-Tenant-Id` sólo *selecciona* entre las membresías del usuario: pedir un despacho ajeno es 403 `tenant_forbidden`.
+- **El rol lo concede la membresía, no la cabecera.** `tenant_memberships` es la fuente de verdad (`owner` → `owner`, `admin` → `operator`, `member` → `viewer`; tabla `ROLE_POR_MEMBRESIA` en `src/auth/native.ts`). `X-Tenant-Id` sólo _selecciona_ entre las membresías del usuario: pedir un despacho ajeno es 403 `tenant_forbidden`.
 - **Registro público cerrado** (2026-10-22): `POST /api/auth/register` → 403. Altas sólo con `seed-owner`.
-- **Restablecer contraseña por correo** (2026-10-22): `src/auth/email.ts` envía por Resend desde `AUTH_FROM_EMAIL` (`auth@arksystems.site`, dominio verificado) con enlace a `APP_URL` (`https://arkangel.arksystems.site/?auth=restablecer&token=…`). El envío corre en `waitUntil` (misma 202 exista o no la cuenta), el hash se calcula antes de consumir el token y el reset marca el correo como verificado. Pantallas "¿Olvidaste tu contraseña?" y "Nueva contraseña" en `AuthGate.tsx`. Secret `RESEND_API_KEY` cargado.
+- **Restablecer contraseña por correo** (2026-10-22): `src/auth/email.ts` envía por Resend desde `AUTH_FROM_EMAIL` (`no-reply@auth.arksystems.site`, subdominio `auth.arksystems.site` verificado) con enlace a `APP_URL` (`https://arkangel.arksystems.site/?auth=restablecer&token=…`). El envío corre en `waitUntil` (misma 202 exista o no la cuenta), el hash se calcula antes de consumir el token y el reset marca el correo como verificado. Pantallas "¿Olvidaste tu contraseña?" y "Nueva contraseña" en `AuthGate.tsx`. Secret `RESEND_API_KEY` cargado.
 - **Pendiente auth**: PBKDF2 25 000 → 100 000 con rehash en login; invitaciones por correo; rotar la API key de Resend.
 - **El cambio de contraseña ya está en el panel** (`POST /api/auth/change-password`): valida la actual, aplica la política de la nueva, revoca todas las sesiones y limpia la cookie. La nueva debe ser **distinta** de la actual (400) y una sesión revocada no puede cambiar la contraseña (401).
 - **La allowlist de dominios y la ventana horaria del módulo contable** siguen viniendo de `env.TZ` (Fase 6).
