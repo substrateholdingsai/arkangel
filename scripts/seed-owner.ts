@@ -29,7 +29,7 @@ import { writeFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
 const BASE_DE_DATOS = 'arkangel-cobranza-db';
-const ITERACIONES = 25_000;
+const ITERACIONES = 100_000;
 const LONGITUD_SAL = 16;
 const LONGITUD_HASH = 32;
 const ROLES = ['owner', 'admin', 'member'] as const;

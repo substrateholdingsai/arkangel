@@ -32,7 +32,7 @@ export const SESSION_COOKIE = 'ark_session';
 export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 
 /** Iteraciones de PBKDF2 para el hash de la contraseña. */
-export const PASSWORD_ITERATIONS = 25_000;
+export const PASSWORD_ITERATIONS = 100_000;
 
 /** Vida del token de restablecimiento de contraseña: 30 minutos. */
 export const RESET_TTL_SECONDS = 60 * 30;
@@ -122,8 +122,8 @@ function fromHex(hex: string): Uint8Array {
 }
 
 /**
- * Hashea una contraseña con PBKDF2 (SHA-256, 25 000 iteraciones, sal de 16
- * bytes). Formato: `pbkdf2_sha256$25000$salt$hash`.
+ * Hashea una contraseña con PBKDF2 (SHA-256, 100 000 iteraciones, sal de 16
+ * bytes). Formato: `pbkdf2_sha256$100000$salt$hash`.
  */
 export async function hashPassword(password: string): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
@@ -140,6 +140,20 @@ export async function hashPassword(password: string): Promise<string> {
     HASH_BYTES * 8
   );
   return `pbkdf2_sha256$${PASSWORD_ITERATIONS}$${toHex(salt)}$${toHex(new Uint8Array(bits))}`;
+}
+
+/**
+ * ¿El hash guardado usa menos iteraciones que `PASSWORD_ITERATIONS`?
+ * Si es así, el login recalcula el hash para endurecerlo sin pedir cambio.
+ */
+export function passwordNeedsRehash(encoded: string): boolean {
+  const [algorithm, iterationsText] = encoded.split('$');
+  const iterations = Number(iterationsText);
+  return (
+    algorithm === 'pbkdf2_sha256' &&
+    Number.isSafeInteger(iterations) &&
+    iterations < PASSWORD_ITERATIONS
+  );
 }
 
 /**

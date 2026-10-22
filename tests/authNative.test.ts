@@ -11,6 +11,7 @@ import {
   normalizaEmail,
   PASSWORD_ITERATIONS,
   passwordIsValid,
+  passwordNeedsRehash,
   publicSession,
   randomToken,
   requestIsSecure,
@@ -186,14 +187,22 @@ function peticion(cookies?: Record<string, string>, cabeceras?: Record<string, s
 /* ── Hash de contraseña ───────────────────────────────────────────────────── */
 
 describe('hash de contraseña', () => {
-  it('usa PBKDF2 con 25 000 iteraciones y sal de 16 bytes', async () => {
+  it('usa PBKDF2 con 100 000 iteraciones y sal de 16 bytes', async () => {
     const hash = await hashPassword('una contraseña larga');
     const [algoritmo, iteraciones, sal, resumen] = hash.split('$');
 
     expect(algoritmo).toBe('pbkdf2_sha256');
     expect(Number(iteraciones)).toBe(PASSWORD_ITERATIONS);
+    expect(PASSWORD_ITERATIONS).toBe(100_000);
     expect(sal).toMatch(/^[0-9a-f]{32}$/);
     expect(resumen).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('detecta cuando un hash legado de 25 000 iteraciones requiere rehash', async () => {
+    const legado = `pbkdf2_sha256$25000$${'aa'.repeat(16)}$${'bb'.repeat(32)}`;
+    const actual = await hashPassword('una contraseña larga');
+    expect(passwordNeedsRehash(legado)).toBe(true);
+    expect(passwordNeedsRehash(actual)).toBe(false);
   });
 
   it('la misma contraseña sale con distinta sal', async () => {

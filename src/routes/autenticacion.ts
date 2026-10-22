@@ -30,7 +30,9 @@ import {
   hashPassword,
   issueActionToken,
   normalizaEmail,
+  PASSWORD_ITERATIONS,
   passwordIsValid,
+  passwordNeedsRehash,
   publicSession,
   rateLimited,
   requestIsSecure,
@@ -87,6 +89,13 @@ autenticacion.post('/login', async (c) => {
   if (!user || !coincide || !user.emailVerifiedAt) {
     logger.warn('Intento de login fallido');
     return c.json({ error: 'Correo o contraseña incorrectos.' }, 401);
+  }
+
+  if (user.passwordHash && passwordNeedsRehash(user.passwordHash)) {
+    const nuevoHash = await hashPassword(password);
+    await c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?')
+      .bind(nuevoHash, user.id)
+      .run();
   }
 
   const sesion = await createSession(c.env, user.id);

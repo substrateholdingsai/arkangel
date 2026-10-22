@@ -44,8 +44,8 @@ export function parseResendPayload(payload: unknown): ParsedInbound {
 }
 
 export async function sendResendEmail(env: Env, params: SendParams): Promise<SendResult> {
-  const apiKey = params.credentials?.email?.api_key ?? env.RESEND_API_KEY;
-  const fromEmail = params.credentials?.email?.from_email ?? env.RESEND_FROM_EMAIL;
+  const apiKey = (params.credentials?.email?.api_key ?? env.RESEND_API_KEY)?.trim();
+  const fromEmail = (params.credentials?.email?.from_email ?? env.RESEND_FROM_EMAIL)?.trim();
 
   if (!apiKey || !fromEmail) {
     logger.error('Credenciales de Resend incompletas', { caseId: params.caseId });
