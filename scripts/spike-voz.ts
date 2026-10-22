@@ -25,13 +25,61 @@ import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { percentil, type ResumenMetricas } from '../src/lib/medidas';
 
-const BASE_URL = process.env.SPIKE_BASE_URL ?? 'http://localhost:8787';
-const ADMIN_TOKEN = process.env.SPIKE_ADMIN_TOKEN ?? '';
-const AUDIO_PATH = process.env.SPIKE_AUDIO_PATH ?? '';
-const TENANT_ID = process.env.SPIKE_TENANT_ID ?? 't_arkangel';
-const LLAMADAS = Number(process.env.SPIKE_LLAMADAS ?? '20');
-/** Silencio entre turnos (ms): el guion son 3 turnos con pausas. */
-const PAUSA_ENTRE_TURNOS_MS = Number(process.env.SPIKE_PAUSA_MS ?? '1200');
+/** Configuración efectiva del arnés. */
+interface Config {
+  baseUrl: string;
+  adminToken: string;
+  audioPath: string;
+  tenantId: string;
+  llamadas: number;
+  pausaMs: number;
+}
+
+/**
+ * Lee `.dev.vars` (no commiteado) y lo usa como respaldo.
+ *
+ * El entorno manda: `.dev.vars` sólo rellena lo que no esté ya exportado.
+ * Así `npm run spike:voz` funciona sin exportar variables a mano, y un
+ * `wrangler dev` con otro token se sigue respetando.
+ */
+async function leeDevVars(ruta = '.dev.vars'): Promise<Record<string, string>> {
+  let texto: string;
+  try {
+    texto = await readFile(ruta, 'utf8');
+  } catch {
+    return {};
+  }
+  const vars: Record<string, string> = {};
+  for (const linea of texto.split(/\r?\n/)) {
+    const limpia = linea.trim();
+    if (!limpia || limpia.startsWith('#')) continue;
+    const corte = limpia.indexOf('=');
+    if (corte <= 0) continue;
+    const nombre = limpia.slice(0, corte).trim();
+    let valor = limpia.slice(corte + 1).trim();
+    const comilla =
+      (valor.startsWith('"') && valor.endsWith('"')) ||
+      (valor.startsWith("'") && valor.endsWith("'"));
+    if (comilla && valor.length >= 2) valor = valor.slice(1, -1);
+    vars[nombre] = valor;
+  }
+  return vars;
+}
+
+/** Primer valor no vacío: entorno primero, luego `.dev.vars`. */
+function toma(
+  devVars: Record<string, string>,
+  nombre: string,
+  ...alternativas: string[]
+): string {
+  for (const clave of [nombre, ...alternativas]) {
+    const delEntorno = process.env[clave];
+    if (delEntorno) return delEntorno;
+    const deVars = devVars[clave];
+    if (deVars) return deVars;
+  }
+  return '';
+}
 
 const METRICAS = [
   'stt_partial_ms',
@@ -61,9 +109,14 @@ async function leeWav(ruta: string): Promise<Int16Array> {
   throw new Error(`No se encontró el chunk 'data' en ${ruta}`);
 }
 
-/** Manda el audio en bloques de 20 ms (640 muestras a 16 kHz). */
+/**
+ * Manda el audio en bloques de 20 ms.
+ *
+ * A 16 kHz, 20 ms son 320 muestras (640 muestras serían 40 ms: el audio
+ * llegaría al doble de velocidad y el STT vería un habla deformada).
+ */
 function mandaAudio(socket: WebSocket, muestras: Int16Array, enFinal: () => void): void {
-  const bloque = 640;
+  const bloque = 320;
   let i = 0;
   const temporizador = setInterval(() => {
     if (i >= muestras.length || socket.readyState !== WebSocket.OPEN) {
@@ -72,20 +125,25 @@ function mandaAudio(socket: WebSocket, muestras: Int16Array, enFinal: () => void
       return;
     }
     const trozo = muestras.subarray(i, i + bloque);
-    socket.send(trozo.buffer.slice(trozo.byteOffset, tramo.byteOffset + tramo.byteLength));
+    socket.send(trozo.buffer.slice(trozo.byteOffset, trozo.byteOffset + trozo.byteLength));
     i += bloque;
   }, 20);
 }
 
 /** Corre una llamada completa y devuelve sus métricas. */
-async function correLlamada(indice: number): Promise<Record<string, number[]>> {
-  const respuesta = await fetch(`${BASE_URL}/spike/call`, {
+async function correLlamada(indice: number, config: Config): Promise<Record<string, number[]>> {
+  const respuesta = await fetch(`${config.baseUrl}/spike/call`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-admin-token': ADMIN_TOKEN,
+      'x-admin-token': config.adminToken,
     },
-    body: JSON.stringify({ tenantId: TENANT_ID, clientName: `Cliente ${indice}` }),
+    body: JSON.stringify({
+      tenantId: config.tenantId,
+      clientName: `Cliente ${indice}`,
+      // El arnés habla por WebSocket: no necesita reunión de Realtime.
+      realtime: false,
+    }),
   });
   if (!respuesta.ok) {
     throw new Error(`POST /spike/call → ${respuesta.status} ${await respuesta.text()}`);
@@ -96,29 +154,63 @@ async function correLlamada(indice: number): Promise<Record<string, number[]>> {
     traceId: string;
   };
 
-  const url = `${BASE_URL.replace(/^http/, 'ws')}${llamada.audioUrl}`;
-  const socket = new WebSocket(url);
-  const muestras = await leeWav(AUDIO_PATH);
+  const url = `${config.baseUrl.replace(/^http/, 'ws')}${llamada.audioUrl}`;
+  // El canal de audio es un WebSocket: el token va en la cabecera. (En el
+  // navegador el mismo canal lo autentica la cookie de sesión.)
+  const socket = new WebSocket(url, {
+    headers: { 'x-admin-token': config.adminToken },
+  });
+  // El DO manda por el mismo socket los eventos del pipeline: se muestran
+  // para poder ver en vivo qué pasa (y si algo falla).
+  socket.addEventListener('message', (evento) => {
+    if (typeof evento.data !== 'string') return;
+    try {
+      const mensaje = JSON.parse(evento.data) as { tipo?: string; texto?: string; mensaje?: string };
+      if (mensaje.tipo === 'error') {
+        console.error(`  · error del pipeline: ${mensaje.mensaje ?? ''}`);
+        return;
+      }
+      if (mensaje.tipo === 'final' || mensaje.tipo === 'parcial') {
+        console.error(`  · ${mensaje.tipo}: ${mensaje.texto ?? ''}`);
+      }
+    } catch {
+      // Evento ilegible: se ignora.
+    }
+  });
+  const muestras = await leeWav(config.audioPath);
 
   await new Promise<void>((resolver, rechazar) => {
+    // Se espera el cierre real del socket: si se resuelve antes, el proceso
+    // se queda vivo con el socket a medio cerrar (y Node aborta al salir).
+    // El plazo es holgado: el guion se manda en tiempo real y dura más que
+    // el audio; el corte de seguridad es sólo para no colgarse.
+    const seguridad = setTimeout(() => resolver(), 120_000);
     socket.addEventListener('open', () => {
       // El guion son 3 turnos: se manda el audio y se espera la pausa entre
       // turnos (el STT cierra cada turno con su final).
       mandaAudio(socket, muestras, () => {
         setTimeout(() => {
           socket.close();
-          resolver();
-        }, PAUSA_ENTRE_TURNOS_MS * 3);
+        }, config.pausaMs * 3);
       });
     });
-    socket.addEventListener('error', () => rechazar(new Error('error del socket de audio')));
+    socket.addEventListener('close', () => {
+      clearTimeout(seguridad);
+      resolver();
+    });
+    socket.addEventListener('error', () => {
+      clearTimeout(seguridad);
+      rechazar(new Error('error del socket de audio'));
+    });
   });
 
-  const estado = await fetch(`${BASE_URL}/spike/call/${llamada.callId}/estado`, {
-    headers: { 'x-admin-token': ADMIN_TOKEN },
+  const estado = await fetch(`${config.baseUrl}/spike/call/${llamada.callId}/estado`, {
+    headers: { 'x-admin-token': config.adminToken },
   });
   const datos = (await estado.json()) as { metricas: Record<string, number[]> };
-  console.error(`llamada ${indice + 1}/${LLAMADAS} · ${llamada.callId} · ${llamada.traceId}`);
+  console.error(
+    `llamada ${indice + 1}/${config.llamadas} · ${llamada.callId} · ${llamada.traceId}`
+  );
   return datos.metricas ?? {};
 }
 
@@ -139,11 +231,23 @@ function imprimeTabla(resumen: ResumenMetricas): void {
 }
 
 async function main(): Promise<void> {
-  if (!ADMIN_TOKEN) {
-    console.error('Falta SPIKE_ADMIN_TOKEN.');
+  const devVars = await leeDevVars();
+
+  const config: Config = {
+    baseUrl: toma(devVars, 'SPIKE_BASE_URL') || 'http://localhost:8787',
+    adminToken: toma(devVars, 'SPIKE_ADMIN_TOKEN', 'ADMIN_TOKEN'),
+    audioPath: toma(devVars, 'SPIKE_AUDIO_PATH') || './spike/guion.wav',
+    tenantId: toma(devVars, 'SPIKE_TENANT_ID') || 't_arkangel',
+    llamadas: Number(toma(devVars, 'SPIKE_LLAMADAS') || '20'),
+    /** Silencio entre turnos (ms): el guion son 3 turnos con pausas. */
+    pausaMs: Number(toma(devVars, 'SPIKE_PAUSA_MS') || '1200'),
+  };
+
+  if (!config.adminToken) {
+    console.error('Falta SPIKE_ADMIN_TOKEN (o ADMIN_TOKEN en .dev.vars).');
     process.exit(1);
   }
-  if (!AUDIO_PATH) {
+  if (!config.audioPath) {
     console.error('Falta SPIKE_AUDIO_PATH (WAV mono 16 kHz con el guion de 3 turnos).');
     process.exit(1);
   }
@@ -151,8 +255,8 @@ async function main(): Promise<void> {
   const todas: Record<string, number[]> = {};
   for (const nombre of METRICAS) todas[nombre] = [];
 
-  for (let i = 0; i < LLAMADAS; i++) {
-    const metricas = await correLlamada(i);
+  for (let i = 0; i < config.llamadas; i++) {
+    const metricas = await correLlamada(i, config);
     for (const nombre of METRICAS) {
       todas[nombre].push(...(metricas[nombre] ?? []));
     }
@@ -173,7 +277,10 @@ async function main(): Promise<void> {
     };
   }
   imprimeTabla(resumen);
-  console.log(`guion: ${basename(AUDIO_PATH)} · ${LLAMADAS} llamadas`);
+  console.log(`guion: ${basename(config.audioPath)} · ${config.llamadas} llamadas`);
+  // Los sockets de Workers AI pueden dejar el bucle de eventos vivo: se sale
+  // explícitamente una vez escrito el resultado.
+  process.exit(0);
 }
 
 main().catch((error) => {

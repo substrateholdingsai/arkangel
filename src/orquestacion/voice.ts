@@ -3,7 +3,7 @@
  *
  * El orden de una llamada:
  *
- *   navegador ─PCM─► STT (Deepgram, parciales + final)
+ *   navegador ─PCM─► STT (Workers AI · Nova-3, parciales + final)
  *                      │
  *                      ├─ parcial durante la locución ─► barge-in: se corta el TTS
  *                      │
@@ -23,7 +23,12 @@
  *   spike no guarda la voz del deudor (ver `docs/spike-voz.md`).
  */
 
-import { redactMessage, type RedactParams } from '../ai/agent';
+import {
+  redactMessage,
+  redactMessageVozStream,
+  type RedactParams,
+  type RedactVozParams,
+} from '../ai/agent';
 import { createLoggerWithTrace } from '../lib/logger';
 import type { ScoreBand } from '../lib/score';
 import type { Env } from '../types/env';
@@ -90,12 +95,22 @@ export interface OpcionesPipeline {
   crearTts?: FabricaTts;
   /** Redactor (por defecto, `redactMessage` de `src/ai/agent.ts`). */
   redactar?: (env: Env, params: RedactParams) => Promise<{ body: string; source: string }>;
+  /** Redactor en streaming para voz (emite chunks de texto conforme llegan). */
+  redactarStream?: (env: Env, params: RedactVozParams) => AsyncGenerator<string, void, unknown>;
   /** Reloj inyectable (milisegundos). */
   ahora?: () => number;
 }
 
 /** Contrato del pipeline: lo que el DO necesita saber. */
 export interface PipelineVoz {
+  /**
+   * Abre el STT y **resuelve cuando ya está conectado**.
+   *
+   * El socket del STT vive en el contexto de la petición que lo abre, así que
+   * hay que abrirlo *antes* de responder al cliente: si se abre después, el
+   * runtime lo cierra y la transcripción no llega.
+   */
+  abrir(): Promise<void>;
   /** Recibe audio PCM del navegador (16 kHz, mono, 16 bits). */
   recibirAudio(chunk: ArrayBuffer): void;
   /** Corta la locución en curso (barge-in). */
@@ -120,11 +135,27 @@ export function metricasVacias(): MetricasTurno {
 }
 
 /**
+ * Estado de un turno: sus métricas y sus marcas de tiempo.
+ *
+ * Vive dentro del turno, no en la instancia: así dos turnos que se pisan (el
+ * usuario habla otra vez antes de que el bot termine) no se arruinan entre sí.
+ */
+interface TurnoVoz {
+  metricas: MetricasTurno;
+  /** Inicio del audio del usuario (para medir STT parcial/final). */
+  turnoInicioMs: number;
+  /** Momento del final de la transcripción (base del round-trip). */
+  finalMs: number;
+  /** Momento en que arrancó la locución. */
+  locucionInicioMs: number;
+}
+
+/**
  * Pipeline de voz del spike.
  *
  * La clase se construye con las piezas ya resueltas (STT, TTS y la función de
- * redacción): en producción las arma `crearPipelineVoz` con Deepgram y
- * Workers AI; en las pruebas se inyectan dobles.
+ * redacción): en producción las arma `crearPipelineVoz` con Workers AI
+ * (Nova-3 para el STT y Aura para el TTS); en las pruebas se inyectan dobles.
  */
 export class PipelineVozImpl implements PipelineVoz {
   private readonly ahora: () => number;
@@ -132,17 +163,38 @@ export class PipelineVozImpl implements PipelineVoz {
   private readonly stt: SttLike | null;
   private readonly tts: TtsLike | null;
 
-  /** Inicio del turno de audio del usuario (para medir STT parcial/final). */
-  private turnoInicioMs = 0;
-  /** Momento del final de la transcripción (base del round-trip). */
-  private finalMs = 0;
-  /** Momento en que arrancó la locución. */
-  private locucionInicioMs = 0;
   private enLocucion = false;
   private cerrado = false;
 
-  /** Métricas del turno en curso. */
-  private metricas: MetricasTurno = metricasVacias();
+  /**
+   * Turno en curso.
+   *
+   * Cada turno lleva **sus propias** métricas y marcas de tiempo. Antes eran
+   * campos de la instancia y eso corrompía las cifras: si el usuario volvía a
+   * hablar antes de que el bot terminara, el `fin_turno` del turno anterior
+   * borraba las marcas del nuevo y la latencia medida salía absurda.
+   */
+  private turno: TurnoVoz | null = null;
+
+  /** Cola de turnos: se procesan de uno en uno, en orden. */
+  private cola: Promise<void> = Promise.resolve();
+
+  /** Inicio del audio del usuario en curso (para medir STT parcial/final). */
+  private inicioAudioMs = 0;
+  /** Latencia del primer parcial de la utterance en curso. */
+  private sttPartialMs: number | null = null;
+  /** Latencia del barge-in de la utterance en curso. */
+  private bargeInMs: number | null = null;
+
+  /**
+   * Turno al que pertenece la locución en curso.
+   *
+   * El TTS avisa del primer fragmento por un callback que comparte toda la
+   * vida del cliente, así que sin esto un fragmento que llega tarde (por
+   * ejemplo, de una locución ya cortada) se le atribuye al turno que toque y
+   * se MIXTURA con sus marcas de tiempo.
+   */
+  private turnoDeLocucion: TurnoVoz | null = null;
 
   constructor(private readonly opciones: OpcionesPipeline) {
     this.ahora = opciones.ahora ?? (() => Date.now());
@@ -176,15 +228,22 @@ export class PipelineVozImpl implements PipelineVoz {
     return this.enLocucion;
   }
 
-  /** Abre el STT si hace falta (la fábrica puede devolver `null`). */
-  abrir(): void {
-    this.stt?.abrir();
+  /**
+   * Abre el STT si hace falta (la fábrica puede devolver `null`).
+   *
+   * Es asíncrono a propósito: el socket del STT tiene que quedar **establecido**
+   * dentro del contexto de la petición que lo abre. Si se abre "en volando"
+   * (después de que la petición ya respondió), el runtime lo cierra al terminar
+   * el contexto y la transcripción nunca llega.
+   */
+  async abrir(): Promise<void> {
+    await this.stt?.abrir();
   }
 
   /** Recibe audio PCM del navegador. */
   recibirAudio(chunk: ArrayBuffer): void {
     if (this.cerrado) return;
-    if (!this.turnoInicioMs) this.turnoInicioMs = this.ahora();
+    if (!this.inicioAudioMs) this.inicioAudioMs = this.ahora();
     this.stt?.enviar(new Uint8Array(chunk));
   }
 
@@ -197,14 +256,17 @@ export class PipelineVozImpl implements PipelineVoz {
     if (this.cerrado) return;
     if (this.enLocucion) {
       this.cortarLocucion();
-      this.metricas.barge_in_latency_ms = Math.max(0, this.ahora() - momentoMs);
+      this.bargeInMs = Math.max(0, this.ahora() - momentoMs);
+      if (this.turno) this.turno.metricas.barge_in_latency_ms = this.bargeInMs;
       this.log.info('Barge-in: se corta la locución', { texto });
       this.opciones.alEvento({ tipo: 'barge_in', momentoMs });
       return;
     }
-    // El primer parcial del turno marca cuándo el STT empezó a devolver texto.
-    if (this.metricas.stt_partial_ms === null) {
-      this.metricas.stt_partial_ms = Math.max(0, momentoMs - this.turnoInicioMs);
+    // El primer parcial de la utterance marca cuándo el STT empezó a devolver
+    // texto. Se guarda fuera del turno: el parcial llega antes del final, que
+    // es lo que abre el turno.
+    if (this.sttPartialMs === null) {
+      this.sttPartialMs = Math.max(0, momentoMs - (this.inicioAudioMs || momentoMs));
     }
     this.opciones.alEvento({ tipo: 'parcial', texto, momentoMs });
   }
@@ -212,37 +274,100 @@ export class PipelineVozImpl implements PipelineVoz {
   /**
    * Transcripción final: terminó el turno del usuario.
    *
-   * Aquí arranca la respuesta: LLM y después TTS. El round-trip se mide
-   * desde este instante hasta el primer fragmento de audio.
+   * Los turnos se procesan **de uno en uno**: si el usuario vuelve a hablar
+   * mientras el bot contesta, el turno nuevo espera a que termine el otro.
+   * Sin esto, los dos turnos comparten estado y las métricas salen mezcladas.
    */
-  async onFinal(texto: string, momentoMs: number): Promise<void> {
-    if (this.cerrado) return;
-    this.finalMs = momentoMs;
-    if (!this.turnoInicioMs) this.turnoInicioMs = momentoMs;
+  onFinal(texto: string, momentoMs: number): Promise<void> {
+    this.cola = this.cola.then(() => this.procesaTurno(texto, momentoMs));
+    return this.cola;
+  }
 
-    this.metricas.stt_partial_ms =
-      this.metricas.stt_partial_ms ?? this.finalMs - this.turnoInicioMs;
-    this.metricas.stt_final_ms = this.finalMs - this.turnoInicioMs;
+  /**
+   * Procesa un turno: LLM (streaming) y TTS.
+   *
+   * El round-trip se mide desde el final de la transcripción hasta el primer
+   * fragmento de audio. Con streaming, el TTS empieza con la primera frase.
+   */
+  private async procesaTurno(texto: string, momentoMs: number): Promise<void> {
+    if (this.cerrado) return;
+
+    const turno: TurnoVoz = {
+      metricas: metricasVacias(),
+      turnoInicioMs: this.inicioAudioMs || momentoMs,
+      finalMs: momentoMs,
+      locucionInicioMs: 0,
+    };
+    this.turno = turno;
+
+    turno.metricas.stt_partial_ms = this.sttPartialMs ?? momentoMs - turno.turnoInicioMs;
+    turno.metricas.stt_final_ms = momentoMs - turno.turnoInicioMs;
+    turno.metricas.barge_in_latency_ms = this.bargeInMs;
     this.opciones.alEvento({ tipo: 'final', texto, momentoMs });
 
-    // ── LLM (Workers AI vía redactMessage, sólo lectura) ──
+    // ── LLM (streaming para voz) ──
     const inicioLlm = this.ahora();
-    let cuerpo = '';
+    let primerTokenRegistrado = false;
+    let cuerpoCompleto = '';
+    let primeraFraseEnviada = false;
+
     try {
-      const redactar =
-        opcionesRedactar(this.opciones.redactar) ??
-        ((env: Env, params: RedactParams) => redactMessage(env, params));
-      const resultado = await redactar(this.opciones.env, {
-        channel: 'sms',
-        clientName: this.opciones.cliente.nombre,
-        amountCents: this.opciones.cliente.montoCents,
-        dueDate: this.opciones.cliente.fechaVencimiento,
-        diasRetraso: this.opciones.cliente.diasRetraso,
-        band: this.opciones.cliente.band,
-        nombreLegal: this.opciones.cliente.nombreLegal,
-        condusef: this.opciones.cliente.condusef,
-      });
-      cuerpo = resultado.body;
+      const redactarStream = this.opciones.redactarStream;
+      if (redactarStream) {
+        // Modo streaming: enviamos la primera frase al TTS apenas la tengamos
+        for await (const chunk of redactarStream(this.opciones.env, {
+          clientName: this.opciones.cliente.nombre,
+          amountCents: this.opciones.cliente.montoCents,
+          dueDate: this.opciones.cliente.fechaVencimiento,
+          diasRetraso: this.opciones.cliente.diasRetraso,
+          band: this.opciones.cliente.band,
+          nombreLegal: this.opciones.cliente.nombreLegal,
+          condusef: this.opciones.cliente.condusef,
+        })) {
+          if (!primerTokenRegistrado) {
+            turno.metricas.llm_first_token_ms = this.ahora() - inicioLlm;
+            primerTokenRegistrado = true;
+          }
+          cuerpoCompleto += chunk;
+
+          // Detectar fin de frase (. ? !) para enviar al TTS
+          if (!primeraFraseEnviada) {
+            const match = cuerpoCompleto.match(/^[^.!?]*[.!?]/);
+            if (match) {
+              const primeraFrase = match[0].trim();
+              if (primeraFrase && this.tts) {
+                primeraFraseEnviada = true;
+                const inicioTts = this.ahora();
+                turno.locucionInicioMs = inicioTts;
+                this.enLocucion = true;
+                this.turnoDeLocucion = turno;
+                // No esperamos: lanzamos el TTS en background
+                void this.tts.hablar(primeraFrase);
+              }
+            }
+          }
+        }
+        // Si no hubo streaming (fallback), usamos el redactar síncrono
+        if (!primerTokenRegistrado) {
+          throw new Error('Streaming vacío, fallback a síncrono');
+        }
+      } else {
+        // Fallback síncrono (compatibilidad con WhatsApp/SMS)
+        const redactar =
+          opcionesRedactar(this.opciones.redactar) ??
+          ((env: Env, params: RedactParams) => redactMessage(env, params));
+        const resultado = await redactar(this.opciones.env, {
+          channel: 'sms',
+          clientName: this.opciones.cliente.nombre,
+          amountCents: this.opciones.cliente.montoCents,
+          dueDate: this.opciones.cliente.fechaVencimiento,
+          diasRetraso: this.opciones.cliente.diasRetraso,
+          band: this.opciones.cliente.band,
+          nombreLegal: this.opciones.cliente.nombreLegal,
+          condusef: this.opciones.cliente.condusef,
+        });
+        cuerpoCompleto = resultado.body;
+      }
     } catch (error) {
       this.log.error('El LLM falló en el spike de voz', {
         error: error instanceof Error ? error.message : String(error),
@@ -251,53 +376,74 @@ export class PipelineVozImpl implements PipelineVoz {
         tipo: 'error',
         mensaje: error instanceof Error ? error.message : String(error),
       });
+      this.cierraTurno(turno);
       return;
     }
-    this.metricas.llm_total_ms = this.ahora() - inicioLlm;
-    // `redactMessage` usa la llamada sin streaming de Workers AI: el primer
-    // token observable llega junto con la respuesta completa. Se registra
-    // igual para tener la serie, y queda anotado como deuda (Sprint 6:
-    // variante streaming del agente).
-    this.metricas.llm_first_token_ms = this.metricas.llm_total_ms;
+
+    turno.metricas.llm_total_ms = this.ahora() - inicioLlm;
+    if (!primerTokenRegistrado) {
+      turno.metricas.llm_first_token_ms = turno.metricas.llm_total_ms;
+    }
 
     // ── TTS ──
-    if (!cuerpo || !this.tts) {
-      this.opciones.alEvento({ tipo: 'fin_turno', metricas: this.metricas });
-      this.cierraTurno();
+    // Si ya enviamos la primera frase en streaming, esperamos a que termine el TTS actual
+    // Si no hubo streaming, enviamos el cuerpo completo ahora
+    if (!cuerpoCompleto && !primeraFraseEnviada) {
+      this.opciones.alEvento({ tipo: 'fin_turno', metricas: turno.metricas });
+      this.cierraTurno(turno);
       return;
     }
 
-    const inicioTts = this.ahora();
-    this.locucionInicioMs = inicioTts;
-    this.enLocucion = true;
-    this.ttsPrimerChunkMs = null;
-    await this.tts.hablar(cuerpo);
-    this.enLocucion = false;
+    if (!primeraFraseEnviada && this.tts && cuerpoCompleto) {
+      // Modo síncrono: enviamos todo el texto
+      const inicioTts = this.ahora();
+      turno.locucionInicioMs = inicioTts;
+      this.enLocucion = true;
+      this.turnoDeLocucion = turno;
+      await this.tts.hablar(cuerpoCompleto);
+      this.enLocucion = false;
+      this.turnoDeLocucion = null;
 
-    this.metricas.tts_first_chunk_ms =
-      this.metricas.tts_first_chunk_ms ?? Math.max(0, this.ahora() - inicioTts);
-    this.metricas.round_trip_ms =
-      this.metricas.round_trip_ms ?? Math.max(0, this.locucionInicioMs - this.finalMs);
+      turno.metricas.tts_first_chunk_ms =
+        turno.metricas.tts_first_chunk_ms ?? Math.max(0, this.ahora() - inicioTts);
+      turno.metricas.round_trip_ms =
+        turno.metricas.round_trip_ms ?? Math.max(0, turno.locucionInicioMs - turno.finalMs);
+    } else if (primeraFraseEnviada) {
+      // Modo streaming: esperamos a que el TTS de la primera frase termine
+      // El callback onPrimerChunkTts ya registró tts_first_chunk_ms y round_trip_ms
+      // Esperamos a que enLocucion sea false (el TTS terminó o fue cortado)
+      while (this.enLocucion && !this.cerrado) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    }
 
-    this.opciones.alEvento({ tipo: 'fin_turno', metricas: this.metricas });
-    this.cierraTurno();
+    this.opciones.alEvento({ tipo: 'fin_turno', metricas: turno.metricas });
+    this.cierraTurno(turno);
   }
 
-  /** Momento del primer fragmento de audio del TTS. */
-  private ttsPrimerChunkMs: number | null = null;
-
+  /**
+   * Primer fragmento de audio del TTS.
+   *
+   * Se atribuye al turno que pidió la locución: si el fragmento llega tarde
+   * (locución ya cortada) se descarta, porque si no las marcas se mezclan y
+   * la latencia sale con valores absurdos.
+   */
   private onPrimerChunkTts(momentoMs: number): void {
-    this.ttsPrimerChunkMs = momentoMs;
-    this.metricas.tts_first_chunk_ms = Math.max(0, momentoMs - this.locucionInicioMs);
-    this.metricas.round_trip_ms = Math.max(0, momentoMs - this.finalMs);
+    const turno = this.turnoDeLocucion;
+    if (!turno || !turno.locucionInicioMs) return;
+    turno.metricas.tts_first_chunk_ms = Math.max(0, momentoMs - turno.locucionInicioMs);
+    turno.metricas.round_trip_ms = Math.max(0, momentoMs - turno.finalMs);
   }
 
-  /** Reinicia el contador del turno. */
-  private cierraTurno(): void {
-    this.metricas = metricasVacias();
-    this.turnoInicioMs = 0;
-    this.finalMs = 0;
-    this.ttsPrimerChunkMs = null;
+  /**
+   * Cierra el turno: deja el contador de audio en cero para que el siguiente
+   * turno mida desde su propio audio, y suelta el turno en curso.
+   */
+  private cierraTurno(turno: TurnoVoz): void {
+    if (this.turno === turno) this.turno = null;
+    this.inicioAudioMs = 0;
+    this.sttPartialMs = null;
+    this.bargeInMs = null;
   }
 
   /** Corta la locución en curso (interrupción). */
@@ -327,17 +473,19 @@ function opcionesRedactar(
 }
 
 /**
- * Arma el pipeline real: Deepgram para STT/TTS y Workers AI para el LLM.
+ * Arma el pipeline real: Workers AI (Deepgram Nova-3 y Aura) para STT/TTS y
+ * Workers AI para el LLM (streaming, modelo chico, prompt de voz).
  *
- * Si falta la clave de Deepgram devuelve `null`: el spike **no** simula voz.
+ * Si falta el token de Workers AI devuelve `null`: el spike **no** simula voz.
  * Quien llama decide qué hacer con la llamada (en la ruta, responder 503).
  */
 export function crearPipelineVoz(opciones: OpcionesPipeline): PipelineVozImpl | null {
   const { env } = opciones;
-  if (!env.DEEPGRAM_API_KEY) {
+  if (!env.CF_AI_API_TOKEN || !env.CF_AI_ACCOUNT_ID) {
     opciones.alEvento({
       tipo: 'error',
-      mensaje: 'Falta DEEPGRAM_API_KEY: el spike no puede transcribir ni locutar.',
+      mensaje:
+        'Faltan CF_AI_API_TOKEN o CF_AI_ACCOUNT_ID: el spike no puede transcribir ni locutar.',
     });
     return null;
   }
@@ -352,9 +500,10 @@ export function crearPipelineVoz(opciones: OpcionesPipeline): PipelineVozImpl | 
     ...opciones,
     crearStt: (eventos) => crearStt(env, eventos, opciones.ahora),
     crearTts: (alRecibir, onPrimerChunk) => crearTts(env, alRecibir, onPrimerChunk, opciones.ahora),
+    redactarStream: (env: Env, params: RedactVozParams) => redactMessageVozStream(env, params),
   });
   pipeline.abrir();
-  log.info('Pipeline de voz del spike listo', { callId: opciones.callId });
+  log.info('Pipeline de voz del spike listo (streaming + modelo voz)', { callId: opciones.callId });
 
   return pipeline;
 }

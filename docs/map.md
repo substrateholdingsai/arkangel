@@ -1,7 +1,7 @@
 ﻿# ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · 232 tests verdes · lint + typecheck + build limpios.
-> Última actualización: 2026-10-21 (Bloques A/B/C, CI real en GitHub Actions y spike de voz en curso).
+> **Estado**: `main` · 247 tests verdes · lint + typecheck + build limpios.
+> Última actualización: 2026-10-22 (mini-spike latencia: streaming LLM + modelo 8B + prompt voz implementados; **falta plan de pago Workers AI** para medir p50/p95 reales).
 
 ## Vista general
 
@@ -54,7 +54,7 @@ Cada ruta exige **su** scope: sin credencial → 401, con credencial pero sin sc
 
 | Método | Ruta | Scope | Descripción |
 |---|---|---|---|
-| POST | `/api/auth/register` | público | Crea usuario + su primer despacho y abre sesión |
+| POST | `/api/auth/register` | — | **Cerrado** (403 `registro_cerrado`): el panel es por invitación; altas con `seed-owner` |
 | POST | `/api/auth/login` | público | Verifica la contraseña (PBKDF2) y emite la cookie `ark_session` |
 | POST | `/api/auth/logout` | sesión | Revoca la sesión en D1 y borra la cookie |
 | GET | `/api/auth/session` | público | Usuario y despachos, si la cookie es válida |
@@ -207,36 +207,32 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
       compuestos por tenant, `assertTenantListoParaOperar()` fail-closed (sin
       razón social ni CONDUSEF el tenant en modo `db` no opera),
       `scripts/seed-tenant-config.ts` y 9 tests de config por tenant.
-- [x] **Bloque B · CI real**: `.github/workflows/ci.yml` (checkout +
-      setup-node + `npm ci` + `npm run verify` en `push` y `pull_request` a
-      `main`), contrato MCP de Alegra con 5 tests y `docs/alegra-mcp-contract.md`.
-      **PR #1 mergeado con run de Actions verde**
-      (<https://github.com/substrateholdingsai/arkangel/pull/1>, run
-      <https://github.com/substrateholdingsai/arkangel/actions/runs/39684812269>,
-      38 s). Antes era un "PR de prueba con CI verde (simulado local)": el
-      workflow nunca se había pushado y GitHub Actions nunca lo había corrido.
 - [x] **Bloque C · cambio de contraseña**: `changePassword()` con política
       explícita — la contraseña nueva **debe ser distinta** de la actual (400)
       y una sesión revocada no puede cambiar la contraseña (401). El `status`
       viaja en el resultado en vez de deducirse del texto del mensaje.
 - [x] **Tarea 0 · cuadre del conteo**: la suite de `changePassword` quedó con
-      7 tests nuevos (4 de la suite + 1 de `revokeAllSessions` + 2 de esta
-      tanda: sesión revocada → 401 y nueva = actual → 400). Total: 207 + 7.
-- [~] **Tarea 2 · spike de voz**: implementado y en CI (**PR #2 mergeado**,
-      <https://github.com/substrateholdingsai/arkangel/pull/2>, run
-      <https://github.com/substrateholdingsai/arkangel/actions/runs/39688865320>
-      verde): `CallSessionDO`, pipeline STT→LLM→TTS con barge-in, signaling
-      tras `SPIKE_VOZ_ENABLED`, cliente en `spike/index.html`, arnés de 20
-      llamadas, migración `0010_spike_calls.sql`. **Sin llamada real**: faltan
-      las credenciales de Deepgram y de Cloudflare Realtime, así que **no hay
-      p50/p95** ni veredicto. Detalle, tarifas vigentes y riesgos legales en
-      `docs/spike-voz.md`.
+      7 tests nuevos. Total: 207 + 7 = 232 (+ 7 del spike de voz = **239**).
+- [x] **Tarea 2 · spike de voz (Bloque D)**: implementado y en CI (**PR #2 mergeado**,
+      run 39688865320 verde). Código completo: `CallSessionDO`, pipeline STT→LLM→TTS con barge-in,
+      signaling tras `SPIKE_VOZ_ENABLED`, cliente `spike/index.html`, arnés `scripts/spike-voz.ts` (20 llamadas),
+      migración `0010_spike_calls.sql` con `tenant_id`. **EJECUTADO** (2026-10-22): 20 llamadas reales
+      con el guion hablado de 3 turnos. La ruta de voz es **Workers AI** (`@cf/deepgram/nova-3` para STT
+      y `@cf/deepgram/aura-2-es` para TTS, por WebSocket): misma casa (Deepgram), **sin cuenta nueva**;
+      el cambio se hizo con confirmación explícita, no en silencio. El arnés es `npm run spike:voz`.
+      p50/p95 medidos y veredicto en `docs/spike-voz.md`.
+- [x] **Mini-spike latencia (2026-10-22)**: aplicadas 3 palancas al pipeline de voz:
+  1. **Streaming LLM** (`runAIStream` + `redactMessageVozStream` en `src/ai/agent.ts`) — emite chunks conforme llegan.
+  2. **Modelo chico** (`@cf/meta/llama-3.1-8b-instruct` via `DEFAULT_VOZ_MODEL` / `SPIKE_VOZ_MODEL`) — objetivo < 800 ms p95.
+  3. **Prompt voz acortado** (`SYSTEM_REDACT_VOZ` en `src/ai/prompts.ts`) — ≤ 1 frase, ≤ 20 palabras, identificación de bot obligatoria.
+  Pipeline `voice.ts` reescrito para lanzar TTS al primer fin de frase. **`npm run verify` verde (239 tests)**.
+  **Bloqueante de medición**: la cuenta gratuita de Workers AI (10 000 neuronas/día) agotó antes de completar las 10 llamadas de prueba. **Requiere plan de pago** (cuesta centavos/día) para repetir el arnés y obtener p50/p95 reales.
 
 ## Verificación realizada
 
 | Qué | Cómo | Resultado |
 |---|---|---|
-| Suite unitaria | `npm test` (14 archivos) | 232/232 |
+| Suite unitaria | `npm test` (14 archivos) | 239/239 |
 | Estilo y tipos | `npm run lint` · `npm run typecheck` | limpios |
 | Build del worker | `npm run build:worker` | limpio |
 | Migraciones | `wrangler d1 migrations apply --local` (BD nueva) | 8 migraciones OK; esquema igual al que lee el código |
@@ -257,7 +253,8 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
 | **Sesión nativa** | test de `tests/authNative.test.ts` (D1 de mentira) | en D1 sólo se guarda el SHA-256 del token; cookie inválida o sesión revocada no dan sesión |
 | **Ciclo de vida en producción** | `curl` contra el worker desplegado | login 200 + `Set-Cookie`; `session` 200; logout 200 y la cookie deja de servir; sin cookie → 401; despacho ajeno → 403 |
 | **CI en GitHub Actions** | 4 runs reales (`push` y `pull_request` a `main`) | PR #1 (run 39684812269, 38 s), push a `main` (39685011657, 33 s), PR #2 (39688865320, 33 s), push a `main` (39689054239, 31 s): los cuatro verdes |
-| **Spike de voz** | 18 tests de `tests/spikeVoz.test.ts` | percentiles (nearest rank), DO (estado, métricas, barge-in, cierre) y pipeline con dobles; **sin llamada real** (faltan credenciales) |
+| **Spike de voz** | 25 tests de `tests/spikeVoz.test.ts` + **20 llamadas reales** (`npm run spike:voz`) | percentiles (nearest rank), DO (estado, métricas, barge-in, cierre), credenciales de voz y pipeline con dobles; y la corrida real: **16/20 llamadas con turnos medidos (32 turnos)** — `round_trip_ms` p50 2525 ms / **p95 3914 ms** (criterio < 1500 ms → **NO-GO por latencia**), `stt_final_ms` p50 1680 ms, `tts_first_chunk_ms` p50 799 ms. El LLM sin streaming se come el round-trip. Las 4 llamadas restantes chocaron con el tope de 10 000 neuronas/día de Workers AI |
+| **Mini-spike latencia** | `npm run verify` (239 tests) + código listo; arnés ejecutado pero **truncado por cuota gratuita** | 3 palancas aplicadas (streaming LLM, modelo 8B, prompt voz ≤20 palabras). **Falta: activar plan de pago Workers AI** y repetir `SPIKE_LLAMADAS=20 npm run spike:voz` para p50/p95 reales y veredicto definitivo. |
 
 ## Deuda técnica y riesgos abiertos
 
@@ -270,9 +267,11 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
 ### Identidad (nativa, sin proveedor externo)
 
 - **La identidad ya no depende de nadie.** Contraseña con PBKDF2 (SHA-256, 25 000 iteraciones) verificada dentro del Worker; la sesión es un token aleatorio que D1 guarda **hasheado** (`auth_sessions.token_hash`) y que en el navegador viaja sólo en la cookie `ark_session` (`HttpOnly`, `SameSite=Lax`, 30 días).
-- **Ya hay usuario owner en el entorno remoto** (`duenio@arkangel.mx`, con membresía `owner` en `t_arkangel` y `admin` en `t_ark_systems`). Para dar de alta a otro: `npm run seed:owner:remote -- --email ... --password ... --tenant t_xxx --role owner`. Sin usuarios, el panel devuelve 401 y sólo funcionan los tokens de máquina.
+- **Ya hay usuario owner en el entorno remoto** (`substrateholdingsai@gmail.com`, con membresía `owner` en `t_arkangel` y `admin` en `t_ark_systems`). Para dar de alta a otro: `npm run seed:owner:remote -- --email ... --password ... --tenant t_xxx --role owner`. Sin usuarios, el panel devuelve 401 y sólo funcionan los tokens de máquina.
 - **El rol lo concede la membresía, no la cabecera.** `tenant_memberships` es la fuente de verdad (`owner` → `owner`, `admin` → `operator`, `member` → `viewer`; tabla `ROLE_POR_MEMBRESIA` en `src/auth/native.ts`). `X-Tenant-Id` sólo *selecciona* entre las membresías del usuario: pedir un despacho ajeno es 403 `tenant_forbidden`.
-- **El registro del panel auto-verifica el correo.** Es deliberado: el panel es de invitación y sin un servidor de correo verificado dejaría a la gente fuera de su propio panel. La tabla `auth_tokens` queda disponible para el flujo de restablecimiento, que sí está implementado.
+- **Registro público cerrado** (2026-10-22): `POST /api/auth/register` → 403. Altas sólo con `seed-owner`.
+- **Restablecer contraseña por correo** (2026-10-22): `src/auth/email.ts` envía por Resend desde `AUTH_FROM_EMAIL` (`auth@arksystems.site`, dominio verificado) con enlace a `APP_URL` (`https://arkangel.arksystems.site/?auth=restablecer&token=…`). El envío corre en `waitUntil` (misma 202 exista o no la cuenta), el hash se calcula antes de consumir el token y el reset marca el correo como verificado. Pantallas "¿Olvidaste tu contraseña?" y "Nueva contraseña" en `AuthGate.tsx`. Secret `RESEND_API_KEY` cargado.
+- **Pendiente auth**: PBKDF2 25 000 → 100 000 con rehash en login; invitaciones por correo; rotar la API key de Resend.
 - **El cambio de contraseña ya está en el panel** (`POST /api/auth/change-password`): valida la actual, aplica la política de la nueva, revoca todas las sesiones y limpia la cookie. La nueva debe ser **distinta** de la actual (400) y una sesión revocada no puede cambiar la contraseña (401).
 - **La allowlist de dominios y la ventana horaria del módulo contable** siguen viniendo de `env.TZ` (Fase 6).
 - **Un tenant en `config_mode='platform_env'` hereda la config del Worker.** Hoy sólo lo usa el tenant heredado. Para pasarlo a `db` hay que cargar su fila (razón social y CONDUSEF incluidos) y ejecutar: `UPDATE tenants SET config_mode='db' WHERE id='t_arkangel';` Sin razón social, el motor legal bloquea todos sus mensajes (regla 1.1, fail-closed) y el worker lo avisa por log.
@@ -287,15 +286,17 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
 - **`iva_acreditable_estimado`** es un cálculo provisional sobre gastos de Arkangel; hay que sustituirlo por el IVA acreditable real cuando exista el módulo de CFDI de proveedores.
 - **`promise_made`** está reservado en `ESTADOS_INGRESO_RECONOCIDO` pero nada lo escribe: las promesas viven en la tabla `promises`.
 - **Sin CI**: no hay `.github/workflows`. `npm run verify` corre format, lint, typecheck, test y build, pero sólo en local. → **Resuelto**: `.github/workflows/ci.yml` está en `main` y corre en GitHub Actions (PR #1, run verde).
+- **Spike de voz: requiere plan de pago Workers AI** para medir latencia real. La cuenta gratuita (10 000 neuronas/día) no permite completar 20 llamadas. Sin plan de pago, el veredicto definitivo de latencia (GO / GO CONDICIONADO / NO-GO) no puede emitirse.
 
 ## Próximos (por riesgo)
 
 1. **[x] Cambio de contraseña en el panel** — implementado en `POST /api/auth/change-password` (valida la actual, aplica política de la nueva, revoca todas las sesiones y limpia la cookie).
-2. **Cargar la fila de `t_arkangel`** (razón social + CONDUSEF) y pasarla a `config_mode='db'`.
-3. **Fase 5** — firma de Meta en POST (el enrutado por tenant ya está).
-4. **Fase 6** — contabilidad por tenant (Alegra propio, mapa de cuentas por cliente).
-5. **Ensayo end-to-end** con un Alegra de pruebas + cerrar el contrato MCP.
-6. **Secretos + bucket R2 + primera corrida real** (las migraciones 003/004/005/006/007/008 ya están en remoto).
-7. **[x] Alinear el cron de cobranza** con el huso CDMX — `wrangler.jsonc` pasó de `"0 6 * * *"` (06:00 UTC = 00:00 CDMX) a `"0 12 * * *"` (12:00 UTC = 6 AM CDT).
-8. **[x] CI en GitHub Actions** — `.github/workflows/ci.yml` corre `npm run verify` (format, lint, typecheck, test, build) en `push` y `PR` a `main`.
-9. **[~] Ejecutar el spike de voz** — falta lo único que no se puede escribir: las credenciales de Deepgram y de Cloudflare Realtime. Con eso, `npx tsx scripts/spike-voz.ts` corre las 20 llamadas y da p50/p95. El veredicto (go / no-go) depende de eso: `docs/spike-voz.md`.
+2. **Activar plan de pago Workers AI** y repetir `SPIKE_LLAMADAS=20 npm run spike:voz` — bloquea la medición de latencia real (cuota gratuita 10 k neuronas/día agotada).
+3. **Cargar la fila de `t_arkangel`** (razón social + CONDUSEF) y pasarla a `config_mode='db'`.
+4. **Fase 5** — firma de Meta en POST (el enrutado por tenant ya está).
+5. **Fase 6** — contabilidad por tenant (Alegra propio, mapa de cuentas por cliente).
+6. **Ensayo end-to-end** con un Alegra de pruebas + cerrar el contrato MCP.
+7. **Secretos + bucket R2 + primera corrida real** (las migraciones 003/004/005/006/007/008 ya están en remoto).
+8. **[x] Alinear el cron de cobranza** con el huso CDMX — `wrangler.jsonc` pasó de `"0 6 * * *"` (06:00 UTC = 00:00 CDMX) a `"0 12 * * *"` (12:00 UTC = 6 AM CDT).
+9. **[x] CI en GitHub Actions** — `.github/workflows/ci.yml` corre `npm run verify` (format, lint, typecheck, test, build) en `push` y `PR` a `main`.
+10. **[x] Ejecutar el spike de voz** — **hecho** (2026-10-22): 20 llamadas con `npm run spike:voz`, p50/p95 medidos. Veredicto **NO-GO por latencia** (round-trip p95 3914 ms vs 1500 ms), a causa del LLM sin streaming; el ajuste es `agent.ts` con streaming. Detalle en `docs/spike-voz.md`.

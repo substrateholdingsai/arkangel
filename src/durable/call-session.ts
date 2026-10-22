@@ -128,14 +128,17 @@ export class CallSessionDO {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const accion = url.pathname;
+    // La acción es el último segmento: el DO se llama con URLs propias
+    // (`https://call-session/iniciar`) y también con la ruta del Worker
+    // reenviada tal cual (`/spike/call/:id/audio`).
+    const accion = url.pathname.split('/').filter(Boolean).pop() ?? '';
 
-    if (accion === '/audio') return this.manejaAudio(request);
-    if (accion === '/iniciar' && request.method === 'POST') return this.inicia(request);
-    if (accion === '/estado') return this.estadoResponse();
-    if (accion === '/turno' && request.method === 'POST') return this.registraTurno(request);
-    if (accion === '/cortar' && request.method === 'POST') return this.corta(request);
-    if (accion === '/colgar' && request.method === 'POST') return this.colga();
+    if (accion === 'audio') return this.manejaAudio(request);
+    if (accion === 'iniciar' && request.method === 'POST') return this.inicia(request);
+    if (accion === 'estado') return this.estadoResponse();
+    if (accion === 'turno' && request.method === 'POST') return this.registraTurno(request);
+    if (accion === 'cortar' && request.method === 'POST') return this.corta(request);
+    if (accion === 'colgar' && request.method === 'POST') return this.colga();
 
     return new Response(JSON.stringify({ error: 'ruta_desconocida' }), {
       status: 404,
@@ -335,6 +338,11 @@ export class CallSessionDO {
 
     if (!this.pipeline) {
       log.warn('El pipeline de voz no pudo arrancar', { callId: estado.callId });
+    } else {
+      // El socket del STT tiene que quedar establecido **dentro** de esta
+      // petición: si se abre después de responder, el runtime lo cierra al
+      // terminar el contexto y la transcripción no llega nunca.
+      await this.pipeline.abrir();
     }
 
     client.addEventListener('message', (evento) => {
@@ -348,7 +356,7 @@ export class CallSessionDO {
         }
         return;
       }
-      this.pipeline?.recibirAudio(evento.data as ArrayBuffer);
+      void this.recibeAudio(evento.data);
     });
 
     client.addEventListener('close', () => {
@@ -358,6 +366,27 @@ export class CallSessionDO {
     });
 
     return response;
+  }
+
+  /**
+   * Pasa el audio del navegador al pipeline.
+   *
+   * Las tramas binarias llegan como `Blob` desde la fecha de compatibilidad
+   * 2026-03-17 (antes `ArrayBuffer`): se acepta cualquiera de las dos para no
+   * perder el audio en silencio.
+   */
+  private async recibeAudio(datos: ArrayBuffer | Blob | ArrayBufferView): Promise<void> {
+    if (datos instanceof Blob) {
+      this.pipeline?.recibirAudio(await datos.arrayBuffer());
+      return;
+    }
+    if (ArrayBuffer.isView(datos)) {
+      this.pipeline?.recibirAudio(
+        datos.buffer.slice(datos.byteOffset, datos.byteOffset + datos.byteLength) as ArrayBuffer
+      );
+      return;
+    }
+    this.pipeline?.recibirAudio(datos);
   }
 
   /** Suma las métricas de un turno terminado. */
@@ -420,7 +449,15 @@ export function crearParWebSocket(): { response: Response; client: WebSocket } {
   };
   if (typeof globalAny.WebSocketPair === 'function') {
     const pair = new globalAny.WebSocketPair();
-    return { response: new Response(null, { status: 101, webSocket: pair[0] }), client: pair[1] };
+    // `pair[0]` es el lado del cliente (viaja en la respuesta 101) y `pair[1]`
+    // el del Worker. Este último hay que aceptarlo: sin `accept()` no empieza
+    // a recibir tramas y no se puede mandar nada.
+    const servidor = pair[1];
+    // Las tramas binarias llegan como `Blob` desde la fecha de compatibilidad
+    // 2026-03-17: se pide `ArrayBuffer` para no perder el audio en silencio.
+    servidor.binaryType = 'arraybuffer';
+    servidor.accept?.();
+    return { response: new Response(null, { status: 101, webSocket: pair[0] }), client: servidor };
   }
   return { response: new Response(null, { status: 426 }), client: new WebSocketDouble() as never };
 }

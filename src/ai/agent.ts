@@ -11,6 +11,7 @@ import {
   SYSTEM_CLASSIFY,
   SYSTEM_REDACT,
   SYSTEM_REDACT_EMAIL,
+  SYSTEM_REDACT_VOZ,
   SYSTEM_REPLY,
 } from './prompts';
 
@@ -49,10 +50,15 @@ export function extractJson(text: string): unknown | null {
   }
 }
 
-export async function runAI(env: Env, system: string, user: string): Promise<string | null> {
-  const model = env.AI_MODEL || DEFAULT_AI_MODEL;
+export async function runAI(
+  env: Env,
+  system: string,
+  user: string,
+  model?: string
+): Promise<string | null> {
+  const modelName = model || env.AI_MODEL || DEFAULT_AI_MODEL;
   try {
-    const result = await env.AI.run(model, {
+    const result = await env.AI.run(modelName, {
       messages: [
         { role: 'system', content: system },
         { role: 'user', content: user },
@@ -61,10 +67,71 @@ export async function runAI(env: Env, system: string, user: string): Promise<str
     return extractText(result);
   } catch (error) {
     logger.error('Workers AI falló', {
-      model,
+      model: modelName,
       error: error instanceof Error ? error.message : String(error),
     });
     return null;
+  }
+}
+
+export async function* runAIStream(
+  env: Env,
+  system: string,
+  user: string,
+  model?: string
+): AsyncGenerator<string, void, unknown> {
+  const modelName = model || env.AI_MODEL || DEFAULT_AI_MODEL;
+  try {
+    const stream = (await env.AI.run(modelName, {
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      stream: true,
+    })) as ReadableStream<Uint8Array>;
+
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6).trim();
+          if (data === '[DONE]') return;
+          try {
+            const parsed = JSON.parse(data);
+            const text = extractText(parsed);
+            if (text) yield text;
+          } catch {
+            // Ignore parse errors on partial chunks
+          }
+        }
+      }
+    }
+    // Handle any remaining buffer
+    if (buffer.startsWith('data: ')) {
+      const data = buffer.slice(6).trim();
+      if (data !== '[DONE]') {
+        try {
+          const parsed = JSON.parse(data);
+          const text = extractText(parsed);
+          if (text) yield text;
+        } catch {
+          // Ignore
+        }
+      }
+    }
+  } catch (error) {
+    logger.error('Workers AI streaming falló', {
+      model: modelName,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -178,6 +245,77 @@ export async function redactMessage(env: Env, params: RedactParams): Promise<Red
     return { body: clampLength(body, 600), source: 'ai' };
   }
   return { subject: fallback.subject, body, source: 'ai' };
+}
+
+export async function* redactMessageStream(
+  env: Env,
+  params: RedactParams,
+  model?: string
+): AsyncGenerator<string, void, unknown> {
+  const amountText = formatMXN(params.amountCents);
+  const dueDateText = formatDateMX(`${params.dueDate}T12:00:00Z`);
+
+  const systemPrompt = params.channel === 'email' ? SYSTEM_REDACT_EMAIL : SYSTEM_REDACT;
+  const userPrompt = buildRedactPrompt({
+    clientName: params.clientName,
+    amountCents: params.amountCents,
+    amountText,
+    dueDate: params.dueDate,
+    dueDateText,
+    diasRetraso: params.diasRetraso,
+    band: params.band,
+    channel: params.channel,
+    customMessage: params.customMessage,
+    nombreLegal: params.nombreLegal || undefined,
+    condusef: params.condusef || undefined,
+  });
+
+  let buffer = '';
+  for await (const chunk of runAIStream(env, systemPrompt, userPrompt, model)) {
+    buffer += chunk;
+    const cleaned = cleanMessage(buffer);
+    if (cleaned.length > buffer.length - chunk.length) {
+      yield cleaned.slice(buffer.length - chunk.length);
+    }
+  }
+}
+
+/** Modelo por defecto para la fase de voz (más rápido que el 70B). */
+export const DEFAULT_VOZ_MODEL = '@cf/meta/llama-3.1-8b-instruct';
+
+export type RedactVozParams = Omit<RedactParams, 'channel'>;
+
+export async function* redactMessageVozStream(
+  env: Env,
+  params: RedactVozParams,
+  model?: string
+): AsyncGenerator<string, void, unknown> {
+  const amountText = formatMXN(params.amountCents);
+  const dueDateText = formatDateMX(`${params.dueDate}T12:00:00Z`);
+
+  const userPrompt = buildRedactPrompt({
+    clientName: params.clientName,
+    amountCents: params.amountCents,
+    amountText,
+    dueDate: params.dueDate,
+    dueDateText,
+    diasRetraso: params.diasRetraso,
+    band: params.band,
+    channel: 'voice',
+    customMessage: params.customMessage,
+    nombreLegal: params.nombreLegal || undefined,
+    condusef: params.condusef || undefined,
+  });
+
+  const modelName = model || env.SPIKE_VOZ_MODEL || DEFAULT_VOZ_MODEL;
+  let buffer = '';
+  for await (const chunk of runAIStream(env, SYSTEM_REDACT_VOZ, userPrompt, modelName)) {
+    buffer += chunk;
+    const cleaned = cleanMessage(buffer);
+    if (cleaned.length > buffer.length - chunk.length) {
+      yield cleaned.slice(buffer.length - chunk.length);
+    }
+  }
 }
 
 export interface ClassifyParams {

@@ -27,6 +27,7 @@
     "db:migrate": "wrangler d1 migrations apply arkangel-cobranza-db --remote",
     "db:migrate:local": "wrangler d1 migrations apply arkangel-cobranza-db --local",
     "db:seed": "wrangler d1 execute arkangel-cobranza-db --file=./scripts/seed.sql --local",
+    "spike:voz": "tsx scripts/spike-voz.ts",
     "seed:owner": "tsx scripts/seed-owner.ts",
     "seed:owner:remote": "tsx scripts/seed-owner.ts --remote",
     "seed:tenant-config": "tsx scripts/seed-tenant-config.ts",

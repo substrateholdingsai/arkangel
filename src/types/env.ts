@@ -29,6 +29,10 @@ export interface Env {
   // ── Resend (email) ──
   RESEND_API_KEY: string;
   RESEND_FROM_EMAIL: string;
+  /** Remitente de correos de acceso (p. ej. `Arkangel <auth@arksystems.site>`). */
+  AUTH_FROM_EMAIL?: string;
+  /** URL publica del panel, base de los enlaces de los correos de auth. */
+  APP_URL?: string;
 
   // ── WhatsApp Cloud API (Meta) ──
   WHATSAPP_TOKEN: string;
@@ -59,14 +63,18 @@ export interface Env {
   // ── Spike de voz (EXPERIMENTAL, apagado por defecto) ──
   /** Flag del spike: si no es 'true', /spike/* no existe (404). */
   SPIKE_VOZ_ENABLED?: string;
-  /** Deepgram: transcripción (STT) y síntesis (TTS). */
-  DEEPGRAM_API_KEY?: string;
-  /** Modelo de transcripción (Deepgram). */
+  /** Workers AI (Deepgram Nova-3 / Aura) por WebSocket: token con `Workers AI: Read/Edit`. */
+  CF_AI_API_TOKEN?: string;
+  /** Cuenta de Cloudflare donde viven los modelos de Workers AI. */
+  CF_AI_ACCOUNT_ID?: string;
+  /** Modelo de transcripción (Workers AI). */
   SPIKE_STT_MODEL?: string;
-  /** Modelo de síntesis (Deepgram Aura). */
+  /** Modelo de síntesis (Workers AI Aura). */
   SPIKE_TTS_MODEL?: string;
-  /** Voz de síntesis (Deepgram Aura, español de México por defecto). */
+  /** Hablante de síntesis (Aura en español, `estrella` es el de México). */
   SPIKE_TTS_VOICE?: string;
+  /** Modelo de LLM para la fase de voz (más rápido que el 70B). */
+  SPIKE_VOZ_MODEL?: string;
   /** Cloudflare Realtime (el producto que hoy sustituye a Cloudflare Calls). */
   CF_REALTIME_API_TOKEN?: string;
   CF_REALTIME_APP_ID?: string;

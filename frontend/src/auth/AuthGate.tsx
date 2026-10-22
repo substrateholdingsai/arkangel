@@ -1,7 +1,8 @@
 /**
  * Pantalla de acceso al panel.
  *
- * Formulario único con dos modos: "Iniciar sesión" y "Registrarse". La
+ * Formulario con tres modos: iniciar sesión, pedir el enlace de restablecimiento
+ * y fijar la nueva contraseña (enlace del correo). La
  * contraseña viaja al Worker, que la verifica con PBKDF2 y devuelve la cookie
  * de sesión; el navegador nunca ve ni guarda el hash.
  *
@@ -12,37 +13,65 @@
 
 import { useState, type FormEvent } from 'react';
 import { Alert, Button } from '@ds';
-import { ApiError } from '../api';
+import { ApiError, auth as authApi } from '../api';
 import { useAuth } from './AuthContext';
 
-type Modo = 'login' | 'registro';
+/**
+ * El registro publico esta cerrado (el panel es por invitacion), asi que no hay
+ * modo "registro". `olvide` pide el enlace; `nueva` lo consume (llega desde el
+ * correo como `/?auth=restablecer&token=...`).
+ */
+type Modo = 'login' | 'olvide' | 'nueva';
+
+/** Lee el enlace del correo, si lo hay. */
+function leerEnlace(): { modo: Modo; token: string } {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token') ?? '';
+  if (params.get('auth') === 'restablecer' && /^[0-9a-f]{64}$/.test(token)) {
+    return { modo: 'nueva', token };
+  }
+  return { modo: 'login', token: '' };
+}
+
+/** Quita el token de la URL para que no quede en el historial. */
+function limpiarUrl() {
+  window.history.replaceState(null, '', window.location.pathname);
+}
 
 export function AuthGate() {
-  const { login, register } = useAuth();
-  const [modo, setModo] = useState<Modo>('login');
+  const { login } = useAuth();
+  const [enlace] = useState(leerEnlace);
+  const [modo, setModo] = useState<Modo>(enlace.modo);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [fullName, setFullName] = useState('');
-  const [tenantName, setTenantName] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [aviso, setAviso] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
 
-  const esRegistro = modo === 'registro';
+  function cambiarModo(siguiente: Modo) {
+    setModo(siguiente);
+    setError(null);
+    setAviso(null);
+    setPassword('');
+  }
 
   async function enviar(evento: FormEvent) {
     evento.preventDefault();
     setError(null);
+    setAviso(null);
     setEnviando(true);
     try {
-      if (esRegistro) {
-        await register({
-          email: email.trim(),
-          password,
-          fullName: fullName.trim(),
-          tenantName: tenantName.trim() || undefined,
-        });
-      } else {
+      if (modo === 'login') {
         await login(email.trim(), password);
+      } else if (modo === 'olvide') {
+        const respuesta = await authApi.requestPasswordReset(email.trim());
+        setAviso(respuesta.message);
+      } else {
+        await authApi.resetPassword(enlace.token, password);
+        limpiarUrl();
+        setModo('login');
+        setPassword('');
+        setAviso('Contraseña actualizada. Ya puedes iniciar sesión.');
       }
     } catch (excepcion) {
       if (excepcion instanceof ApiError) setError(excepcion.message);
@@ -52,95 +81,106 @@ export function AuthGate() {
     }
   }
 
+  const subtitulo =
+    modo === 'olvide'
+      ? 'Te enviaremos un enlace para restablecer tu contraseña'
+      : modo === 'nueva'
+        ? 'Elige tu nueva contraseña'
+        : 'Cobranza que respeta la ley';
+
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-6">
           <h1 className="text-xl font-semibold text-slate-100">Arkangel</h1>
-          <p className="text-sm text-slate-400 mt-1">
-            {esRegistro ? 'Crea tu cuenta y tu despacho' : 'Cobranza que respeta la ley'}
-          </p>
+          <p className="text-sm text-slate-400 mt-1">{subtitulo}</p>
         </div>
 
         <form
           onSubmit={enviar}
           className="bg-slate-900 border border-slate-800 rounded-lg p-6 space-y-4"
         >
-          {esRegistro ? (
-            <>
-              <Campo
-                etiqueta="Nombre completo"
-                value={fullName}
-                onChange={setFullName}
-                autoComplete="name"
-                required
-              />
-              <Campo
-                etiqueta="Nombre del despacho"
-                value={tenantName}
-                onChange={setTenantName}
-                placeholder="Opcional. Por defecto: Despacho {tu nombre}"
-                autoComplete="organization"
-              />
-            </>
+          {modo !== 'nueva' ? (
+            <Campo
+              etiqueta="Correo electrónico"
+              type="email"
+              value={email}
+              onChange={setEmail}
+              autoComplete="email"
+              required
+            />
           ) : null}
 
-          <Campo
-            etiqueta="Correo electrónico"
-            type="email"
-            value={email}
-            onChange={setEmail}
-            autoComplete="email"
-            required
-          />
+          {modo !== 'olvide' ? (
+            <div>
+              <label
+                htmlFor="ark-password"
+                className="block text-xs font-medium text-slate-400 mb-1.5"
+              >
+                {modo === 'nueva' ? 'Nueva contraseña' : 'Contraseña'}
+              </label>
+              <input
+                id="ark-password"
+                type="password"
+                value={password}
+                onChange={(evento) => setPassword(evento.target.value)}
+                autoComplete={modo === 'nueva' ? 'new-password' : 'current-password'}
+                required
+                minLength={modo === 'nueva' ? 12 : undefined}
+                maxLength={128}
+                className="w-full rounded-md bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500"
+              />
+              {modo === 'nueva' ? (
+                <p className="text-xs text-slate-500 mt-1.5">Entre 12 y 128 caracteres.</p>
+              ) : null}
+            </div>
+          ) : null}
 
-          <div>
-            <label
-              htmlFor="ark-password"
-              className="block text-xs font-medium text-slate-400 mb-1.5"
-            >
-              Contraseña
-            </label>
-            <input
-              id="ark-password"
-              type="password"
-              value={password}
-              onChange={(evento) => setPassword(evento.target.value)}
-              autoComplete={esRegistro ? 'new-password' : 'current-password'}
-              required
-              minLength={esRegistro ? 12 : undefined}
-              className="w-full rounded-md bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500"
-            />
-            {esRegistro ? (
-              <p className="text-xs text-slate-500 mt-1.5">Mínimo 12 caracteres.</p>
-            ) : null}
-          </div>
-
+          {aviso ? (
+            <Alert tone="ok" title="Listo">
+              {aviso}
+            </Alert>
+          ) : null}
           {error ? (
-            <Alert tone="err" title="No se pudo entrar">
+            <Alert tone="err" title="No se pudo completar">
               {error}
             </Alert>
           ) : null}
 
           <Button type="submit" variant="accent" size="md" disabled={enviando} className="w-full">
-            {enviando ? 'Un momento…' : esRegistro ? 'Crear cuenta' : 'Entrar'}
+            {enviando
+              ? 'Un momento…'
+              : modo === 'olvide'
+                ? 'Enviar enlace'
+                : modo === 'nueva'
+                  ? 'Guardar contraseña'
+                  : 'Entrar'}
           </Button>
 
-          <button
-            type="button"
-            onClick={() => {
-              setModo(esRegistro ? 'login' : 'registro');
-              setError(null);
-            }}
-            className="w-full text-center text-xs text-slate-400 hover:text-slate-200 transition-colors"
-          >
-            {esRegistro ? '¿Ya tienes cuenta? Inicia sesión' : '¿No tienes cuenta? Regístrate'}
-          </button>
+          {modo === 'login' ? (
+            <button
+              type="button"
+              onClick={() => cambiarModo('olvide')}
+              className="w-full text-center text-xs text-slate-400 hover:text-slate-200 transition-colors"
+            >
+              ¿Olvidaste tu contraseña?
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                limpiarUrl();
+                cambiarModo('login');
+              }}
+              className="w-full text-center text-xs text-slate-400 hover:text-slate-200 transition-colors"
+            >
+              Volver a iniciar sesión
+            </button>
+          )}
         </form>
 
         <p className="text-center text-xs text-slate-600 mt-4">
-          La sesión viaja en una cookie HttpOnly: tu contraseña nunca sale del navegador hacia otro
-          sitio.
+          El acceso es por invitación. Si necesitas una cuenta, solicítala a tu administrador.
         </p>
       </div>
     </div>

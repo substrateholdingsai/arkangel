@@ -1,4 +1,4 @@
-﻿{
+{
   "$schema": "https://json.schemastore.org/wrangler.jsonc",
   "name": "arkangel-cobranza",
   "main": "src/index.ts",
@@ -24,7 +24,9 @@
     "LEGAL_HORARIO_EN_RESPUESTAS": "false",
     "ALEGRA_IVA_PCT": "16",
     "RESEND_FROM_EMAIL": "Arkangel <cobranza@arksystems.site>",
-    "SPIKE_VOZ_ENABLED": "false"
+    "AUTH_FROM_EMAIL": "Arkangel <auth@arksystems.site>",
+    "APP_URL": "https://arkangel.arksystems.site",
+    "SPIKE_VOZ_ENABLED": "false",
   },
   "ai": { "binding": "AI" },
   "d1_databases": [
@@ -32,15 +34,15 @@
       "binding": "DB",
       "database_name": "arkangel-cobranza-db",
       "database_id": "5955313e-eadd-4658-874c-3366c1d24c24",
-      "migrations_dir": "migrations"
-    }
+      "migrations_dir": "migrations",
+    },
   ],
   "kv_namespaces": [{ "binding": "KV", "id": "6665e3e000884081a0fa5cd4674f5dad" }],
   "r2_buckets": [
     {
       "binding": "R2",
-      "bucket_name": "arkangel-contabilidad"
-    }
+      "bucket_name": "arkangel-contabilidad",
+    },
   ],
   "queues": {
     "producers": [{ "binding": "COBRANZA_QUEUE", "queue": "arkangel-cobranza-queue" }],
@@ -50,23 +52,22 @@
         "max_batch_size": 10,
         "max_batch_timeout": 30,
         "max_retries": 3,
-        "dead_letter_queue": "arkangel-cobranza-dlq"
-      }
-    ]
+        "dead_letter_queue": "arkangel-cobranza-dlq",
+      },
+    ],
   },
-"durable_objects": {
+  "durable_objects": {
     "bindings": [
       { "name": "CALL_LOCK", "class_name": "CallLockDO" },
       { "name": "RATE_LIMITER", "class_name": "RateLimiterDO" },
-      { "name": "CALL_SESSION", "class_name": "CallSessionDO" }
-    ]
+      { "name": "CALL_SESSION", "class_name": "CallSessionDO" },
+    ],
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["CallLockDO"] },
     { "tag": "v2", "new_sqlite_classes": ["RateLimiterDO"] },
-    { "tag": "v3", "new_sqlite_classes": ["CallSessionDO"] }
+    { "tag": "v3", "new_sqlite_classes": ["CallSessionDO"] },
   ],
   "observability": { "enabled": true },
-  "triggers": { "crons": ["0 12 * * *", "59 5 * * *"] }
+  "triggers": { "crons": ["0 12 * * *", "59 5 * * *"] },
 }
-

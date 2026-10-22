@@ -24,6 +24,7 @@
 import { Hono } from 'hono';
 import { resolverPrincipalDetallado } from '../auth/guards';
 import type { AuthVars } from '../auth/middleware';
+import type { Principal } from '../auth/principal';
 import { getTraceContext } from '../lib/logger';
 import type { Env } from '../types/env';
 
@@ -42,8 +43,13 @@ interface ParticipanteRealtime {
 interface LlamadaCreada {
   callId: string;
   tenantId: string;
-  meetingId: string;
-  authToken: string;
+  /**
+   * Reunión de Realtime. `null` cuando la llamada se creó sin ella: es lo que
+   * hace el arnés de Node, que habla por WebSocket y no usa WebRTC.
+   */
+  meetingId: string | null;
+  /** Token del participante de Realtime (`null` si no hay reunión). */
+  authToken: string | null;
   traceId: string;
   /** URL del WebSocket de signaling (el navegador lo abre). */
   audioUrl: string;
@@ -54,7 +60,27 @@ export function spikeVozHabilitado(env: Env): boolean {
   return env.SPIKE_VOZ_ENABLED === 'true';
 }
 
-export const spike = new Hono<{ Bindings: Env; Variables: AuthVars }>();
+/**
+ * ¿Se puede abrir la llamada sin reunión de Realtime?
+ *
+ * La reunión sólo hace falta para el WebRTC del navegador. El arnés de Node
+ * habla por el WebSocket de signaling y no usa WebRTC, así que pide
+ * `realtime: false` y así no depende de las credenciales de Realtime.
+ *
+ * Sólo un principal de plataforma (token de administración o super admin)
+ * puede pedirlo: quien no es de plataforma sigue necesitando la reunión.
+ */
+export function puedeOmitirRealtime(
+  principal: Principal | null | undefined,
+  pedido: unknown
+): boolean {
+  return pedido === false && principal?.kind === 'platform';
+}
+
+export const spike = new Hono<{
+  Bindings: Env;
+  Variables: AuthVars & { principal?: Principal | null };
+}>();
 
 /**
  * Middleware del spike: si el flag no está en `true`, la ruta no existe.
@@ -73,6 +99,7 @@ spike.use('*', async (c, next) => {
   if (!resuelto.principal) {
     return c.json({ error: resuelto.motivo ?? 'unauthorized' }, resuelto.status ?? 401);
   }
+  c.set('principal', resuelto.principal);
   await next();
 });
 
@@ -161,6 +188,12 @@ spike.post('/call', async (c) => {
     tenantId?: string;
     clientName?: string;
     amountCents?: number;
+    /**
+     * `false` crea la llamada sin reunión de Realtime: es lo que necesita el
+     * arnés de Node, que no usa WebRTC. Sólo lo acepta un principal de
+     * plataforma (token de administración o super admin).
+     */
+    realtime?: boolean;
   } | null;
 
   const tenantId = cuerpo?.tenantId;
@@ -171,10 +204,19 @@ spike.post('/call', async (c) => {
     return c.json({ error: 'tenant_desconocido' }, 404);
   }
 
-  const llamada = await creaReunion(c.env, `spike-voz ${cuerpo?.clientName ?? 'cliente'}`);
-  if ('error' in llamada) {
-    // Fail-closed: sin credenciales del proveedor no se simula una llamada.
-    return c.json({ error: 'proveedor_no_configurado', detalle: llamada.error }, 503);
+  const principal = c.get('principal');
+  const sinRealtime = puedeOmitirRealtime(principal, cuerpo?.realtime);
+
+  let meetingId: string | null = null;
+  let authToken: string | null = null;
+  if (!sinRealtime) {
+    const llamada = await creaReunion(c.env, `spike-voz ${cuerpo?.clientName ?? 'cliente'}`);
+    if ('error' in llamada) {
+      // Fail-closed: sin credenciales del proveedor no se simula una llamada.
+      return c.json({ error: 'proveedor_no_configurado', detalle: llamada.error }, 503);
+    }
+    meetingId = llamada.meetingId;
+    authToken = llamada.authToken;
   }
 
   const callId = `spk_${crypto.randomUUID()}`;
@@ -188,8 +230,8 @@ spike.post('/call', async (c) => {
   const respuesta: LlamadaCreada = {
     callId,
     tenantId,
-    meetingId: llamada.meetingId,
-    authToken: llamada.authToken,
+    meetingId,
+    authToken,
     traceId: traceCtx.traceId,
     audioUrl: `/spike/call/${callId}/audio`,
   };

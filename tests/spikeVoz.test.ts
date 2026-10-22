@@ -18,10 +18,11 @@ import {
   type EstadoSesion,
 } from '../src/durable/call-session';
 import { percentil, resumenMetrica, resumenMetricas } from '../src/lib/medidas';
+import { platformPrincipal, tenantPrincipal } from '../src/auth/principal';
 import { PipelineVozImpl, type MetricasTurno } from '../src/orquestacion/voice';
-import type { SttLike } from '../src/voice/stt';
-import type { TtsLike } from '../src/voice/tts';
-import { spikeVozHabilitado } from '../src/routes/spike';
+import { crearStt, urlSttWorkersAi, type SttLike } from '../src/voice/stt';
+import { crearTts, urlTtsWorkersAi, type TtsLike } from '../src/voice/tts';
+import { puedeOmitirRealtime, spikeVozHabilitado } from '../src/routes/spike';
 import type { Env } from '../src/types/env';
 
 /* â”€â”€ Dobles de prueba â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
@@ -42,7 +43,7 @@ class SttFalso implements SttLike {
     this.eventos = eventos;
   }
 
-  abrir(): void {
+  async abrir(): Promise<void> {
     this.abierto = true;
   }
 
@@ -70,6 +71,11 @@ class TtsFalso implements TtsLike {
   texto = '';
   /** Si es true, `hablar()` no resuelve hasta que se llame `terminar()`. */
   colgar = false;
+  /**
+   * Si es true, `hablar()` no anuncia primer fragmento: simula una locución
+   * que se corta (barge-in) antes de que llegue audio.
+   */
+  sinPrimerChunk = false;
   private resolverHablar: (() => void) | null = null;
   private alRecibir: (chunk: ArrayBuffer) => void = () => {};
   /** Reloj del doble (lo inyecta la prueba). */
@@ -88,7 +94,7 @@ class TtsFalso implements TtsLike {
         this.resolverHablar = resolver;
       });
     }
-    this.onPrimerChunk?.(this.momento());
+    if (!this.sinPrimerChunk) this.onPrimerChunk?.(this.momento());
     this.alRecibir(new ArrayBuffer(64));
   }
 
@@ -298,7 +304,7 @@ describe('CallSessionDO', () => {
     expect(respuesta.status).toBe(404);
   });
 
-  it('sin DEEPGRAM_API_KEY no hay pipeline: el DO no inventa voz', async () => {
+  it('sin credenciales de Workers AI no hay pipeline: el DO no inventa voz', async () => {
     const do_ = nuevoDO();
     await iniciar(do_);
     const respuesta = await do_.fetch(
@@ -329,13 +335,22 @@ describe('CallSessionDO', () => {
 
 describe('pipeline de voz', () => {
   /** Monta un pipeline con STT y TTS falsos y reloj controlable. */
-  function montar(opciones: { colgarTts?: boolean } = {}) {
+  function montar(
+    opciones: { colgarTts?: boolean; bloquearLlm?: boolean; sinPrimerChunk?: boolean } = {}
+  ) {
     const reloj = relojFalso(1000);
     const eventos: string[] = [];
     const metricas: MetricasTurno[] = [];
     const stt = new SttFalso();
     const tts = new TtsFalso();
     tts.colgar = opciones.colgarTts ?? false;
+    tts.sinPrimerChunk = opciones.sinPrimerChunk ?? false;
+    /** Callback real del pipeline para el primer fragmento de audio. */
+    let primerChunk: ((momento: number) => void) | null = null;
+    /** Libera al LLM cuando la prueba lo deja en vuelo. */
+    let soltarLlm: (() => void) | null = null;
+    /** Cuántas veces se ha pedido redacción al LLM. */
+    let llamadasLlm = 0;
 
     const pipeline = new PipelineVozImpl({
       env: entornoVacio(),
@@ -360,6 +375,7 @@ describe('pipeline de voz', () => {
         return stt;
       },
       crearTts: (alRecibir, onPrimerChunk) => {
+        primerChunk = onPrimerChunk;
         // El doble simula que el proveedor tarda 120 ms en el primer audio.
         tts.onPrimerChunk = () => {
           reloj.avanza(120);
@@ -369,13 +385,30 @@ describe('pipeline de voz', () => {
         return tts;
       },
       redactar: async () => {
+        llamadasLlm += 1;
+        // Con `bloquearLlm` se deja en vuelo **el segundo** turno: el primero
+        // se completa para tener un turno ya cerrado.
+        if (opciones.bloquearLlm && llamadasLlm > 1) {
+          await new Promise<void>((resolver) => {
+            soltarLlm = resolver;
+          });
+        }
         reloj.avanza(300);
         return { body: 'Hola, tu saldo pendiente vence pronto.', source: 'ai' };
       },
       ahora: reloj.ahora,
     });
 
-    return { pipeline, reloj, eventos, metricas, stt, tts };
+    return {
+      pipeline,
+      reloj,
+      eventos,
+      metricas,
+      stt,
+      tts,
+      primerChunk: () => primerChunk,
+      soltarLlm: () => soltarLlm?.(),
+    };
   }
 
   it('un turno completo deja las mÃ©tricas de latencia', async () => {
@@ -400,6 +433,42 @@ describe('pipeline de voz', () => {
     expect(m.round_trip_ms).toBe(420);
     expect(m.barge_in_latency_ms).toBeNull();
     expect(tts.texto).toBe('Hola, tu saldo pendiente vence pronto.');
+  });
+
+  it('un fragmento de audio tardío no inventa la latencia de un turno', async () => {
+    const { pipeline, reloj, metricas, stt, primerChunk, soltarLlm } = montar({
+      bloquearLlm: true,
+      sinPrimerChunk: true,
+    });
+
+    // Turno 1: el bot habla (sin fragmento: se corta antes de que llegue audio).
+    pipeline.recibirAudio(new ArrayBuffer(320));
+    reloj.avanza(200);
+    stt.emiteParcial('hola', reloj.ahora());
+    reloj.avanza(300);
+    stt.emiteFinal('hola, buenos días', reloj.ahora());
+    await new Promise((resolver) => setTimeout(resolver, 0));
+    expect(metricas).toHaveLength(1);
+
+    // Turno 2: el LLM queda en vuelo (el usuario volvió a hablar).
+    reloj.avanza(500);
+    stt.emiteFinal('otra cosa', reloj.ahora());
+    await new Promise((resolver) => setTimeout(resolver, 0));
+
+    // Llega un fragmento tardío de la locución anterior, cuando el turno 2
+    // todavía no ha empezado a hablar: no se le puede atribuir a nadie.
+    reloj.avanza(9999);
+    primerChunk()?.(reloj.ahora());
+
+    soltarLlm();
+    await new Promise((resolver) => setTimeout(resolver, 0));
+
+    const m = metricas[1]!;
+    expect(m).toBeDefined();
+    // Sin atribuir el fragmento a un turno, la latencia de audio salía con el
+    // `Date.now()` entero (≈1,8 billones) en lugar de milisegundos.
+    expect(m.tts_first_chunk_ms ?? 0).toBeLessThan(5000);
+    expect(m.round_trip_ms ?? 0).toBeLessThan(60_000);
   });
 
   it('un parcial durante la locuciÃ³n corta el TTS (barge-in) y mide la latencia', async () => {
@@ -477,5 +546,55 @@ describe('flag del spike', () => {
     expect(spikeVozHabilitado({ SPIKE_VOZ_ENABLED: 'false' } as unknown as Env)).toBe(false);
     expect(spikeVozHabilitado({} as unknown as Env)).toBe(false);
     expect(spikeVozHabilitado({ SPIKE_VOZ_ENABLED: '1' } as unknown as Env)).toBe(false);
+  });
+});
+
+describe('credenciales de voz (Workers AI)', () => {
+  it('sin token ni cuenta no hay STT ni TTS: el spike no simula voz', () => {
+    expect(crearStt({}, {})).toBeNull();
+    expect(crearTts({}, () => {})).toBeNull();
+    expect(crearStt({ CF_AI_API_TOKEN: 't' }, {})).toBeNull();
+    expect(crearTts({ CF_AI_ACCOUNT_ID: 'a' }, () => {})).toBeNull();
+  });
+
+  it('con token y cuenta hay cliente de STT y de TTS', () => {
+    const entorno = { CF_AI_API_TOKEN: 'token', CF_AI_ACCOUNT_ID: 'cuenta' };
+    expect(crearStt(entorno, {})).not.toBeNull();
+    expect(crearTts(entorno, () => {})).not.toBeNull();
+  });
+
+  it('la URL de STT va al modelo de Workers AI con el audio en la query', () => {
+    const url = urlSttWorkersAi('cuenta', '@cf/deepgram/nova-3', 'es', 16_000);
+    expect(url.startsWith('wss://api.cloudflare.com/client/v4/accounts/cuenta/ai/run/')).toBe(true);
+    expect(url).toContain('@cf/deepgram/nova-3');
+    expect(url).toContain('encoding=linear16');
+    expect(url).toContain('sample_rate=16000');
+    expect(url).toContain('language=es');
+    expect(url).toContain('interim_results=true');
+  });
+
+  it('la URL de TTS pide el hablante y el audio crudo', () => {
+    const url = urlTtsWorkersAi('cuenta', '@cf/deepgram/aura-2-es', 'estrella');
+    expect(url.startsWith('wss://api.cloudflare.com/client/v4/accounts/cuenta/ai/run/')).toBe(true);
+    expect(url).toContain('@cf/deepgram/aura-2-es');
+    expect(url).toContain('encoding=linear16');
+    expect(url).toContain('speaker=estrella');
+  });
+});
+
+describe('reunion de Realtime', () => {
+  const admin = platformPrincipal('admin-token');
+  const deTenant = tenantPrincipal('apikey', 'intake-token', 't_alfa', 'service_ingest');
+
+  it('solo un principal de plataforma puede pedir la llamada sin reunion', () => {
+    expect(puedeOmitirRealtime(admin, false)).toBe(true);
+    expect(puedeOmitirRealtime(deTenant, false)).toBe(false);
+    expect(puedeOmitirRealtime(null, false)).toBe(false);
+  });
+
+  it('sin pedirlo explicitamente siempre hay reunion', () => {
+    expect(puedeOmitirRealtime(admin, undefined)).toBe(false);
+    expect(puedeOmitirRealtime(admin, true)).toBe(false);
+    expect(puedeOmitirRealtime(admin, 'false')).toBe(false);
   });
 });

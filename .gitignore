@@ -40,6 +40,9 @@ worker-configuration.d.ts
 Thumbs.db
 desktop.ini
 
+# ── Spike assets (audio de prueba, no versionar) ──
+spike/guion.wav
+
 # ── Logs ──
 *.log
 npm-debug.log*
