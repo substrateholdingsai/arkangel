@@ -1,4 +1,5 @@
 // WhatsApp Cloud API (Meta Graph) — https://developers.facebook.com/docs/whatsapp/cloud-api
+import { bytesToHex, timingSafeEqual } from '../lib/crypto';
 import { fetchJson } from '../lib/http';
 import { logger } from '../lib/logger';
 import type { Env } from '../types/env';
@@ -14,6 +15,37 @@ import {
 } from './types';
 
 const GRAPH_VERSION = 'v19.0';
+
+/**
+ * Verifica la firma HMAC-SHA256 de Meta (`X-Hub-Signature-256: sha256=<hex>`).
+ * Devuelve `false` si el encabezado falta, no tiene prefijo `sha256=` o no coincide.
+ */
+export async function verifyWhatsAppSignature(
+  appSecret: string,
+  rawBody: string,
+  signatureHeader: string | null | undefined
+): Promise<boolean> {
+  if (!appSecret || !signatureHeader) return false;
+  const trimmed = signatureHeader.trim();
+  if (!/^sha256=[0-9a-f]{64}$/i.test(trimmed)) return false;
+  const providedHex = trimmed.slice('sha256='.length).toLowerCase();
+
+  try {
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      'raw',
+      enc.encode(appSecret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+    const sigBuf = await crypto.subtle.sign('HMAC', key, enc.encode(rawBody));
+    const expectedHex = bytesToHex(new Uint8Array(sigBuf));
+    return timingSafeEqual(expectedHex, providedHex);
+  } catch {
+    return false;
+  }
+}
 
 interface MetaMessage {
   id?: string;

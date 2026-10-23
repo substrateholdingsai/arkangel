@@ -3,7 +3,11 @@ import { parseCobreWebhook, verifyCobreHmac } from '../channels/cobre';
 import { parseConektaWebhook, verifyConektaDigest } from '../channels/conekta';
 import { parseResendPayload } from '../channels/resend';
 import { parseTelnyxPayload } from '../channels/telnyx';
-import { parseWhatsAppPayload, whatsappChallengeResponse } from '../channels/whatsapp';
+import {
+  parseWhatsAppPayload,
+  verifyWhatsAppSignature,
+  whatsappChallengeResponse,
+} from '../channels/whatsapp';
 import { verifyEd25519 } from '../lib/crypto';
 import { logger } from '../lib/logger';
 import type { AuthVars } from '../auth/middleware';
@@ -49,6 +53,18 @@ webhooks.get('/whatsapp', (c) => {
 
 webhooks.post('/whatsapp', async (c) => {
   const raw = await c.req.text();
+
+  const appSecret = c.env.WHATSAPP_APP_SECRET;
+  if (appSecret) {
+    const signature = c.req.header('x-hub-signature-256');
+    if (!signature) return c.json({ error: 'missing_signature' }, 401);
+    const valid = await verifyWhatsAppSignature(appSecret, raw, signature);
+    if (!valid) {
+      logger.warn('Firma HMAC de Meta WhatsApp inválida');
+      return c.json({ error: 'invalid_signature' }, 401);
+    }
+  }
+
   const parsed = parseWhatsAppPayload(safeJson(raw));
   await processParsed(c.env, parsed);
   return c.json({ ok: true });

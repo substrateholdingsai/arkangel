@@ -7,11 +7,20 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Trash2,
+  UserPlus,
+  Users,
   Webhook,
   X,
 } from 'lucide-react';
 import { Alert, Button } from '@ds';
-import { api, type TenantSettings, type TenantWebhooks } from './api';
+import {
+  api,
+  type MembershipRole,
+  type TenantMember,
+  type TenantSettings,
+  type TenantWebhooks,
+} from './api';
 
 interface TenantSettingsModalProps {
   open: boolean;
@@ -45,17 +54,28 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
   });
 
   const [webhooks, setWebhooks] = useState<TenantWebhooks | null>(null);
+  const [members, setMembers] = useState<TenantMember[]>([]);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteName, setInviteName] = useState('');
+  const [inviteRole, setInviteRole] = useState<MembershipRole>('admin');
+  const [inviting, setInviting] = useState(false);
+  const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setLoading(true);
     setError(null);
     setNotice(null);
+    setLastInviteUrl(null);
     void (async () => {
       try {
-        const res = await api.getTenantSettings();
+        const [res, membersRes] = await Promise.all([
+          api.getTenantSettings(),
+          api.listTenantMembers().catch(() => ({ ok: true, members: [] })),
+        ]);
         setForm(res.settings);
         setWebhooks(res.webhooks);
+        setMembers(membersRes.members);
       } catch (e) {
         setError(
           e instanceof Error ? e.message : 'No se pudo cargar la configuración del despacho'
@@ -109,6 +129,46 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
       setTimeout(() => setCopiedUrl(null), 2000);
     } catch {
       /* ignore */
+    }
+  };
+
+  const invitarMiembro = async () => {
+    if (!inviteEmail.trim()) return;
+    setInviting(true);
+    setError(null);
+    setNotice(null);
+    setLastInviteUrl(null);
+    try {
+      const res = await api.inviteTenantMember({
+        email: inviteEmail.trim(),
+        full_name: inviteName.trim(),
+        role: inviteRole,
+      });
+      setMembers(res.members);
+      setLastInviteUrl(res.invite_url);
+      setInviteEmail('');
+      setInviteName('');
+      setNotice(
+        res.email_sent
+          ? `Invitación enviada por correo a ${res.invited.email} (${res.invited.role}).`
+          : `Miembro ${res.invited.email} dado de alta (${res.invited.role}). Copia el enlace de activación debajo.`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo invitar al miembro.');
+    } finally {
+      setInviting(false);
+    }
+  };
+
+  const revocarMiembro = async (userId: string, email: string) => {
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await api.removeTenantMember(userId);
+      setMembers(res.members);
+      setNotice(`Acceso de ${email} revocado del despacho.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo revocar al miembro.');
     }
   };
 
@@ -437,6 +497,149 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
                   </div>
                 </div>
               ) : null}
+
+              {/* Sección 4: Equipo del Despacho (Invitaciones Self-Serve) */}
+              <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <Users className="h-4 w-4 text-emerald-600" />
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                      4 · Equipo del Despacho e Invitaciones ({members.length})
+                    </h3>
+                  </div>
+                  <span className="text-[11px] text-slate-500">
+                    RBAC: Owner · Operador (Admin) · Auditor (Viewer)
+                  </span>
+                </div>
+
+                {/* Formulario rápido de invitación */}
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end bg-slate-50 p-3 rounded-lg border border-slate-200">
+                  <div className="sm:col-span-4">
+                    <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                      Correo electrónico
+                    </label>
+                    <input
+                      type="email"
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                      placeholder="operador@despacho.mx"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900"
+                    />
+                  </div>
+                  <div className="sm:col-span-3">
+                    <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                      Nombre
+                    </label>
+                    <input
+                      type="text"
+                      value={inviteName}
+                      onChange={(e) => setInviteName(e.target.value)}
+                      placeholder="Ej. Ana López"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900"
+                    />
+                  </div>
+                  <div className="sm:col-span-3">
+                    <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                      Rol en el Despacho
+                    </label>
+                    <select
+                      value={inviteRole}
+                      onChange={(e) => setInviteRole(e.target.value as MembershipRole)}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900"
+                    >
+                      <option value="admin">Operador (Admin)</option>
+                      <option value="member">Auditor (Solo lectura)</option>
+                      <option value="owner">Propietario (Owner)</option>
+                    </select>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <button
+                      type="button"
+                      disabled={inviting || !inviteEmail.trim()}
+                      onClick={() => void invitarMiembro()}
+                      className="w-full inline-flex items-center justify-center gap-1 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      <UserPlus className="h-3.5 w-3.5" />
+                      {inviting ? '…' : 'Invitar'}
+                    </button>
+                  </div>
+                </div>
+
+                {lastInviteUrl ? (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs">
+                    <span className="font-medium text-emerald-900">
+                      Enlace de activación (válido 7 días):
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <code className="text-[11px] font-mono text-emerald-950 bg-white px-2 py-0.5 rounded border border-emerald-200 truncate max-w-[260px]">
+                        {lastInviteUrl}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => void copiarUrl('invite_link', lastInviteUrl)}
+                        className="inline-flex items-center gap-1 rounded bg-emerald-700 px-2 py-1 text-[11px] font-medium text-white hover:bg-emerald-800"
+                      >
+                        {copiedUrl === 'invite_link' ? (
+                          <>
+                            <Check className="h-3 w-3" /> Copiado
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="h-3 w-3" /> Copiar enlace
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {/* Lista de miembros */}
+                {members.length > 0 ? (
+                  <div className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+                    {members.map((m) => (
+                      <div
+                        key={m.userId}
+                        className="flex items-center justify-between px-3 py-2 text-xs"
+                      >
+                        <div>
+                          <div className="font-medium text-slate-900 flex items-center gap-2">
+                            <span>{m.fullName || m.email}</span>
+                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-mono uppercase text-slate-700">
+                              {m.role === 'owner'
+                                ? 'owner'
+                                : m.role === 'admin'
+                                  ? 'operador'
+                                  : 'viewer'}
+                            </span>
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-mono ${
+                                m.active
+                                  ? 'bg-emerald-50 text-emerald-700'
+                                  : 'bg-amber-50 text-amber-700'
+                              }`}
+                            >
+                              {m.active ? 'activo' : 'pendiente'}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-500 font-mono">{m.email}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void revocarMiembro(m.userId, m.email)}
+                          className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] text-slate-500 hover:bg-red-50 hover:text-red-700 transition-colors"
+                          title="Revocar acceso al despacho"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" /> Revocar
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500">
+                    Aún no hay miembros listados en este despacho.
+                  </p>
+                )}
+              </div>
             </>
           )}
 

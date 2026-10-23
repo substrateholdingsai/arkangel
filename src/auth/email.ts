@@ -9,11 +9,15 @@
 import { logger } from '../lib/logger';
 import type { Env } from '../types/env';
 
-export type AccionCorreo = 'restablecer' | 'verificar';
+export type AccionCorreo = 'restablecer' | 'verificar' | 'invitar';
 
 const ETIQUETAS: Record<AccionCorreo, { asunto: string; boton: string }> = {
   restablecer: { asunto: 'Restablece tu contraseña de Arkangel', boton: 'Restablecer contraseña' },
   verificar: { asunto: 'Verifica tu correo de Arkangel', boton: 'Verificar correo' },
+  invitar: {
+    asunto: 'Fuiste invitado a operar en Arkangel',
+    boton: 'Activar cuenta y elegir contraseña',
+  },
 };
 
 /** Remitente de auth: `AUTH_FROM_EMAIL`, o el de Resend si no está definido. */
@@ -27,7 +31,7 @@ export function remitenteAuth(env: Env): string {
  */
 export function construirEnlace(env: Env, accion: AccionCorreo, token: string, origen: string) {
   const url = new URL('/', env.APP_URL || origen);
-  url.searchParams.set('auth', accion);
+  url.searchParams.set('auth', accion === 'invitar' ? 'restablecer' : accion);
   url.searchParams.set('token', token);
   return url.toString();
 }
@@ -58,7 +62,12 @@ export async function enviarCorreoAuth(
 
   const { asunto, boton } = ETIQUETAS[accion];
   const enlace = construirEnlace(env, accion, token, origen);
-  const ttl = accion === 'restablecer' ? 'Caduca en 30 minutos y solo sirve una vez.' : '';
+  const ttl =
+    accion === 'restablecer'
+      ? 'Caduca en 30 minutos y solo sirve una vez.'
+      : accion === 'invitar'
+        ? 'Este enlace de invitación caduca en 7 días y solo sirve una vez.'
+        : '';
 
   try {
     const response = await fetch('https://api.resend.com/emails', {

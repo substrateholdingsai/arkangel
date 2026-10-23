@@ -32,9 +32,9 @@ export const LIMITE_LEDGER = 50000;
 
 /**
  * Regla de reconocimiento de ingreso: sólo cuentan los mensajes con recepción
- * real. `sent` NO cuenta: el proveedor aceptó el envío, no hay prueba de que
- * el deudor lo viera. `promise_made` queda reservado para cuando el estado de
- * promesa viva en `messages.status` (hoy vive en la tabla `promises`).
+ * real o confirmación de promesa (`delivered`, `read`, `promise_made`).
+ * `sent` NO cuenta por sí solo: el proveedor aceptó el envío, pero sin entrega
+ * ni promesa confirmada no hay prueba de recepción.
  */
 export const ESTADOS_INGRESO_RECONOCIDO = ['delivered', 'read', 'promise_made'] as const;
 

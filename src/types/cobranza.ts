@@ -5,7 +5,8 @@ export type Channel = 'whatsapp' | 'sms' | 'email';
 export type CaseStatus =
   'ready' | 'sending' | 'sent' | 'replied' | 'promised' | 'paid' | 'failed' | 'human';
 
-export type MessageStatus = 'queued' | 'sent' | 'delivered' | 'read' | 'failed' | 'received';
+export type MessageStatus =
+  'queued' | 'sent' | 'delivered' | 'read' | 'promise_made' | 'failed' | 'received';
 
 export type Intent =
   | 'paga'

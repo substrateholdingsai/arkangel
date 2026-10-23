@@ -28,6 +28,22 @@ export async function recordPromise(ctx: TenantContext, input: PromiseInput): Pr
       nowIso()
     )
     .run();
+
+  // Promueve el último mensaje saliente del caso a 'promise_made' para que el
+  // módulo contable reconozca el ingreso aunque el webhook de entrega ('delivered')
+  // aún no haya llegado del proveedor.
+  await ctx.env.DB.prepare(
+    `UPDATE messages SET status = 'promise_made'
+     WHERE id = (
+       SELECT id FROM messages
+       WHERE tenant_id = ? AND case_id = ? AND direction = 'outbound'
+         AND status IN ('sent', 'delivered', 'read')
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1
+     )`
+  )
+    .bind(ctx.tenantId, input.caseId)
+    .run();
 }
 
 export async function hasOpenPromise(ctx: TenantContext, clientId: string): Promise<boolean> {

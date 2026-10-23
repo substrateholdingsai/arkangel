@@ -355,6 +355,98 @@ export interface TenantWebhooks {
   resend: string;
 }
 
+export interface TenantMember {
+  userId: string;
+  email: string;
+  fullName: string;
+  role: MembershipRole;
+  active: boolean;
+  createdAt: number;
+}
+
+export interface AccountingMapRule {
+  regla_id: string;
+  cuenta_debito: string;
+  cuenta_credito: string;
+  tipo_asiento: 'provision' | 'gasto' | 'contingencia';
+  descripcion: string;
+}
+
+export interface AccountingAsiento {
+  cuenta_debito: string;
+  cuenta_credito: string;
+  concepto: string;
+  monto: number;
+  tipo_asiento: 'provision' | 'gasto' | 'contingencia';
+  regla_id: string;
+  ley: string;
+  articulo: string;
+  castigo: string;
+  referencia_ledger: string;
+  cfdi_relacionado: string | null;
+  legal_audit_id: string;
+}
+
+export interface AccountingLivePayload {
+  ok: boolean;
+  source: 'live' | 'r2';
+  fecha_corte: string;
+  idempotency_key: string;
+  ledger_integrity: {
+    hash_primer_registro: string;
+    hash_ultimo_registro: string;
+    total_registros: number;
+    verificado: boolean;
+  };
+  resumen: {
+    ingresos_reconocidos: number;
+    ingresos_no_reconocidos_por_bloqueo: number;
+    provision_cartera_ilegal: number;
+    iva_trasladado: number;
+    iva_acreditable_estimado: number;
+  };
+  asientos: AccountingAsiento[];
+}
+
+export interface DailyExecutiveReport {
+  date: string;
+  tenant: {
+    id: string;
+    nombre: string;
+    razon_social: string | null;
+    condusef: string | null;
+  };
+  operacion: {
+    total_casos: number;
+    mensajes_enviados: number;
+    casos_contestados: number;
+    promesas_registradas: number;
+    monto_prometido_cents: number;
+    monto_cobrado_cents: number;
+    escalados_humano: number;
+    en_cola_ready: number;
+  };
+  cumplimiento_legal: {
+    total_auditorias: number;
+    bloqueos: number;
+    saneos: number;
+    escalados: number;
+    por_regla: Record<string, number>;
+  };
+  contabilidad: {
+    idempotency_key: string;
+    ledger_verificado: boolean;
+    ledger_hash_ultimo: string;
+    ledger_total_registros: number;
+    ingresos_reconocidos_mxn: number;
+    provision_cartera_ilegal_mxn: number;
+    ingresos_bloqueados_mxn: number;
+    iva_trasladado_mxn: number;
+    iva_acreditable_estimado_mxn: number;
+    total_asientos: number;
+  };
+}
+
 export const api = {
   todayCases: () =>
     request<{ ok: boolean; date: string; count: number; total_cents: number; cases: CaseRow[] }>(
@@ -573,6 +665,78 @@ export const api = {
       settings: TenantSettings;
     }>('/api/v1/tenant/settings', {
       method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+
+  listTenantMembers: () =>
+    request<{
+      ok: boolean;
+      members: TenantMember[];
+    }>('/api/v1/tenant/members'),
+
+  inviteTenantMember: (input: { email: string; full_name: string; role: MembershipRole }) =>
+    request<{
+      ok: boolean;
+      invited: {
+        user_id: string;
+        email: string;
+        full_name: string;
+        role: MembershipRole;
+        is_new_user: boolean;
+      };
+      email_sent: boolean;
+      invite_url: string;
+      members: TenantMember[];
+    }>('/api/v1/tenant/members/invite', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+
+  removeTenantMember: (userId: string) =>
+    request<{
+      ok: boolean;
+      members: TenantMember[];
+    }>(`/api/v1/tenant/members/${encodeURIComponent(userId)}`, {
+      method: 'DELETE',
+    }),
+
+  getAccountingLive: (fecha?: string) =>
+    request<AccountingLivePayload>(
+      `/api/v1/contabilidad/resumen?live=1${fecha ? `&fecha=${encodeURIComponent(fecha)}` : ''}`
+    ),
+
+  getAccountingMap: () =>
+    request<{
+      ok: boolean;
+      tenant_id: string;
+      rules: AccountingMapRule[];
+    }>('/api/v1/tenant/accounting-map'),
+
+  updateAccountingMap: (rules: AccountingMapRule[]) =>
+    request<{
+      ok: boolean;
+      tenant_id: string;
+      updated: number;
+      rules: AccountingMapRule[];
+    }>('/api/v1/tenant/accounting-map', {
+      method: 'PUT',
+      body: JSON.stringify({ rules }),
+    }),
+
+  getDailyReport: (date?: string) =>
+    request<{
+      ok: boolean;
+      report: DailyExecutiveReport;
+    }>(`/api/v1/reports/daily${date ? `?date=${encodeURIComponent(date)}` : ''}`),
+
+  sendDailyReport: (input: { date?: string; to?: string }) =>
+    request<{
+      ok: boolean;
+      email_sent: boolean;
+      recipients: string[];
+      report: DailyExecutiveReport;
+    }>('/api/v1/reports/daily/send', {
+      method: 'POST',
       body: JSON.stringify(input),
     }),
 };

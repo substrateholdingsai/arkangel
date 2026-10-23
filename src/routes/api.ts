@@ -10,6 +10,15 @@ import { configLegal } from '../legal/config';
 import { catalogoReglas, evaluarMensaje } from '../legal/motor';
 import type { AuthVars } from '../auth/middleware';
 import { requireTenantMembership } from '../auth/middleware';
+import { construirEnlace, enviarCorreoAuth } from '../auth/email';
+import {
+  emailIsValid,
+  inviteTenantMember,
+  listTenantMembers,
+  normalizaEmail,
+  removeTenantMember,
+  type MembershipRole,
+} from '../auth/native';
 import type { Channel } from '../types/cobranza';
 import type { Env } from '../types/env';
 import {
@@ -1244,4 +1253,110 @@ api.put('/tenant/settings', async (c) => {
       dry_run: Boolean(dryRun),
     },
   });
+});
+
+/**
+ * Gestión Self-Serve del Equipo del Despacho (`GET /api/v1/tenant/members`,
+ * `POST /api/v1/tenant/members/invite` y `DELETE /api/v1/tenant/members/:userId`).
+ */
+api.get('/tenant/members', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'legal:read');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const denegado = exigeTenant(guardia.principal, ctx.tenantId);
+  if (denegado) return denegado;
+
+  const members = await listTenantMembers(ctx.env, ctx.tenantId);
+  return c.json({ ok: true, members });
+});
+
+api.post('/tenant/members/invite', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'legal:config');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const denegado = exigeTenant(guardia.principal, ctx.tenantId);
+  if (denegado) return denegado;
+
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const email = normalizaEmail(typeof body.email === 'string' ? body.email : '');
+  const fullName = typeof body.full_name === 'string' ? body.full_name.trim().slice(0, 120) : '';
+  const role: MembershipRole =
+    body.role === 'owner' || body.role === 'admin' || body.role === 'member' ? body.role : 'admin';
+
+  if (!emailIsValid(email)) {
+    return c.json({ ok: false, error: 'Ingresa un correo electrónico válido.' }, 400);
+  }
+
+  const invited = await inviteTenantMember(ctx.env, {
+    tenantId: ctx.tenantId,
+    email,
+    fullName,
+    role,
+  });
+
+  const origen = new URL(c.req.url).origin;
+  const inviteUrl = construirEnlace(ctx.env, 'invitar', invited.activationToken, origen);
+  const emailSent = await enviarCorreoAuth(
+    ctx.env,
+    invited.email,
+    'invitar',
+    invited.activationToken,
+    origen
+  );
+
+  await logEvent(ctx, 'tenant.miembro_invitado', {
+    payload: {
+      actor: guardia.principal.actorId,
+      invitedUserId: invited.userId,
+      email: invited.email,
+      role: invited.role,
+      isNewUser: invited.isNewUser,
+      emailSent,
+    },
+  });
+
+  const members = await listTenantMembers(ctx.env, ctx.tenantId);
+  return c.json({
+    ok: true,
+    invited: {
+      user_id: invited.userId,
+      email: invited.email,
+      full_name: invited.fullName,
+      role: invited.role,
+      is_new_user: invited.isNewUser,
+    },
+    email_sent: emailSent,
+    invite_url: inviteUrl,
+    members,
+  });
+});
+
+api.delete('/tenant/members/:userId', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'legal:config');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const denegado = exigeTenant(guardia.principal, ctx.tenantId);
+  if (denegado) return denegado;
+
+  const targetUserId = c.req.param('userId');
+  const res = await removeTenantMember(ctx.env, ctx.tenantId, targetUserId);
+  if (!res.ok) {
+    return c.json({ ok: false, error: res.error ?? 'No se pudo revocar al miembro.' }, 400);
+  }
+
+  await logEvent(ctx, 'tenant.miembro_revocado', {
+    payload: {
+      actor: guardia.principal.actorId,
+      revokedUserId: targetUserId,
+    },
+  });
+
+  const members = await listTenantMembers(ctx.env, ctx.tenantId);
+  return c.json({ ok: true, members });
 });

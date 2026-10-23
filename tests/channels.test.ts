@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { parseResendPayload } from '../src/channels/resend';
 import { parseTelnyxPayload } from '../src/channels/telnyx';
-import { parseWhatsAppPayload } from '../src/channels/whatsapp';
+import { parseWhatsAppPayload, verifyWhatsAppSignature } from '../src/channels/whatsapp';
 import { isDryRun } from '../src/channels/types';
+import { webhooks } from '../src/routes/webhooks';
 import type { Env } from '../src/types/env';
 
 describe('parseWhatsAppPayload', () => {
@@ -52,6 +53,65 @@ describe('parseWhatsAppPayload', () => {
   it('no truena con payloads vacíos', () => {
     expect(parseWhatsAppPayload({}).messages).toEqual([]);
     expect(parseWhatsAppPayload(null).statuses).toEqual([]);
+  });
+
+  it('verifica la firma HMAC-SHA256 de Meta (X-Hub-Signature-256) y rechaza firmas inválidas en POST /webhooks/whatsapp', async () => {
+    const rawBody = JSON.stringify({ object: 'whatsapp_business_account', entry: [] });
+    const appSecret = 'meta_secret_key_test_123';
+
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      'raw',
+      enc.encode(appSecret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+    const sigBuf = await crypto.subtle.sign('HMAC', key, enc.encode(rawBody));
+    const hex = Array.from(new Uint8Array(sigBuf))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    const validHeader = `sha256=${hex}`;
+
+    expect(await verifyWhatsAppSignature(appSecret, rawBody, validHeader)).toBe(true);
+    expect(await verifyWhatsAppSignature(appSecret, rawBody, `sha256=${'0'.repeat(64)}`)).toBe(
+      false
+    );
+    expect(await verifyWhatsAppSignature(appSecret, rawBody, null)).toBe(false);
+
+    const envWithSecret = { WHATSAPP_APP_SECRET: appSecret } as unknown as Env;
+
+    // Sin cabecera -> 401 missing_signature
+    const resMissing = await webhooks.request(
+      '/whatsapp',
+      { method: 'POST', body: rawBody },
+      envWithSecret
+    );
+    expect(resMissing.status).toBe(401);
+
+    // Con firma alterada -> 401 invalid_signature
+    const resInvalid = await webhooks.request(
+      '/whatsapp',
+      {
+        method: 'POST',
+        headers: { 'x-hub-signature-256': `sha256=${'a'.repeat(64)}` },
+        body: rawBody,
+      },
+      envWithSecret
+    );
+    expect(resInvalid.status).toBe(401);
+
+    // Con firma válida -> 200 ok
+    const resValid = await webhooks.request(
+      '/whatsapp',
+      {
+        method: 'POST',
+        headers: { 'x-hub-signature-256': validHeader },
+        body: rawBody,
+      },
+      envWithSecret
+    );
+    expect(resValid.status).toBe(200);
   });
 });
 

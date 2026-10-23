@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
+  BookOpen,
   Briefcase,
   CheckCircle2,
   Clock,
@@ -38,6 +39,7 @@ import {
   type LegalRegla,
   type SystemStatus,
 } from './api';
+import { AccountingReportModal } from './AccountingReportModal';
 import { AuthGate } from './auth/AuthGate';
 import { useAuth } from './auth/AuthContext';
 import { CopilotWidget } from './CopilotWidget';
@@ -85,6 +87,7 @@ export default function App() {
   const [bandeja, setBandeja] = useState<'all' | 'human' | 'resolved'>('all');
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [accountingOpen, setAccountingOpen] = useState(false);
 
   const conectado = session !== null;
   const tenantId = activeTenant?.tenantId ?? null;
@@ -414,6 +417,14 @@ export default function App() {
                 </select>
               </label>
             ) : null}
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={BookOpen}
+              onClick={() => setAccountingOpen(true)}
+            >
+              Contabilidad
+            </Button>
             <Button
               variant="secondary"
               size="sm"
@@ -853,6 +864,8 @@ export default function App() {
               void recargarLegal();
             }}
           />
+
+          <AccountingReportModal open={accountingOpen} onClose={() => setAccountingOpen(false)} />
 
           <CopilotWidget
             activeCaseId={selectedCaseId}

@@ -37,6 +37,9 @@ export const PASSWORD_ITERATIONS = 100_000;
 /** Vida del token de restablecimiento de contraseña: 30 minutos. */
 export const RESET_TTL_SECONDS = 60 * 30;
 
+/** Vida del token de invitación a un despacho: 7 días. */
+export const INVITE_TTL_SECONDS = 60 * 60 * 24 * 7;
+
 /** Longitud mínima de la contraseña. */
 export const PASSWORD_MIN_LENGTH = 12;
 
@@ -690,4 +693,153 @@ export async function uniqueSlug(env: Env, name: string): Promise<string> {
     if (!existe) return candidato;
   }
   return `${base}-${randomToken().slice(0, 8)}`;
+}
+
+/* ── Gestión de Miembros e Invitaciones Self-Serve por Tenant ────────────── */
+
+export interface TenantMemberRow {
+  userId: string;
+  email: string;
+  fullName: string;
+  role: MembershipRole;
+  active: boolean;
+  createdAt: number;
+}
+
+/** Lista los miembros de un despacho con su estado de activación. */
+export async function listTenantMembers(env: Env, tenantId: string): Promise<TenantMemberRow[]> {
+  try {
+    const res = await env.DB.prepare(
+      `SELECT m.user_id AS userId,
+              u.email AS email,
+              COALESCE(u.full_name, '') AS fullName,
+              m.role AS role,
+              CASE WHEN u.password_hash IS NOT NULL AND u.email_verified_at IS NOT NULL THEN 1 ELSE 0 END AS active,
+              m.created_at AS createdAt
+       FROM tenant_memberships m
+       JOIN users u ON u.id = m.user_id
+       WHERE m.tenant_id = ?
+       ORDER BY m.created_at ASC`
+    )
+      .bind(tenantId)
+      .all<{
+        userId: string;
+        email: string;
+        fullName: string;
+        role: MembershipRole;
+        active: number;
+        createdAt: number;
+      }>();
+
+    return (res.results ?? []).map((r) => ({
+      userId: r.userId,
+      email: r.email,
+      fullName: r.fullName,
+      role: r.role,
+      active: Boolean(r.active),
+      createdAt: Number(r.createdAt ?? 0),
+    }));
+  } catch (error) {
+    if (esErrorDeTablaFaltante(error, ['tenant_memberships', 'users'])) return [];
+    throw error;
+  }
+}
+
+/**
+ * Invita o actualiza un miembro en el despacho (`owner`, `admin` o `member`).
+ * Si el usuario no existe aún, lo crea en `users` y emite un token de activación
+ * (`reset_password`, 7 días) para que elija su contraseña inicial.
+ */
+export async function inviteTenantMember(
+  env: Env,
+  input: {
+    tenantId: string;
+    email: string;
+    fullName: string;
+    role: MembershipRole;
+  }
+): Promise<{
+  userId: string;
+  email: string;
+  fullName: string;
+  role: MembershipRole;
+  isNewUser: boolean;
+  activationToken: string;
+}> {
+  const email = normalizaEmail(input.email);
+  const fullName = input.fullName.trim() || email.split('@')[0] || 'Operador';
+  const now = Math.floor(Date.now() / 1000);
+
+  const existing = await getUserByEmail(env, email);
+  let userId: string;
+  let isNewUser = false;
+
+  if (!existing) {
+    userId = `usr_${crypto.randomUUID().slice(0, 12)}`;
+    isNewUser = true;
+    await env.DB.prepare(
+      `INSERT INTO users (id, email, full_name, password_hash, email_verified_at, platform_role, created_at)
+       VALUES (?, ?, ?, NULL, NULL, 'user', ?)`
+    )
+      .bind(userId, email, fullName, now)
+      .run();
+  } else {
+    userId = existing.id;
+    if (input.fullName.trim() && !existing.fullName) {
+      await env.DB.prepare('UPDATE users SET full_name = ? WHERE id = ?')
+        .bind(fullName, userId)
+        .run();
+    }
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO tenant_memberships (user_id, tenant_id, role, created_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, tenant_id) DO UPDATE SET role = excluded.role`
+  )
+    .bind(userId, input.tenantId, input.role, now)
+    .run();
+
+  const activationToken = await issueActionToken(env, userId, 'reset_password', INVITE_TTL_SECONDS);
+
+  return {
+    userId,
+    email,
+    fullName: existing?.fullName || fullName,
+    role: input.role,
+    isNewUser,
+    activationToken,
+  };
+}
+
+/**
+ * Revoca la membresía de un usuario en el despacho.
+ * Impide eliminar al último `owner` del despacho para no dejarlo huérfano.
+ */
+export async function removeTenantMember(
+  env: Env,
+  tenantId: string,
+  userId: string
+): Promise<{ ok: boolean; error?: string }> {
+  const members = await listTenantMembers(env, tenantId);
+  const target = members.find((m) => m.userId === userId);
+  if (!target) {
+    return { ok: false, error: 'El usuario no es miembro de este despacho.' };
+  }
+
+  if (target.role === 'owner') {
+    const owners = members.filter((m) => m.role === 'owner');
+    if (owners.length <= 1) {
+      return {
+        ok: false,
+        error: 'No puedes revocar al único propietario (owner) del despacho.',
+      };
+    }
+  }
+
+  await env.DB.prepare('DELETE FROM tenant_memberships WHERE tenant_id = ? AND user_id = ?')
+    .bind(tenantId, userId)
+    .run();
+
+  return { ok: true };
 }

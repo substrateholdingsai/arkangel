@@ -26,6 +26,7 @@ import {
 import type { Env } from '../src/types/env';
 import type { AccountingPayload } from '../src/contabilidad/schemas';
 import { platformPrincipal } from '../src/auth/principal';
+import { contabilidad } from '../src/routes/contabilidad';
 import type { Tenant, TenantContext } from '../src/tenancy/types';
 
 const TZ = 'America/Mexico_City';
@@ -100,6 +101,13 @@ class FakeD1 {
 
   consulta<T>(sql: string, args: unknown[]): T[] {
     if (sql.includes('FROM tenants')) {
+      if (sql.includes('WHERE id = ?') || sql.includes('WHERE slug = ?')) {
+        const ref = String(args[0]);
+        return this.tenants.filter((fila) => fila.id === ref || fila.slug === ref) as T[];
+      }
+      if (sql.includes('is_default = 1')) {
+        return this.tenants.filter((fila) => Number(fila.is_default ?? 1) === 1) as T[];
+      }
       const status = String(args[0] ?? 'active');
       return this.tenants.filter((fila) => String(fila.status) === status) as T[];
     }
@@ -167,6 +175,43 @@ class FakeD1 {
   ejecuta(sql: string, args: unknown[]): void {
     if (sql.includes('INSERT INTO events')) {
       this.eventos.push({ tenant_id: args[1], type: args[2], payload: args[5] });
+      return;
+    }
+    if (sql.includes('INSERT OR IGNORE INTO tenant_accounting_map')) {
+      const exists = this.mapa.some(
+        (m) => String(m.tenant_id ?? TENANT_ID) === String(args[0]) && m.regla_id === args[1]
+      );
+      if (!exists) {
+        this.mapa.push({
+          tenant_id: args[0],
+          regla_id: args[1],
+          cuenta_debito: args[2],
+          cuenta_credito: args[3],
+          tipo_asiento: args[4],
+          descripcion: args[5],
+        });
+      }
+      return;
+    }
+    if (sql.includes('INSERT INTO tenant_accounting_map')) {
+      const existing = this.mapa.find(
+        (m) => String(m.tenant_id ?? TENANT_ID) === String(args[0]) && m.regla_id === args[1]
+      );
+      if (existing) {
+        existing.cuenta_debito = args[2];
+        existing.cuenta_credito = args[3];
+        existing.tipo_asiento = args[4];
+        if (args[5]) existing.descripcion = args[5];
+      } else {
+        this.mapa.push({
+          tenant_id: args[0],
+          regla_id: args[1],
+          cuenta_debito: args[2],
+          cuenta_credito: args[3],
+          tipo_asiento: args[4],
+          descripcion: args[5],
+        });
+      }
       return;
     }
     if (sql.includes('INSERT INTO alegra_sync')) {
@@ -978,5 +1023,126 @@ describe('consultas del módulo', () => {
     expect(parseado.fecha_corte).toBe(FECHA);
     expect(parseado.asientos).toHaveLength(3);
     expect(parseado.ventana.inicio_utc).toBe('2026-10-19T06:00:00.000Z');
+  });
+
+  it('GET /contabilidad/resumen?live=1 calcula el corte en vivo sin depender de R2', async () => {
+    const db = datosBase();
+    const env = { ...entorno(db), ADMIN_TOKEN: 'adm_test_1' };
+
+    const res = await contabilidad.request(
+      `/contabilidad/resumen?live=1&fecha=${FECHA}`,
+      { headers: { 'x-admin-token': 'adm_test_1', 'x-tenant-id': TENANT_ID } },
+      env
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      source: string;
+      fecha_corte: string;
+      ledger_integrity: { verificado: boolean };
+      asientos: unknown[];
+    };
+    expect(body.ok).toBe(true);
+    expect(body.source).toBe('live');
+    expect(body.fecha_corte).toBe(FECHA);
+    expect(body.ledger_integrity.verificado).toBe(true);
+    expect(body.asientos).toHaveLength(3);
+  });
+
+  it('GET y PUT /tenant/accounting-map permiten editar cuentas contables Alegra por despacho (Fase 6)', async () => {
+    const db = datosBase();
+    const env = { ...entorno(db), ADMIN_TOKEN: 'adm_test_1' };
+    const headers = {
+      'x-admin-token': 'adm_test_1',
+      'x-tenant-id': TENANT_ID,
+      'content-type': 'application/json',
+    };
+
+    const getRes = await contabilidad.request('/tenant/accounting-map', { headers }, env);
+    expect(getRes.status).toBe(200);
+    const getBody = (await getRes.json()) as {
+      ok: boolean;
+      rules: Array<{ regla_id: string; cuenta_debito: string }>;
+    };
+    expect(getBody.ok).toBe(true);
+    expect(getBody.rules.length).toBeGreaterThanOrEqual(3);
+
+    const putRes = await contabilidad.request(
+      '/tenant/accounting-map',
+      {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          rules: [
+            {
+              regla_id: '2.1',
+              cuenta_debito: '5999-001',
+              cuenta_credito: '2199-009',
+              tipo_asiento: 'provision',
+              descripcion: 'Cuenta personalizada despacho',
+            },
+          ],
+        }),
+      },
+      env
+    );
+    expect(putRes.status).toBe(200);
+    const putBody = (await putRes.json()) as {
+      ok: boolean;
+      updated: number;
+      rules: Array<{ regla_id: string; cuenta_debito: string; cuenta_credito: string }>;
+    };
+    expect(putBody.ok).toBe(true);
+    expect(putBody.updated).toBe(1);
+    const regla21 = putBody.rules.find((r) => r.regla_id === '2.1');
+    expect(regla21?.cuenta_debito).toBe('5999-001');
+    expect(regla21?.cuenta_credito).toBe('2199-009');
+  });
+
+  it('GET /reports/daily y POST /reports/daily/send generan y registran el Reporte Ejecutivo Diario Automatizado', async () => {
+    const db = datosBase();
+    const env = { ...entorno(db), ADMIN_TOKEN: 'adm_test_1' };
+    const headers = {
+      'x-admin-token': 'adm_test_1',
+      'x-tenant-id': TENANT_ID,
+      'content-type': 'application/json',
+    };
+
+    const getRes = await contabilidad.request(`/reports/daily?date=${FECHA}`, { headers }, env);
+    expect(getRes.status).toBe(200);
+    const getBody = (await getRes.json()) as {
+      ok: boolean;
+      report: {
+        date: string;
+        contabilidad: {
+          ledger_verificado: boolean;
+          ingresos_reconocidos_mxn: number;
+          total_asientos: number;
+        };
+      };
+    };
+    expect(getBody.ok).toBe(true);
+    expect(getBody.report.date).toBe(FECHA);
+    expect(getBody.report.contabilidad.ledger_verificado).toBe(true);
+    expect(getBody.report.contabilidad.ingresos_reconocidos_mxn).toBe(800);
+    expect(getBody.report.contabilidad.total_asientos).toBe(3);
+
+    const sendRes = await contabilidad.request(
+      '/reports/daily/send',
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ date: FECHA, to: 'contador@despacho.mx' }),
+      },
+      env
+    );
+    expect(sendRes.status).toBe(200);
+    const sendBody = (await sendRes.json()) as {
+      ok: boolean;
+      recipients: string[];
+    };
+    expect(sendBody.ok).toBe(true);
+    expect(sendBody.recipients).toEqual(['contador@despacho.mx']);
+    expect(db.eventos.some((e) => e.type === 'reporte.diario_enviado')).toBe(true);
   });
 });

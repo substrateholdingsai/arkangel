@@ -1,7 +1,7 @@
 # ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · **17 suites / 270 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site` (`54e3d15f`).
-> Última actualización: 2026-10-22 (Sprint 6: Drawer del Operador estilo Wix Payments con Diagnóstico IA + Notas, Copilot IA Flotante, Telemetría del Sistema 100% dinámica, Motor de Conciliación de Pagos Conekta/Cobre/CSV, y Panel Self-Serve de Configuración del Despacho en la UI).
+> **Estado**: `main` · **17 suites / 275 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site` (`d17fa785`).
+> Última actualización: 2026-10-23 (Sprint 7: Firma HMAC-SHA256 de Meta en `POST /webhooks/whatsapp`, promoción automática de `promise_made`, Invitaciones Self-Serve de Equipo, Corte Contable en Vivo + Verificador de Ledger en UI, Catálogo Contable Editable por Tenant Fase 6, y Reporte Ejecutivo Diario Automatizado).
 
 ## Vista general
 
@@ -81,11 +81,18 @@ Cada ruta exige **su** scope: sin credencial → 401, con credencial pero sin sc
 | POST     | `/api/v1/copilot/chat`                    | `cases:read`                                      | Copilot IA para operadores con acceso en vivo al estado del Worker y caso activo         |
 | GET      | `/api/v1/tenant/settings`                 | `legal:read`                                      | Configuración legal/operativa del despacho + URLs de webhooks                            |
 | PUT      | `/api/v1/tenant/settings`                 | `legal:config`                                    | Guardado self-serve de Razón Social, REDECO, dominios, ventana NOM-184 y modo IA         |
+| GET      | `/api/v1/tenant/members`                  | `legal:read`                                      | Lista de miembros del despacho (`owner`, `admin`/operador, `member`/viewer)              |
+| POST     | `/api/v1/tenant/members/invite`           | `legal:config`                                    | Invitación self-serve de miembros por correo (Resend + enlace de activación de 7 días)   |
+| DELETE   | `/api/v1/tenant/members/:userId`          | `legal:config`                                    | Revocación de acceso de un miembro (con protección del último `owner`)                   |
 | GET      | `/api/v1/clients/:id`                     | `clients:read`                                    | Cliente + deudas pendientes                                                              |
 | GET      | `/api/v1/clients/:id/conversation`        | `messages:read`                                   | Historial de mensajes                                                                    |
 | GET      | `/api/v1/legal/catalogo`                  | `legal:read`                                      | 12 reglas con ley, artículo y castigo                                                    |
 | GET      | `/api/v1/legal/hoy`                       | `legal:read`                                      | Resumen de cumplimiento + auditoría                                                      |
-| GET      | `/api/v1/contabilidad/resumen`            | `accounting:read`                                 | Corte contable (JSON de R2)                                                              |
+| GET      | `/api/v1/contabilidad/resumen`            | `accounting:read`                                 | Corte contable (JSON de R2 o cálculo en vivo con `?live=1`)                              |
+| GET      | `/api/v1/tenant/accounting-map`           | `accounting:read`                                 | Catálogo de cuentas contables Alegra por regla legal del despacho (auto-seed 12 reglas)  |
+| PUT      | `/api/v1/tenant/accounting-map`           | `legal:config`                                    | Edición self-serve de cuentas Débito/Crédito y tipo de póliza por despacho (Fase 6)      |
+| GET      | `/api/v1/reports/daily`                   | `metrics:read`                                    | Reporte Ejecutivo Diario consolidado (Cobranza + Cumplimiento CONDUSEF + Contabilidad)   |
+| POST     | `/api/v1/reports/daily/send`              | `metrics:read`                                    | Envío por correo (Resend) del Reporte Ejecutivo Diario a propietarios/contadores         |
 | GET      | `/api/v1/state`                           | `agent:read`                                      | Estado del bot (modo, cola, pendientes)                                                  |
 | POST     | `/api/v1/decide` · `/dispatch` · `/audit` | `agent:decide` · `agent:dispatch` · `agent:audit` | Decisión, envío y auditoría de acciones                                                  |
 | GET/POST | `/webhooks/whatsapp`                      | firma de Meta                                     | Verificación del challenge + mensajes y estados                                          |
@@ -308,8 +315,8 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
 ### Multi-tenant (pendiente por fase)
 
 - **Fase 4 completada**: `tenant_id` en todas las tablas de negocio + propagación de `ctx` a servicios + prefijo en R2/DO. **Se puede dar de alta un segundo cliente.**
-- **Fase 5 (parcial)**: webhooks resuelven tenant por `provider_account_id`; falta firma de Meta en POST.
-- **Fase 6**: contabilidad por tenant (Alegra propio, `tenant_accounting_map`, idempotency key con tenant, ledger por tenant).
+- **Fase 5 completada**: webhooks resuelven tenant por `provider_account_id` y `POST /webhooks/whatsapp` valida firma HMAC-SHA256 (`X-Hub-Signature-256` contra `WHATSAPP_APP_SECRET`, fail-closed).
+- **Fase 6 completada**: contabilidad por tenant (`tenant_accounting_map` editable en UI vía `GET/PUT /api/v1/tenant/accounting-map` con auto-seed de 12 reglas, idempotency key y cadena de hashes del ledger por tenant).
 
 ### Identidad (nativa, sin proveedor externo)
 
@@ -318,7 +325,8 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
 - **El rol lo concede la membresía, no la cabecera.** `tenant_memberships` es la fuente de verdad (`owner` → `owner`, `admin` → `operator`, `member` → `viewer`; tabla `ROLE_POR_MEMBRESIA` en `src/auth/native.ts`). `X-Tenant-Id` sólo _selecciona_ entre las membresías del usuario: pedir un despacho ajeno es 403 `tenant_forbidden`.
 - **Registro público cerrado** (2026-10-22): `POST /api/auth/register` → 403. Altas sólo con `seed-owner`.
 - **Restablecer contraseña por correo** (2026-10-22): `src/auth/email.ts` envía por Resend desde `AUTH_FROM_EMAIL` (`no-reply@auth.arksystems.site`, subdominio `auth.arksystems.site` verificado) con enlace a `APP_URL` (`https://arkangel.arksystems.site/?auth=restablecer&token=…`). El envío corre en `waitUntil` (misma 202 exista o no la cuenta), el hash se calcula antes de consumir el token y el reset marca el correo como verificado. Pantallas "¿Olvidaste tu contraseña?" y "Nueva contraseña" en `AuthGate.tsx`. Secret `RESEND_API_KEY` cargado.
-- **Pendiente auth**: invitaciones por correo; rotar la API key de Resend.
+- **Invitaciones de equipo Self-Serve** (2026-10-23): `GET/POST/DELETE /api/v1/tenant/members` y Sección 4 en `TenantSettingsModal.tsx` permiten al `owner` invitar operadores (`admin`) o auditores (`member`) con correo Resend y enlace de activación de 7 días.
+- **Pendiente auth**: rotar la API key de Resend.
 - **El cambio de contraseña ya está en el panel** (`POST /api/auth/change-password`): valida la actual, aplica la política de la nueva, revoca todas las sesiones y limpia la cookie. La nueva debe ser **distinta** de la actual (400) y una sesión revocada no puede cambiar la contraseña (401).
 - **La allowlist de dominios y la ventana horaria del módulo contable** siguen viniendo de `env.TZ` (Fase 6).
 - **Un tenant en `config_mode='platform_env'` hereda la config del Worker.** Hoy sólo lo usa el tenant heredado. Para pasarlo a `db` hay que cargar su fila (razón social y CONDUSEF incluidos) y ejecutar: `UPDATE tenants SET config_mode='db' WHERE id='t_arkangel';` Sin razón social, el motor legal bloquea todos sus mensajes (regla 1.1, fail-closed) y el worker lo avisa por log.
@@ -331,7 +339,7 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
 - **Desfase de huso horario entre crons**: `"0 6 * * *"` dispara a las 06:00 UTC = **00:00 CDMX**, no a las 6 AM (los triggers de Cloudflare son UTC). El cron contable sí está anclado a CDMX (05:59 UTC). Conviene alinear el de cobranza.
 - **Publicación contable T+1**: el corte publicado a las 23:59 CDMX es el día hábil anterior (decisión del code review). Confirmar con el contador.
 - **`iva_acreditable_estimado`** es un cálculo provisional sobre gastos de Arkangel; hay que sustituirlo por el IVA acreditable real cuando exista el módulo de CFDI de proveedores.
-- **`promise_made`** está reservado en `ESTADOS_INGRESO_RECONOCIDO` pero nada lo escribe: las promesas viven en la tabla `promises`.
+- **`promise_made` conectado** (2026-10-23): `recordPromise()` en `src/services/promesas.ts` promueve automáticamente el último mensaje saliente del caso (`sent`/`delivered`/`read`) a `status = 'promise_made'`, reconociendo el ingreso en `buildAccountingPayload()`.
 - **Sin CI**: no hay `.github/workflows`. `npm run verify` corre format, lint, typecheck, test y build, pero sólo en local. → **Resuelto**: `.github/workflows/ci.yml` está en `main` y corre en GitHub Actions (PR #1, run verde).
 - **Spike de voz: requiere plan de pago Workers AI** para medir latencia real. La cuenta gratuita (10 000 neuronas/día) no permite completar 20 llamadas. Sin plan de pago, el veredicto definitivo de latencia (GO / GO CONDICIONADO / NO-GO) no puede emitirse.
 
@@ -341,8 +349,8 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
 2. **[x] Cargar la fila de `t_arkangel` y Panel Self-Serve de Configuración** — implementado en `GET/PUT /api/v1/tenant/settings` + `TenantSettingsModal.tsx`; `t_arkangel` sembrado en remoto con `config_mode='db'`.
 3. **[x] Operación Humana + Copilot IA + Conciliación de Pagos (Conekta / Cobre / CSV)** — desplegado en `https://arkangel.arksystems.site`.
 4. **Activar plan de pago Workers AI** y repetir `SPIKE_LLAMADAS=20 npm run spike:voz` — bloquea la medición de latencia real (cuota gratuita 10 k neuronas/día agotada).
-5. **Fase 5** — firma de Meta en POST (el enrutado por tenant ya está).
-6. **Fase 6** — contabilidad por tenant (Alegra propio, mapa de cuentas por cliente).
+5. **[x] Fase 5** — firma HMAC-SHA256 de Meta (`X-Hub-Signature-256`) en `POST /webhooks/whatsapp` + enrutado por tenant.
+6. **[x] Fase 6 + Reporte Ejecutivo Diario** — mapa de cuentas por tenant editable en UI (`AccountingReportModal.tsx`), corte contable en vivo (`?live=1`) y reporte diario automatizado (`GET/POST /api/v1/reports/daily`).
 7. **Ensayo end-to-end** con un Alegra de pruebas + cerrar el contrato MCP.
 8. **Secretos + bucket R2 + primera corrida real** (las migraciones 003/004/005/006/007/008/009/010 ya están en remoto).
 9. **[x] Alinear el cron de cobranza** con el huso CDMX — `wrangler.jsonc` pasó de `"0 6 * * *"` (06:00 UTC = 00:00 CDMX) a `"0 12 * * *"` (12:00 UTC = 6 AM CDT).

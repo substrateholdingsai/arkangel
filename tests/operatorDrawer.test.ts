@@ -60,6 +60,9 @@ class FakeOperatorD1 {
   promises: Record<string, unknown>[] = [];
   audits: Record<string, unknown>[] = [];
   tenants: Record<string, unknown>[] = [];
+  users: Record<string, unknown>[] = [];
+  memberships: Record<string, unknown>[] = [];
+  tokens: Record<string, unknown>[] = [];
 
   prepare = (sql: string) => {
     const clean = sql.replace(/\s+/g, ' ').trim();
@@ -102,10 +105,39 @@ class FakeOperatorD1 {
     if (sql.includes('SELECT row_hash FROM legal_audit')) {
       return null;
     }
+    if (sql.includes('FROM users WHERE lower(email)')) {
+      const email = String(args[0]).toLowerCase();
+      const u = this.users.find((row) => String(row.email).toLowerCase() === email);
+      if (!u) return null;
+      return {
+        id: u.id,
+        email: u.email,
+        fullName: u.full_name ?? '',
+        passwordHash: u.password_hash ?? null,
+        emailVerifiedAt: u.email_verified_at ?? null,
+        platformRole: u.platform_role ?? 'user',
+      };
+    }
     return null;
   }
 
   all(sql: string, args: unknown[]): unknown[] {
+    if (sql.includes('FROM tenant_memberships m JOIN users u')) {
+      const tenantId = String(args[0]);
+      return this.memberships
+        .filter((m) => m.tenant_id === tenantId)
+        .map((m) => {
+          const u = this.users.find((row) => row.id === m.user_id);
+          return {
+            userId: m.user_id,
+            email: u?.email ?? '',
+            fullName: u?.full_name ?? '',
+            role: m.role,
+            active: u?.password_hash && u?.email_verified_at ? 1 : 0,
+            createdAt: m.created_at ?? 0,
+          };
+        });
+    }
     if (sql.includes('FROM debts WHERE tenant_id = ?')) {
       return [
         {
@@ -151,6 +183,61 @@ class FakeOperatorD1 {
         client_id: args[3],
         amount_cents: args[4],
         promised_date: args[5],
+      });
+    }
+    if (sql.startsWith("UPDATE messages SET status = 'promise_made'")) {
+      const tenantId = String(args[0]);
+      const caseId = String(args[1]);
+      const outbound = [...this.messages]
+        .reverse()
+        .find(
+          (m) =>
+            m.tenant_id === tenantId &&
+            m.case_id === caseId &&
+            m.direction === 'outbound' &&
+            ['sent', 'delivered', 'read'].includes(String(m.status))
+        );
+      if (outbound) outbound.status = 'promise_made';
+    }
+    if (sql.startsWith('INSERT INTO users')) {
+      this.users.push({
+        id: args[0],
+        email: args[1],
+        full_name: args[2],
+        password_hash: null,
+        email_verified_at: null,
+        platform_role: 'user',
+        created_at: args[3],
+      });
+    }
+    if (sql.startsWith('INSERT INTO tenant_memberships')) {
+      const existing = this.memberships.find(
+        (m) => m.user_id === args[0] && m.tenant_id === args[1]
+      );
+      if (existing) {
+        existing.role = args[2];
+      } else {
+        this.memberships.push({
+          user_id: args[0],
+          tenant_id: args[1],
+          role: args[2],
+          created_at: args[3],
+        });
+      }
+    }
+    if (sql.startsWith('DELETE FROM tenant_memberships')) {
+      const tenantId = String(args[0]);
+      const userId = String(args[1]);
+      this.memberships = this.memberships.filter(
+        (m) => !(m.tenant_id === tenantId && m.user_id === userId)
+      );
+    }
+    if (sql.startsWith('INSERT INTO auth_tokens')) {
+      this.tokens.push({
+        token_hash: args[0],
+        user_id: args[1],
+        purpose: args[2],
+        expires_at: args[3],
       });
     }
     if (sql.startsWith('UPDATE cases SET')) {
@@ -289,8 +376,23 @@ describe('Drawer del Operador y Softphone (/api/v1/cases/:id/*)', () => {
     expect(String(db.messages[0]?.meta)).toContain('"human_operator":true');
   });
 
-  it('POST /cases/:id/resolve registra promesa humana y cambia el estado a promised', async () => {
+  it('POST /cases/:id/resolve registra promesa humana, cambia el estado a promised y promueve el mensaje saliente a promise_made', async () => {
     const db = new FakeOperatorD1();
+    db.messages.push({
+      id: 'msg_out_1',
+      tenant_id: 't_arkangel',
+      case_id: 'cas_1',
+      client_id: 'cli_1',
+      channel: 'whatsapp',
+      direction: 'outbound',
+      provider_id: 'wamid.1',
+      body: 'Recordatorio de saldo Arkangel S.A. de C.V.',
+      status: 'sent',
+      error: null,
+      meta: null,
+      created_at: '2026-10-22T12:00:00Z',
+    });
+
     const res = await makeApp().request(
       '/api/v1/cases/cas_1/resolve',
       {
@@ -307,6 +409,7 @@ describe('Drawer del Operador y Softphone (/api/v1/cases/:id/*)', () => {
     expect(res.status).toBe(200);
     expect(db.promises).toHaveLength(1);
     expect(db.cases[0]?.status).toBe('promised');
+    expect(db.messages[0]?.status).toBe('promise_made');
   });
 
   it('POST /cases/:id/call inicia llamada auditada con guion CONDUSEF y registra el cierre', async () => {
@@ -471,5 +574,85 @@ describe('Drawer del Operador y Softphone (/api/v1/cases/:id/*)', () => {
     expect(putBody.settings.dry_run).toBe(false);
     expect(db.contracts[0]?.nombre_legal).toBe('Cobranza FinTech S.A.P.I. de C.V.');
     expect(db.contracts[0]?.condusef).toBe('REDECO-2026-9988');
+  });
+
+  it('POST /tenant/members/invite, GET /tenant/members y DELETE /tenant/members/:userId gestionan el equipo con protección del último owner', async () => {
+    const db = new FakeOperatorD1();
+    const app = makeApp();
+    const env = makeEnv(db);
+
+    // Invitar a un propietario inicial (owner)
+    const inviteOwner = await app.request(
+      '/api/v1/tenant/members/invite',
+      {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({
+          email: 'owner@despacho.mx',
+          full_name: 'Propietario Principal',
+          role: 'owner',
+        }),
+      },
+      env
+    );
+    expect(inviteOwner.status).toBe(200);
+    const ownerBody = (await inviteOwner.json()) as {
+      ok: boolean;
+      invited: { user_id: string; email: string; role: string };
+      invite_url: string;
+      members: Array<{ userId: string; email: string; role: string }>;
+    };
+    expect(ownerBody.ok).toBe(true);
+    expect(ownerBody.invited.role).toBe('owner');
+    expect(ownerBody.invite_url).toContain('auth=restablecer&token=');
+    expect(ownerBody.members).toHaveLength(1);
+
+    // Invitar a un operador (admin)
+    const inviteOp = await app.request(
+      '/api/v1/tenant/members/invite',
+      {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({
+          email: 'operador@despacho.mx',
+          full_name: 'Ana Operadora',
+          role: 'admin',
+        }),
+      },
+      env
+    );
+    expect(inviteOp.status).toBe(200);
+    const opBody = (await inviteOp.json()) as {
+      invited: { user_id: string; role: string };
+      members: Array<{ userId: string; email: string; role: string }>;
+    };
+    expect(opBody.invited.role).toBe('admin');
+    expect(opBody.members).toHaveLength(2);
+
+    // No permite revocar al único owner del despacho
+    const delOwnerRes = await app.request(
+      `/api/v1/tenant/members/${ownerBody.invited.user_id}`,
+      {
+        method: 'DELETE',
+        headers: AUTH_HEADERS,
+      },
+      env
+    );
+    expect(delOwnerRes.status).toBe(400);
+
+    // Sí permite revocar al operador
+    const delOpRes = await app.request(
+      `/api/v1/tenant/members/${opBody.invited.user_id}`,
+      {
+        method: 'DELETE',
+        headers: AUTH_HEADERS,
+      },
+      env
+    );
+    expect(delOpRes.status).toBe(200);
+    const afterDelBody = (await delOpRes.json()) as {
+      members: Array<{ userId: string }>;
+    };
+    expect(afterDelBody.members).toHaveLength(1);
   });
 });

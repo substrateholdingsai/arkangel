@@ -38,6 +38,7 @@ export interface Env {
   WHATSAPP_TOKEN: string;
   WHATSAPP_PHONE_NUMBER_ID: string;
   WHATSAPP_VERIFY_TOKEN: string;
+  WHATSAPP_APP_SECRET?: string;
   WHATSAPP_TEMPLATE_NAME?: string;
   WHATSAPP_TEMPLATE_LANG?: string;
 
