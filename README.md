@@ -1,6 +1,6 @@
 # ARKANGEL — Cobranza asistida por IA
 
-Worker de Cloudflare que hace cobranza por **WhatsApp (Meta Cloud API)**, **SMS (Telnyx)** y
+Worker de Cloudflare que hace cobranza por **WhatsApp y SMS (Telnyx)** y
 **email (Resend)**, redactado y respondido por **Workers AI**, con un dashboard de una sola
 pantalla: *1 botón • 0 tablas*.
 
@@ -17,7 +17,7 @@ pantalla: *1 botón • 0 tablas*.
 | Runtime | Cloudflare Workers (Hono 4, TypeScript, `nodejs_compat`) |
 | Datos | D1 (SQLite) + KV (idempotencia/throttle) + Queues + Durable Objects |
 | IA | Workers AI (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`) con fallback heurístico |
-| Canales | Meta WhatsApp Cloud API · Telnyx Messaging API · Resend |
+| Canales | Telnyx (WhatsApp Business API & SMS) · Resend (Email) |
 | Frontend | React 18 + Tailwind 3.4 (Vite) servido como static assets del Worker |
 | Design System | `design-system/` — tokens + preset Tailwind + componentes (ver `design-system/README.md`) |
 
@@ -75,9 +75,8 @@ npx wrangler secret put RESEND_API_KEY
 npx wrangler secret put TELNYX_API_KEY
 npx wrangler secret put TELNYX_MESSAGING_PROFILE_ID
 npx wrangler secret put TELNYX_FROM_NUMBER
-npx wrangler secret put WHATSAPP_TOKEN
-npx wrangler secret put WHATSAPP_PHONE_NUMBER_ID
-npx wrangler secret put WHATSAPP_VERIFY_TOKEN
+npx wrangler secret put TELNYX_WHATSAPP_FROM          # opcional si difiere de TELNYX_FROM_NUMBER
+npx wrangler secret put TELNYX_WEBHOOK_PUBLIC_KEY     # clave Ed25519 de Telnyx para validar webhooks
 ```
 
 Vars editables en `wrangler.jsonc`:

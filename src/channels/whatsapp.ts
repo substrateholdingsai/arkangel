@@ -1,8 +1,9 @@
-// WhatsApp Cloud API (Meta Graph) — https://developers.facebook.com/docs/whatsapp/cloud-api
+// WhatsApp API (Telnyx WhatsApp v2 con fallback Meta Graph)
 import { bytesToHex, timingSafeEqual } from '../lib/crypto';
 import { fetchJson } from '../lib/http';
 import { logger } from '../lib/logger';
 import type { Env } from '../types/env';
+import { parseTelnyxPayload } from './telnyx';
 import {
   isDryRun,
   mapProviderStatus,
@@ -64,6 +65,21 @@ interface MetaValue {
 }
 
 export function parseWhatsAppPayload(payload: unknown): ParsedInbound {
+  if (payload && typeof payload === 'object') {
+    const raw = payload as Record<string, unknown>;
+    // Si viene en formato de webhook de Telnyx
+    if (raw.data && typeof raw.data === 'object') {
+      const parsed = parseTelnyxPayload(payload);
+      for (const msg of parsed.messages) {
+        msg.channel = 'whatsapp';
+      }
+      for (const st of parsed.statuses) {
+        st.channel = 'whatsapp';
+      }
+      return parsed;
+    }
+  }
+
   const messages: InboundMessage[] = [];
   const statuses: StatusUpdate[] = [];
 
@@ -151,33 +167,14 @@ export function whatsappChallengeResponse(
   });
 }
 
-export async function sendWhatsApp(env: Env, params: SendParams): Promise<SendResult> {
-  const token = params.credentials?.whatsapp?.token ?? env.WHATSAPP_TOKEN;
-  const phoneNumberId =
-    params.credentials?.whatsapp?.phone_number_id ?? env.WHATSAPP_PHONE_NUMBER_ID;
-  if (!token || !phoneNumberId) {
-    logger.error('Credenciales de WhatsApp incompletas', { caseId: params.caseId });
-    return {
-      ok: false,
-      channel: 'whatsapp',
-      status: 'failed',
-      error: 'WhatsApp Cloud API no configurado',
-    };
-  }
-
-  if (isDryRun(env, params.dryRun)) {
-    logger.info('DRY_RUN whatsapp omitido', { to: params.to, caseId: params.caseId });
-    return {
-      ok: true,
-      channel: 'whatsapp',
-      providerId: `dry_run_${params.caseId}`,
-      status: 'sent',
-    };
-  }
-
-  const templateName = params.credentials?.whatsapp?.template_name ?? env.WHATSAPP_TEMPLATE_NAME;
-  const templateLang = params.credentials?.whatsapp?.template_lang ?? env.WHATSAPP_TEMPLATE_LANG;
-
+async function sendMetaWhatsApp(
+  token: string,
+  phoneNumberId: string,
+  env: Env,
+  params: SendParams,
+  templateName?: string,
+  templateLang?: string
+): Promise<SendResult> {
   const useTemplate = Boolean(templateName) && !params.meta?.reply;
   const payload = useTemplate
     ? {
@@ -213,12 +210,111 @@ export async function sendWhatsApp(env: Env, params: SendParams): Promise<SendRe
 
   if (!response.ok) {
     const message = response.data?.error?.message ?? response.error ?? 'whatsapp_error';
-    logger.error('WhatsApp send falló', { caseId: params.caseId, error: message });
+    logger.error('WhatsApp send falló (Meta)', { caseId: params.caseId, error: message });
     return { ok: false, channel: 'whatsapp', status: 'failed', error: message };
   }
 
   const providerId = response.data?.messages?.[0]?.id;
-  logger.info('WhatsApp enviado', { caseId: params.caseId, providerId });
+  logger.info('WhatsApp enviado vía Meta Graph', { caseId: params.caseId, providerId });
+  return { ok: true, channel: 'whatsapp', providerId, status: 'sent' };
+}
+
+export async function sendWhatsApp(env: Env, params: SendParams): Promise<SendResult> {
+  const apiKey =
+    params.credentials?.whatsapp?.api_key ??
+    env.TELNYX_API_KEY ??
+    params.credentials?.sms?.api_key ??
+    params.credentials?.whatsapp?.token ??
+    env.WHATSAPP_TOKEN;
+
+  const fromNumber =
+    params.credentials?.whatsapp?.from_number ??
+    params.credentials?.whatsapp?.phone_number_id ??
+    env.TELNYX_WHATSAPP_FROM ??
+    env.TELNYX_FROM_NUMBER ??
+    env.WHATSAPP_PHONE_NUMBER_ID;
+
+  if (!apiKey || !fromNumber) {
+    logger.error('Credenciales de WhatsApp incompletas', { caseId: params.caseId });
+    return {
+      ok: false,
+      channel: 'whatsapp',
+      status: 'failed',
+      error: 'WhatsApp no configurado (Telnyx API key o número remitente faltante)',
+    };
+  }
+
+  if (isDryRun(env, params.dryRun)) {
+    logger.info('DRY_RUN whatsapp omitido', { to: params.to, caseId: params.caseId });
+    return {
+      ok: true,
+      channel: 'whatsapp',
+      providerId: `dry_run_${params.caseId}`,
+      status: 'sent',
+    };
+  }
+
+  const templateName = params.credentials?.whatsapp?.template_name ?? env.WHATSAPP_TEMPLATE_NAME;
+  const templateLang = params.credentials?.whatsapp?.template_lang ?? env.WHATSAPP_TEMPLATE_LANG;
+
+  // Si se configuró específicamente un token de Meta Graph (prefijo EAA) y WHATSAPP_PHONE_NUMBER_ID
+  if (apiKey.startsWith('EAA') && env.WHATSAPP_PHONE_NUMBER_ID) {
+    return sendMetaWhatsApp(
+      apiKey,
+      env.WHATSAPP_PHONE_NUMBER_ID,
+      env,
+      params,
+      templateName,
+      templateLang
+    );
+  }
+
+  // Telnyx WhatsApp API v2
+  const useTemplate = Boolean(templateName) && !params.meta?.reply;
+  const whatsappMessage = useTemplate
+    ? {
+        type: 'template',
+        template: {
+          name: templateName,
+          language: { code: templateLang ?? 'es_MX' },
+          components: [{ type: 'body', parameters: [{ type: 'text', text: params.body }] }],
+        },
+      }
+    : {
+        type: 'text',
+        text: { body: params.body },
+      };
+
+  const payload = {
+    from: fromNumber,
+    to: params.to,
+    whatsapp_message: whatsappMessage,
+  };
+
+  const url = 'https://api.telnyx.com/v2/messages/whatsapp';
+  const response = await fetchJson<{
+    data?: { id?: string; record_type?: string };
+    errors?: Array<{ code?: string; title?: string; detail?: string }>;
+  }>(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(payload),
+    idempotencyKey: params.idempotencyKey,
+    retries: 1,
+  });
+
+  if (!response.ok) {
+    const message =
+      response.data?.errors?.[0]?.detail ??
+      response.data?.errors?.[0]?.title ??
+      response.error ??
+      'telnyx_whatsapp_error';
+    logger.error('Telnyx WhatsApp send falló', { caseId: params.caseId, error: message });
+    return { ok: false, channel: 'whatsapp', status: 'failed', error: message };
+  }
+
+  const providerId = response.data?.data?.id;
+  logger.info('WhatsApp enviado vía Telnyx', { caseId: params.caseId, providerId });
   return { ok: true, channel: 'whatsapp', providerId, status: 'sent' };
 }
 

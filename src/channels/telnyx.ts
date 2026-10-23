@@ -13,31 +13,80 @@ import {
   type StatusUpdate,
 } from './types';
 
+interface TelnyxFromTo {
+  phone_number?: string;
+  carrier?: string;
+  status?: string;
+}
+
+interface TelnyxMessageBody {
+  type?: string;
+  text?: { body?: string } | string;
+}
+
 interface TelnyxPayload {
-  from?: string;
-  to?: string;
-  text?: string;
+  from?: string | TelnyxFromTo;
+  to?: string | TelnyxFromTo[] | TelnyxFromTo;
+  text?: string | null;
+  body?: string | TelnyxMessageBody | null;
   id?: string;
   status?: string;
+  type?: string;
+  direction?: string;
   messaging_profile_id?: string;
   media?: { url?: string }[];
 }
 
 interface TelnyxWebhook {
   data?: {
+    record_type?: string;
     event_type?: string;
     id?: string;
+    type?: string;
     payload?: TelnyxPayload;
-    from?: string;
-    to?: string;
+    from?: string | TelnyxFromTo;
+    to?: string | TelnyxFromTo[] | TelnyxFromTo;
     text?: string;
     status?: string;
   };
-  from?: string;
-  to?: string;
+  from?: string | TelnyxFromTo;
+  to?: string | TelnyxFromTo[] | TelnyxFromTo;
   text?: string;
+  body?: string | TelnyxMessageBody;
   id?: string;
   status?: string;
+  type?: string;
+}
+
+function resolveTelnyxPhone(val: unknown): string | undefined {
+  if (typeof val === 'string' && val.trim() !== '') return val.trim();
+  if (val && typeof val === 'object') {
+    if ('phone_number' in val && typeof (val as TelnyxFromTo).phone_number === 'string') {
+      return (val as TelnyxFromTo).phone_number?.trim();
+    }
+    if (Array.isArray(val) && val.length > 0) {
+      const first = val[0] as unknown;
+      if (typeof first === 'string' && first.trim() !== '') return first.trim();
+      if (first && typeof first === 'object' && 'phone_number' in first) {
+        return (first as TelnyxFromTo).phone_number?.trim();
+      }
+    }
+  }
+  return undefined;
+}
+
+function resolveTelnyxText(textVal: unknown, bodyVal: unknown, fallbackText?: unknown): string {
+  if (typeof textVal === 'string' && textVal.trim() !== '') return textVal;
+  if (typeof bodyVal === 'string' && bodyVal.trim() !== '') return bodyVal;
+  if (bodyVal && typeof bodyVal === 'object') {
+    const b = bodyVal as TelnyxMessageBody;
+    if (typeof b.text === 'string') return b.text;
+    if (b.text && typeof b.text === 'object' && typeof b.text.body === 'string') {
+      return b.text.body;
+    }
+  }
+  if (typeof fallbackText === 'string' && fallbackText.trim() !== '') return fallbackText;
+  return '';
 }
 
 export function parseTelnyxPayload(payload: unknown): ParsedInbound {
@@ -47,36 +96,57 @@ export function parseTelnyxPayload(payload: unknown): ParsedInbound {
   const body = (payload ?? {}) as TelnyxWebhook;
   const data = body.data ?? {};
   const eventType = data.event_type ?? '';
+  const payloadData = data.payload ?? {};
 
-  const flat: TelnyxPayload = {
-    from: data.payload?.from ?? data.from ?? body.from,
-    to: data.payload?.to ?? data.to ?? body.to,
-    text: data.payload?.text ?? data.text ?? body.text,
-    id: data.payload?.id ?? data.id ?? body.id,
-    status: data.payload?.status ?? data.status ?? body.status,
-    messaging_profile_id: data.payload?.messaging_profile_id,
-  };
+  // Detectar canal: WHATSAPP si type === 'WHATSAPP' o event_type inicia con 'whatsapp.'
+  const rawType = String(payloadData.type ?? data.type ?? body.type ?? '').toUpperCase();
+  const isWhatsApp = rawType === 'WHATSAPP' || eventType.startsWith('whatsapp.');
+  const channel = isWhatsApp ? 'whatsapp' : 'sms';
 
-  if (eventType === 'message.received' || (flat.text && flat.from)) {
-    if (flat.text && flat.from) {
+  const fromNumber = resolveTelnyxPhone(payloadData.from ?? data.from ?? body.from);
+  const toNumber = resolveTelnyxPhone(payloadData.to ?? data.to ?? body.to);
+  const textBody = resolveTelnyxText(payloadData.text, payloadData.body, data.text ?? body.text);
+  const messageId = payloadData.id ?? data.id ?? body.id;
+
+  // Extraer estatus de entrega
+  let statusStr = payloadData.status ?? data.status ?? body.status;
+  if (!statusStr && Array.isArray(payloadData.to) && payloadData.to.length > 0) {
+    statusStr = payloadData.to[0]?.status;
+  }
+
+  // 1. Mensajes entrantes
+  if (eventType === 'message.received' || (!eventType && textBody && fromNumber)) {
+    if (textBody && fromNumber) {
       messages.push({
-        channel: 'sms',
-        providerId: flat.id ?? `telnyx_${Date.now()}`,
-        from: flat.from,
-        to: flat.to,
-        body: flat.text,
+        channel,
+        providerId: messageId ?? `telnyx_${Date.now()}`,
+        from: fromNumber,
+        to: toNumber,
+        body: textBody,
         receivedAt: new Date().toISOString(),
-        meta: { event_type: eventType, messaging_profile_id: flat.messaging_profile_id },
+        meta: {
+          event_type: eventType,
+          messaging_profile_id: payloadData.messaging_profile_id,
+          phone_number_id: isWhatsApp ? (toNumber ?? fromNumber) : undefined,
+        },
       });
     }
   }
 
-  if (eventType === 'message.updated' || eventType === 'message.failed' || flat.status) {
-    if (flat.id && flat.status) {
+  // 2. Actualizaciones de estado (finalized, delivered, read, updated, failed)
+  const isStatusEvent =
+    eventType === 'message.finalized' ||
+    eventType === 'message.updated' ||
+    eventType === 'message.sent' ||
+    eventType === 'message.failed' ||
+    (eventType.startsWith('whatsapp.') && eventType !== 'whatsapp.message.received');
+
+  if (isStatusEvent || (messageId && statusStr && eventType !== 'message.received')) {
+    if (messageId && statusStr) {
       statuses.push({
-        channel: 'sms',
-        providerId: flat.id,
-        status: mapProviderStatus(flat.status),
+        channel,
+        providerId: messageId,
+        status: mapProviderStatus(statusStr),
         meta: { event_type: eventType },
       });
     }

@@ -1574,7 +1574,9 @@ api.put('/tenant/channels', async (c) => {
           providerAccountId || templateName
             ? {
                 whatsapp: {
-                  ...(providerAccountId ? { phone_number_id: providerAccountId } : {}),
+                  ...(providerAccountId
+                    ? { phone_number_id: providerAccountId, from_number: providerAccountId }
+                    : {}),
                   ...(templateName ? { template_name: templateName } : {}),
                 },
               }

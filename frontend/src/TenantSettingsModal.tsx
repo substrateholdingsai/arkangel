@@ -503,9 +503,9 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
                     const meta =
                       ch.channel === 'whatsapp'
                         ? {
-                            title: 'WhatsApp Cloud API (Meta)',
-                            idLabel: 'Phone Number ID (Meta)',
-                            idPlaceholder: 'Ej. 109283746501928',
+                            title: 'WhatsApp Business (Telnyx API v2)',
+                            idLabel: 'Número Remitente WhatsApp (E.164)',
+                            idPlaceholder: 'Ej. +525512345678',
                             extraLabel: 'Plantilla aprobada (template_name)',
                             extraKey: 'template_name' as const,
                             extraValue: ch.template_name,
@@ -633,8 +633,13 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
                       },
                       {
                         key: 'whatsapp',
-                        label: 'Meta WhatsApp Cloud API',
+                        label: 'WhatsApp (Telnyx API · Webhook)',
                         url: webhooks.whatsapp,
+                      },
+                      {
+                        key: 'telnyx',
+                        label: 'Telnyx (SMS y WhatsApp unificado · Ed25519)',
+                        url: webhooks.telnyx,
                       },
                     ].map((item) => (
                       <div

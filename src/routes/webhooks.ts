@@ -45,23 +45,42 @@ async function processParsed(
   }
 }
 
-// ── WhatsApp Cloud API ────────────────────────────────────────────────
+// ── WhatsApp (Telnyx API v2 / Meta) ──────────────────────────────────
 webhooks.get('/whatsapp', (c) => {
-  const response = whatsappChallengeResponse(c.req.raw, c.env.WHATSAPP_VERIFY_TOKEN);
+  const verifyToken = c.env.WHATSAPP_VERIFY_TOKEN;
+  if (!verifyToken) return c.text('ok');
+  const response = whatsappChallengeResponse(c.req.raw, verifyToken);
   return response ?? c.text('ok');
 });
 
 webhooks.post('/whatsapp', async (c) => {
   const raw = await c.req.text();
 
-  const appSecret = c.env.WHATSAPP_APP_SECRET;
-  if (appSecret) {
-    const signature = c.req.header('x-hub-signature-256');
-    if (!signature) return c.json({ error: 'missing_signature' }, 401);
-    const valid = await verifyWhatsAppSignature(appSecret, raw, signature);
-    if (!valid) {
-      logger.warn('Firma HMAC de Meta WhatsApp inválida');
-      return c.json({ error: 'invalid_signature' }, 401);
+  // 1. Verificación Ed25519 si llega desde Telnyx
+  const telnyxSig = c.req.header('telnyx-signature-ed25519');
+  const telnyxTs = c.req.header('telnyx-timestamp');
+  const telnyxPubKey = c.env.TELNYX_WEBHOOK_PUBLIC_KEY;
+
+  if (telnyxSig || telnyxTs) {
+    if (telnyxPubKey) {
+      if (!telnyxSig || !telnyxTs) return c.json({ error: 'missing_signature' }, 401);
+      const valid = await verifyEd25519(telnyxPubKey, telnyxSig, telnyxTs, raw);
+      if (!valid) {
+        logger.warn('Firma Ed25519 de Telnyx WhatsApp inválida');
+        return c.json({ error: 'invalid_signature' }, 401);
+      }
+    }
+  } else {
+    // 2. Verificación HMAC-SHA256 si llega desde Meta Graph
+    const appSecret = c.env.WHATSAPP_APP_SECRET;
+    if (appSecret) {
+      const signature = c.req.header('x-hub-signature-256');
+      if (!signature) return c.json({ error: 'missing_signature' }, 401);
+      const valid = await verifyWhatsAppSignature(appSecret, raw, signature);
+      if (!valid) {
+        logger.warn('Firma HMAC de Meta WhatsApp inválida');
+        return c.json({ error: 'invalid_signature' }, 401);
+      }
     }
   }
 
@@ -70,7 +89,7 @@ webhooks.post('/whatsapp', async (c) => {
   return c.json({ ok: true });
 });
 
-// ── Telnyx (SMS) ───────────────────────────────────────────────────────
+// ── Telnyx (SMS y WhatsApp) ───────────────────────────────────────────
 webhooks.post('/telnyx', async (c) => {
   const raw = await c.req.text();
 

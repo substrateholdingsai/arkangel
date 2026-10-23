@@ -18,6 +18,8 @@ export type ChannelName = Channel;
  */
 export interface ChannelOverride {
   whatsapp?: {
+    api_key?: string;
+    from_number?: string;
     token?: string;
     phone_number_id?: string;
     template_name?: string;

@@ -372,8 +372,13 @@ async function auditarImpersonacion(
  */
 export function routingIdDeInbound(message: InboundMessage): string | null {
   if (message.channel === 'whatsapp') {
-    const id = message.meta?.phone_number_id;
-    return typeof id === 'string' && id.trim() !== '' ? id.trim() : null;
+    const id =
+      (typeof message.meta?.phone_number_id === 'string' && message.meta.phone_number_id.trim()) ||
+      (typeof message.to === 'string' && message.to.trim()) ||
+      (typeof message.meta?.messaging_profile_id === 'string' &&
+        message.meta.messaging_profile_id.trim()) ||
+      null;
+    return id;
   }
   if (message.channel === 'sms') {
     const id = message.meta?.messaging_profile_id;

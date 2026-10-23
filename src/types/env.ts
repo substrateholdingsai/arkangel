@@ -34,18 +34,19 @@ export interface Env {
   /** URL publica del panel, base de los enlaces de los correos de auth. */
   APP_URL?: string;
 
-  // ── WhatsApp Cloud API (Meta) ──
-  WHATSAPP_TOKEN: string;
-  WHATSAPP_PHONE_NUMBER_ID: string;
-  WHATSAPP_VERIFY_TOKEN: string;
+  // ── WhatsApp (Telnyx API v2 / Meta Graph heredado) ──
+  WHATSAPP_TOKEN?: string;
+  WHATSAPP_PHONE_NUMBER_ID?: string;
+  WHATSAPP_VERIFY_TOKEN?: string;
   WHATSAPP_APP_SECRET?: string;
   WHATSAPP_TEMPLATE_NAME?: string;
   WHATSAPP_TEMPLATE_LANG?: string;
 
-  // ── Telnyx (SMS) ──
+  // ── Telnyx (SMS & WhatsApp Business API) ──
   TELNYX_API_KEY: string;
   TELNYX_MESSAGING_PROFILE_ID: string;
   TELNYX_FROM_NUMBER: string;
+  TELNYX_WHATSAPP_FROM?: string;
   TELNYX_WEBHOOK_PUBLIC_KEY?: string;
 
   // ── Ajustes operativos (vars) ──
