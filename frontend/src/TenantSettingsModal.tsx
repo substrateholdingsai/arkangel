@@ -17,6 +17,7 @@ import { Alert, Button } from '@ds';
 import {
   api,
   type MembershipRole,
+  type TenantChannelConfig,
   type TenantMember,
   type TenantSettings,
   type TenantWebhooks,
@@ -54,6 +55,32 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
   });
 
   const [webhooks, setWebhooks] = useState<TenantWebhooks | null>(null);
+  const [channels, setChannels] = useState<TenantChannelConfig[]>([
+    {
+      channel: 'whatsapp',
+      status: 'active',
+      provider_account_id: '',
+      template_name: '',
+      from_number: '',
+      from_address: '',
+    },
+    {
+      channel: 'sms',
+      status: 'active',
+      provider_account_id: '',
+      template_name: '',
+      from_number: '',
+      from_address: '',
+    },
+    {
+      channel: 'email',
+      status: 'active',
+      provider_account_id: '',
+      template_name: '',
+      from_number: '',
+      from_address: '',
+    },
+  ]);
   const [members, setMembers] = useState<TenantMember[]>([]);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
@@ -69,13 +96,17 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
     setLastInviteUrl(null);
     void (async () => {
       try {
-        const [res, membersRes] = await Promise.all([
+        const [res, membersRes, channelsRes] = await Promise.all([
           api.getTenantSettings(),
           api.listTenantMembers().catch(() => ({ ok: true, members: [] })),
+          api.getTenantChannels().catch(() => null),
         ]);
         setForm(res.settings);
         setWebhooks(res.webhooks);
         setMembers(membersRes.members);
+        if (channelsRes?.channels?.length) {
+          setChannels(channelsRes.channels);
+        }
       } catch (e) {
         setError(
           e instanceof Error ? e.message : 'No se pudo cargar la configuración del despacho'
@@ -109,10 +140,14 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
     setError(null);
     setNotice(null);
     try {
-      const res = await api.updateTenantSettings(form);
+      const [res, chRes] = await Promise.all([
+        api.updateTenantSettings(form),
+        api.updateTenantChannels(channels),
+      ]);
       setForm(res.settings);
+      setChannels(chRes.channels);
       setNotice(
-        'Configuración guardada en D1 y sincronizada con los contratos y el Motor Legal en vivo.'
+        `Configuración y canales activos (${chRes.enabled_channels.join(', ').toUpperCase()}) guardados en D1.`
       );
       onSaved();
     } catch (err) {
@@ -120,6 +155,15 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
     } finally {
       setSaving(false);
     }
+  };
+
+  const updateChannelField = (
+    channelName: 'whatsapp' | 'sms' | 'email',
+    patch: Partial<TenantChannelConfig>
+  ) => {
+    setChannels((prev) =>
+      prev.map((ch) => (ch.channel === channelName ? { ...ch, ...patch } : ch))
+    );
   };
 
   const copiarUrl = async (key: string, url: string) => {
@@ -439,13 +483,139 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
                 </div>
               </div>
 
-              {/* Sección 3: Webhooks de Conciliación y Canales */}
+              {/* Sección 3: Canales Operativos del Despacho (tenant_channels) */}
+              <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <Settings className="h-4 w-4 text-emerald-600" />
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                      3 · Canales Operativos del Despacho (Mix de Plan y Enrutado)
+                    </h3>
+                  </div>
+                  <span className="text-[11px] text-slate-500">
+                    Solo el Manager decide qué canales usa la IA y el Agente
+                  </span>
+                </div>
+
+                <div className="space-y-3">
+                  {channels.map((ch) => {
+                    const isActive = ch.status === 'active';
+                    const meta =
+                      ch.channel === 'whatsapp'
+                        ? {
+                            title: 'WhatsApp Cloud API (Meta)',
+                            idLabel: 'Phone Number ID (Meta)',
+                            idPlaceholder: 'Ej. 109283746501928',
+                            extraLabel: 'Plantilla aprobada (template_name)',
+                            extraKey: 'template_name' as const,
+                            extraValue: ch.template_name,
+                            extraPlaceholder: 'Ej. recordatorio_pago_mx',
+                          }
+                        : ch.channel === 'sms'
+                          ? {
+                              title: 'SMS Transaccional (Telnyx)',
+                              idLabel: 'Messaging Profile ID (Telnyx)',
+                              idPlaceholder: 'Ej. 40017f8e-99a1-4b2c-8001',
+                              extraLabel: 'Número remitente (from_number)',
+                              extraKey: 'from_number' as const,
+                              extraValue: ch.from_number,
+                              extraPlaceholder: 'Ej. +525590001122',
+                            }
+                          : {
+                              title: 'Correo Electrónico (Resend)',
+                              idLabel: 'Dominio receptor verificado',
+                              idPlaceholder: 'Ej. cobranza.despacho.mx',
+                              extraLabel: 'Correo remitente (from_address)',
+                              extraKey: 'from_address' as const,
+                              extraValue: ch.from_address,
+                              extraPlaceholder: 'Ej. Cobranza <avisos@despacho.mx>',
+                            };
+
+                    return (
+                      <div
+                        key={ch.channel}
+                        className={`rounded-lg border p-3.5 transition-colors ${
+                          isActive
+                            ? 'border-emerald-200 bg-emerald-50/30'
+                            : 'border-slate-200 bg-slate-50 opacity-75'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2 mb-2.5">
+                          <label className="flex items-center gap-2 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={isActive}
+                              onChange={(e) =>
+                                updateChannelField(ch.channel, {
+                                  status: e.target.checked ? 'active' : 'inactive',
+                                })
+                              }
+                              className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                            />
+                            <span className="text-xs font-semibold text-slate-900">
+                              {meta.title}
+                            </span>
+                          </label>
+                          <span
+                            className={`rounded px-2 py-0.5 text-[10px] font-mono font-semibold uppercase ${
+                              isActive
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-slate-200 text-slate-600'
+                            }`}
+                          >
+                            {isActive ? 'HABILITADO' : 'APAGADO'}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                              {meta.idLabel}
+                            </label>
+                            <input
+                              type="text"
+                              disabled={!isActive}
+                              value={ch.provider_account_id}
+                              onChange={(e) =>
+                                updateChannelField(ch.channel, {
+                                  provider_account_id: e.target.value,
+                                })
+                              }
+                              placeholder={meta.idPlaceholder}
+                              className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono text-slate-900 disabled:bg-slate-100"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                              {meta.extraLabel}
+                            </label>
+                            <input
+                              type="text"
+                              disabled={!isActive}
+                              value={meta.extraValue}
+                              onChange={(e) =>
+                                updateChannelField(ch.channel, {
+                                  [meta.extraKey]: e.target.value,
+                                })
+                              }
+                              placeholder={meta.extraPlaceholder}
+                              className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono text-slate-900 disabled:bg-slate-100"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Sección 4: Webhooks de Conciliación y Canales */}
               {webhooks ? (
                 <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
                   <div className="flex items-center gap-2 border-b border-slate-100 pb-2.5">
                     <Webhook className="h-4 w-4 text-emerald-600" />
                     <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                      3 · URLs de Webhooks para Pasarelas de Pago y Canales
+                      4 · URLs de Webhooks para Pasarelas de Pago y Canales
                     </h3>
                   </div>
 
@@ -498,13 +668,13 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
                 </div>
               ) : null}
 
-              {/* Sección 4: Equipo del Despacho (Invitaciones Self-Serve) */}
+              {/* Sección 5: Equipo del Despacho (Invitaciones Self-Serve) */}
               <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
                   <div className="flex items-center gap-2">
                     <Users className="h-4 w-4 text-emerald-600" />
                     <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                      4 · Equipo del Despacho e Invitaciones ({members.length})
+                      5 · Equipo del Despacho e Invitaciones ({members.length})
                     </h3>
                   </div>
                   <span className="text-[11px] text-slate-500">

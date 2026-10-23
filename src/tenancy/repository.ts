@@ -135,6 +135,64 @@ export async function listTenantChannels(env: Env, tenantId: string): Promise<Te
 }
 
 /**
+ * Lista todos los canales registrados de un despacho (activos e inactivos) para
+ * el panel de configuración self-serve del Manager.
+ */
+export async function listAllTenantChannels(env: Env, tenantId: string): Promise<TenantChannel[]> {
+  try {
+    const result = await env.DB.prepare(
+      'SELECT * FROM tenant_channels WHERE tenant_id = ? ORDER BY created_at DESC'
+    )
+      .bind(tenantId)
+      .all<TenantChannelRow>();
+    return (result.results ?? []).map(mapChannel);
+  } catch (error) {
+    if (esErrorDeTablaFaltante(error, ['tenant_channels'])) return [];
+    throw error;
+  }
+}
+
+export interface UpsertTenantChannelInput {
+  channel: TenantChannel['channel'];
+  status: 'active' | 'inactive';
+  providerAccountId: string | null;
+  credentials: TenantChannelCredentials | null;
+}
+
+/**
+ * Guarda la configuración de canales (`whatsapp`, `sms`, `email`) de un despacho.
+ * Reemplaza las filas previas del canal para ese tenant de forma determinista.
+ */
+export async function saveTenantChannels(
+  env: Env,
+  tenantId: string,
+  items: UpsertTenantChannelInput[]
+): Promise<TenantChannel[]> {
+  const now = new Date().toISOString();
+  for (const item of items) {
+    const id = `tc_${tenantId}_${item.channel}`;
+    const providerAccountId =
+      item.providerAccountId && item.providerAccountId.trim()
+        ? item.providerAccountId.trim()
+        : null;
+    const credentialsJson = item.credentials ? JSON.stringify(item.credentials) : null;
+
+    await env.DB.prepare('DELETE FROM tenant_channels WHERE tenant_id = ? AND channel = ?')
+      .bind(tenantId, item.channel)
+      .run();
+
+    await env.DB.prepare(
+      `INSERT INTO tenant_channels (id, tenant_id, channel, provider_account_id, credentials, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+      .bind(id, tenantId, item.channel, providerAccountId, credentialsJson, item.status, now, now)
+      .run();
+  }
+
+  return listAllTenantChannels(env, tenantId);
+}
+
+/**
  * Resuelve el tenant de un webhook entrante por su identificador de enrutado
  * (`phone_number_id` de Meta, `messaging_profile_id` de Telnyx, dominio receptor
  * de Resend). Es la pieza que permite que un mismo teléfono deudor sea de dos

@@ -1,7 +1,7 @@
 # ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · **17 suites / 275 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site` (`d17fa785`).
-> Última actualización: 2026-10-23 (Sprint 7: Firma HMAC-SHA256 de Meta en `POST /webhooks/whatsapp`, promoción automática de `promise_made`, Invitaciones Self-Serve de Equipo, Corte Contable en Vivo + Verificador de Ledger en UI, Catálogo Contable Editable por Tenant Fase 6, y Reporte Ejecutivo Diario Automatizado).
+> **Estado**: `main` · **17 suites / 280 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.
+> Última actualización: 2026-10-23 (Sprint 7: Firma HMAC-SHA256 de Meta en `POST /webhooks/whatsapp`, promoción automática de `promise_made`, Invitaciones Self-Serve de Equipo, Corte Contable en Vivo + Verificador de Ledger en UI, Catálogo Contable Editable por Tenant Fase 6, Reporte Ejecutivo Diario Automatizado, Canales por Despacho Self-Serve `tenant_channels`, Role-Based UI Gating `Manager`/`Agente`/`Auditor`, Grok Bot Clasificación y Calibración en Tiempo Real, y Vinculación CFDI SAT `contract_cfdi`).
 
 ## Vista general
 
@@ -76,11 +76,14 @@ Cada ruta exige **su** scope: sin credencial → 401, con credencial pero sin sc
 | POST     | `/api/v1/cases/:id/resolve`               | `cases:resolve`                                   | Resolución humana (`promise`, `paid`, `dnd`, `return_to_ai`)                             |
 | POST     | `/api/v1/cases/:id/call`                  | `messages:send`                                   | Softphone auditado: inicio con guion CONDUSEF (`start`) y bitácora de cierre (`complete`) |
 | POST     | `/api/v1/cases/:id/notes`                 | `cases:resolve`                                   | Notas internas manuales del operador sobre la ficha del caso                             |
+| PUT      | `/api/v1/cases/:id/cfdi`                  | `cases:write`                                     | Vincula UUID de CFDI timbrado (SAT) al contrato (`contract_cfdi` → `cfdi_relacionado`)   |
 | POST     | `/api/v1/payments/reconcile`              | `cases:resolve`                                   | Conciliación de pagos individual (JSON) o masiva (CSV bancario BBVA/Banorte/STP)         |
 | GET      | `/api/v1/system/status`                   | `metrics:read`                                    | Telemetría en vivo: D1 latencia/clientes, Workers AI, Cola, Motor Legal, Ventana y RPM   |
 | POST     | `/api/v1/copilot/chat`                    | `cases:read`                                      | Copilot IA para operadores con acceso en vivo al estado del Worker y caso activo         |
 | GET      | `/api/v1/tenant/settings`                 | `legal:read`                                      | Configuración legal/operativa del despacho + URLs de webhooks                            |
 | PUT      | `/api/v1/tenant/settings`                 | `legal:config`                                    | Guardado self-serve de Razón Social, REDECO, dominios, ventana NOM-184 y modo IA         |
+| GET      | `/api/v1/tenant/channels`                 | `legal:read`                                      | Canales activos e inactivos del despacho (`whatsapp`, `sms`, `email`) + enrutado         |
+| PUT      | `/api/v1/tenant/channels`                 | `legal:config`                                    | Configuración self-serve de canales activos y credenciales de enrutado por el Manager    |
 | GET      | `/api/v1/tenant/members`                  | `legal:read`                                      | Lista de miembros del despacho (`owner`, `admin`/operador, `member`/viewer)              |
 | POST     | `/api/v1/tenant/members/invite`           | `legal:config`                                    | Invitación self-serve de miembros por correo (Resend + enlace de activación de 7 días)   |
 | DELETE   | `/api/v1/tenant/members/:userId`          | `legal:config`                                    | Revocación de acceso de un miembro (con protección del último `owner`)                   |
@@ -95,6 +98,8 @@ Cada ruta exige **su** scope: sin credencial → 401, con credencial pero sin sc
 | POST     | `/api/v1/reports/daily/send`              | `metrics:read`                                    | Envío por correo (Resend) del Reporte Ejecutivo Diario a propietarios/contadores         |
 | GET      | `/api/v1/state`                           | `agent:read`                                      | Estado del bot (modo, cola, pendientes)                                                  |
 | POST     | `/api/v1/decide` · `/dispatch` · `/audit` | `agent:decide` · `agent:dispatch` · `agent:audit` | Decisión, envío y auditoría de acciones                                                  |
+| POST     | `/api/v1/bot/classify` · `/classify`      | `agent:decide`                                    | Clasificación en tiempo real por Grok Bot + transición automática de promesa/humano      |
+| POST     | `/api/v1/scoring/calibrate` · `/calibrate`| `agent:decide`                                    | Calibración continua de scoring Sherman v2 y umbrales autónomos según conversión real    |
 | GET/POST | `/webhooks/whatsapp`                      | firma de Meta                                     | Verificación del challenge + mensajes y estados                                          |
 | POST     | `/webhooks/telnyx`                        | firma Ed25519                                     | SMS entrante y estados                                                                   |
 | POST     | `/webhooks/resend`                        | —                                                 | Email entrante                                                                           |
@@ -153,9 +158,9 @@ uno del que no es miembro es 403 `tenant_forbidden`, no un cambio de alcance.
 - [x] Endpoints state, decide, dispatch, audit
 - [x] Escalamiento por monto (`AGENT_AUTO_THRESHOLD_CENTS`) y casos molesto
 - [x] Auditoría de decisiones vía `events`
-- [ ] Webhook clasificación en tiempo real por Grok
-- [ ] Ajuste continuo de prompts/scoring por resultados
-- [ ] Reporte diario automatizado
+- [x] Webhook clasificación en tiempo real por Grok (`POST /api/v1/bot/classify`)
+- [x] Ajuste continuo de prompts/scoring por resultados (`POST /api/v1/scoring/calibrate`)
+- [x] Reporte diario automatizado (`GET/POST /api/v1/reports/daily`)
 
 ### Sprint 2 — Módulo contable (Alegra MCP) — **código listo, pendiente de producción**
 

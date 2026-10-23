@@ -21,6 +21,7 @@ import {
 
 interface AccountingReportModalProps {
   open: boolean;
+  canEdit?: boolean;
   onClose: () => void;
 }
 
@@ -33,7 +34,11 @@ function formatMoney(mxn: number): string {
   }).format(mxn || 0);
 }
 
-export function AccountingReportModal({ open, onClose }: AccountingReportModalProps) {
+export function AccountingReportModal({
+  open,
+  canEdit = true,
+  onClose,
+}: AccountingReportModalProps) {
   const [tab, setTab] = useState<Tab>('corte');
   const [fecha, setFecha] = useState(() => new Date().toISOString().slice(0, 10));
   const [loading, setLoading] = useState(false);
@@ -385,15 +390,21 @@ export function AccountingReportModal({ open, onClose }: AccountingReportModalPr
                     de las 12 reglas del Motor Legal.
                   </p>
                 </div>
-                <Button
-                  variant="accent"
-                  size="sm"
-                  icon={Save}
-                  disabled={savingMap}
-                  onClick={() => void guardarMapa()}
-                >
-                  {savingMap ? 'Guardando…' : 'Guardar Catálogo en D1'}
-                </Button>
+                {canEdit ? (
+                  <Button
+                    variant="accent"
+                    size="sm"
+                    icon={Save}
+                    disabled={savingMap}
+                    onClick={() => void guardarMapa()}
+                  >
+                    {savingMap ? 'Guardando…' : 'Guardar Catálogo en D1'}
+                  </Button>
+                ) : (
+                  <span className="rounded bg-slate-100 px-2.5 py-1 text-[11px] font-mono text-slate-600">
+                    Modo Auditor · Sólo Lectura
+                  </span>
+                )}
               </div>
 
               <div className="overflow-x-auto">

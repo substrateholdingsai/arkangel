@@ -30,7 +30,13 @@ import {
   updateCase,
 } from '../services/casos';
 import { getClient, markDoNotDisturb } from '../services/clientes';
-import { getContractByClient } from '../services/contratos';
+import {
+  getContractByClient,
+  getContractCfdi,
+  isValidCfdiUuid,
+  upsertContract,
+  upsertContractCfdi,
+} from '../services/contratos';
 import { listPendingDebts, markDebtStatus } from '../services/deudas';
 import { logEvent } from '../services/eventos';
 import {
@@ -46,7 +52,12 @@ import { parsePaymentCsv, reconcilePayment, reconcilePaymentBatch } from '../ser
 import { recordPromise } from '../services/promesas';
 import { todayIso } from '../services/db';
 import { dispararHoy } from '../orquestacion/disparador';
-import { mergeChannelCredentials } from '../tenancy/channels';
+import { getEnabledChannels, mergeChannelCredentials } from '../tenancy/channels';
+import {
+  listAllTenantChannels,
+  saveTenantChannels,
+  type UpsertTenantChannelInput,
+} from '../tenancy/repository';
 import { exigeTenant } from '../auth/guards';
 import { exigePrincipalConScope } from './guard';
 import { tenantContextDeRequest } from './tenant';
@@ -266,13 +277,16 @@ api.get('/cases/:id/workspace', async (c) => {
   }
 
   const legal = configLegal(ctx);
+  const cfdiUuid = contract ? await getContractCfdi(ctx, contract.id) : null;
+  const enabledChannels = getEnabledChannels(ctx.channels);
 
   return c.json({
     ok: true,
     case: item,
     client,
     debts,
-    contract,
+    contract: contract ? { ...contract, cfdi_uuid: cfdiUuid } : null,
+    cfdi_uuid: cfdiUuid,
     messages,
     notes,
     ai_diagnostic: {
@@ -289,7 +303,70 @@ api.get('/cases/:id/workspace', async (c) => {
       condusef: legal.condusef || null,
       ventana: { inicio: legal.horaInicio, fin: legal.horaFin },
       max_contactos_24h: legal.maxContactos24h,
+      enabled_channels: enabledChannels,
     },
+  });
+});
+
+/**
+ * Vinculación del UUID de CFDI timbrado al contrato del cliente (`contract_cfdi`).
+ * Cuando se timbra una factura/convenio ante el SAT, el UUID se enlaza al contrato
+ * y se propaga automáticamente a las pólizas de Alegra (`cfdi_relacionado`).
+ */
+api.put('/cases/:id/cfdi', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'cases:write');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const denegado = exigeTenant(guardia.principal, ctx.tenantId);
+  if (denegado) return denegado;
+
+  const item = await getCase(ctx, c.req.param('id'));
+  if (!item) return c.json({ error: 'not_found' }, 404);
+
+  const payload = (await c.req.json().catch(() => ({}))) as { cfdi_uuid?: string };
+  const rawUuid = typeof payload.cfdi_uuid === 'string' ? payload.cfdi_uuid.trim() : '';
+
+  if (!isValidCfdiUuid(rawUuid)) {
+    return c.json(
+      {
+        ok: false,
+        error:
+          'El UUID del CFDI no tiene el formato fiscal estándar del SAT (XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX).',
+      },
+      400
+    );
+  }
+
+  const legal = configLegal(ctx);
+  let contract = await getContractByClient(ctx, item.client_id);
+  if (!contract) {
+    contract = await upsertContract(ctx, {
+      tenantId: ctx.tenantId,
+      clientId: item.client_id,
+      montoPactadoCents: item.amount_cents,
+      nombreLegal: legal.nombreLegal || null,
+      condusef: legal.condusef || null,
+    });
+  }
+
+  const saved = await upsertContractCfdi(ctx, contract.id, rawUuid);
+
+  await logEvent(ctx, 'operador.cfdi_vinculado', {
+    caseId: item.id,
+    clientId: item.client_id,
+    payload: {
+      contract_id: contract.id,
+      cfdi_uuid: saved.cfdi_uuid,
+      actor: guardia.principal.actorId,
+    },
+  });
+
+  return c.json({
+    ok: true,
+    contract_id: contract.id,
+    cfdi_uuid: saved.cfdi_uuid,
   });
 });
 
@@ -363,6 +440,19 @@ api.post('/cases/:id/reply', async (c) => {
 
   if (!texto) {
     return c.json({ error: 'El mensaje no puede estar vacío.' }, 400);
+  }
+
+  const enabledChannels = getEnabledChannels(ctx.channels);
+  if (!enabledChannels.includes(channel)) {
+    return c.json(
+      {
+        ok: false,
+        error: `El canal ${channel} está deshabilitado por el Manager de este despacho.`,
+        regla: 'canal_inactivo',
+        violaciones: [],
+      },
+      422
+    );
   }
 
   const [client, contract, contactos24h, logsReales] = await Promise.all([
@@ -1359,4 +1449,194 @@ api.delete('/tenant/members/:userId', async (c) => {
 
   const members = await listTenantMembers(ctx.env, ctx.tenantId);
   return c.json({ ok: true, members });
+});
+
+/**
+ * Gestión Self-Serve de Canales por Despacho (`GET /api/v1/tenant/channels` y
+ * `PUT /api/v1/tenant/channels`).
+ * Permite al Manager (`legal:config`) encender/apagar canales (WhatsApp, SMS, Email)
+ * y configurar su identificador de enrutado (`phone_number_id`, `messaging_profile_id`,
+ * dominio receptor) y remitente propio.
+ */
+function buildNormalizedChannelConfigs(rows: Awaited<ReturnType<typeof listAllTenantChannels>>) {
+  const byChannel = new Map(rows.map((r) => [r.channel, r]));
+  const channels: Array<{
+    channel: 'whatsapp' | 'sms' | 'email';
+    status: 'active' | 'inactive';
+    provider_account_id: string;
+    template_name: string;
+    from_number: string;
+    from_address: string;
+  }> = [
+    {
+      channel: 'whatsapp',
+      status: byChannel.get('whatsapp')?.status ?? 'active',
+      provider_account_id:
+        byChannel.get('whatsapp')?.provider_account_id ??
+        byChannel.get('whatsapp')?.credentials?.whatsapp?.phone_number_id ??
+        '',
+      template_name: byChannel.get('whatsapp')?.credentials?.whatsapp?.template_name ?? '',
+      from_number: '',
+      from_address: '',
+    },
+    {
+      channel: 'sms',
+      status: byChannel.get('sms')?.status ?? 'active',
+      provider_account_id:
+        byChannel.get('sms')?.provider_account_id ??
+        byChannel.get('sms')?.credentials?.sms?.messaging_profile_id ??
+        '',
+      template_name: '',
+      from_number: byChannel.get('sms')?.credentials?.sms?.from_number ?? '',
+      from_address: '',
+    },
+    {
+      channel: 'email',
+      status: byChannel.get('email')?.status ?? 'active',
+      provider_account_id: byChannel.get('email')?.provider_account_id ?? '',
+      template_name: '',
+      from_number: '',
+      from_address: byChannel.get('email')?.credentials?.email?.from_email ?? '',
+    },
+  ];
+  return channels;
+}
+
+api.get('/tenant/channels', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'legal:read');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const denegado = exigeTenant(guardia.principal, ctx.tenantId);
+  if (denegado) return denegado;
+
+  const rows = await listAllTenantChannels(ctx.env, ctx.tenantId);
+  const channels = buildNormalizedChannelConfigs(rows);
+  return c.json({
+    ok: true,
+    channels,
+    enabled_channels: channels.filter((ch) => ch.status === 'active').map((ch) => ch.channel),
+  });
+});
+
+api.put('/tenant/channels', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'legal:config');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const denegado = exigeTenant(guardia.principal, ctx.tenantId);
+  if (denegado) return denegado;
+
+  const body = (await c.req.json().catch(() => ({}))) as {
+    channels?: Array<Record<string, unknown>>;
+  };
+
+  if (!Array.isArray(body.channels) || body.channels.length === 0) {
+    return c.json({ ok: false, error: 'Se requiere el arreglo channels.' }, 400);
+  }
+
+  const incoming = new Map<string, Record<string, unknown>>();
+  for (const item of body.channels) {
+    if (item && typeof item.channel === 'string') {
+      incoming.set(item.channel, item);
+    }
+  }
+
+  const orden: Array<'whatsapp' | 'sms' | 'email'> = ['whatsapp', 'sms', 'email'];
+  const toSave: UpsertTenantChannelInput[] = orden.map((ch) => {
+    const raw = incoming.get(ch) ?? {};
+    const status = raw.status === 'inactive' ? 'inactive' : 'active';
+    const providerAccountId =
+      typeof raw.provider_account_id === 'string' && raw.provider_account_id.trim()
+        ? raw.provider_account_id.trim().slice(0, 120)
+        : null;
+    const templateName =
+      typeof raw.template_name === 'string' && raw.template_name.trim()
+        ? raw.template_name.trim().slice(0, 120)
+        : undefined;
+    const fromNumber =
+      typeof raw.from_number === 'string' && raw.from_number.trim()
+        ? raw.from_number.trim().slice(0, 40)
+        : undefined;
+    const fromAddress =
+      typeof raw.from_address === 'string' && raw.from_address.trim()
+        ? raw.from_address.trim().slice(0, 140)
+        : undefined;
+
+    if (ch === 'whatsapp') {
+      return {
+        channel: 'whatsapp',
+        status,
+        providerAccountId,
+        credentials:
+          providerAccountId || templateName
+            ? {
+                whatsapp: {
+                  ...(providerAccountId ? { phone_number_id: providerAccountId } : {}),
+                  ...(templateName ? { template_name: templateName } : {}),
+                },
+              }
+            : null,
+      };
+    }
+
+    if (ch === 'sms') {
+      return {
+        channel: 'sms',
+        status,
+        providerAccountId,
+        credentials:
+          providerAccountId || fromNumber
+            ? {
+                sms: {
+                  ...(providerAccountId ? { messaging_profile_id: providerAccountId } : {}),
+                  ...(fromNumber ? { from_number: fromNumber } : {}),
+                },
+              }
+            : null,
+      };
+    }
+
+    return {
+      channel: 'email',
+      status,
+      providerAccountId,
+      credentials: fromAddress
+        ? {
+            email: {
+              from_email: fromAddress,
+            },
+          }
+        : null,
+    };
+  });
+
+  const activeCount = toSave.filter((item) => item.status === 'active').length;
+  if (activeCount === 0) {
+    return c.json(
+      {
+        ok: false,
+        error: 'Debes mantener al menos un canal activo para operar el despacho.',
+      },
+      400
+    );
+  }
+
+  const savedRows = await saveTenantChannels(ctx.env, ctx.tenantId, toSave);
+  const channels = buildNormalizedChannelConfigs(savedRows);
+
+  await logEvent(ctx, 'tenant.canales_actualizados', {
+    payload: {
+      actor: guardia.principal.actorId,
+      enabled_channels: channels.filter((ch) => ch.status === 'active').map((ch) => ch.channel),
+    },
+  });
+
+  return c.json({
+    ok: true,
+    channels,
+    enabled_channels: channels.filter((ch) => ch.status === 'active').map((ch) => ch.channel),
+  });
 });

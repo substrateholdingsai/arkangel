@@ -34,10 +34,12 @@ function formatDuration(sec: number): string {
 
 export function OperatorDrawer({
   caseId,
+  canOperate = true,
   onClose,
   onUpdated,
 }: {
   caseId: string | null;
+  canOperate?: boolean;
   onClose: () => void;
   onUpdated: () => void;
 }) {
@@ -73,6 +75,10 @@ export function OperatorDrawer({
   const [savingNote, setSavingNote] = useState(false);
   const [simulatingSpei, setSimulatingSpei] = useState(false);
 
+  // Vinculación CFDI SAT (contract_cfdi)
+  const [cfdiInput, setCfdiInput] = useState('');
+  const [savingCfdi, setSavingCfdi] = useState(false);
+
   const cargarFicha = useCallback(async (id: string) => {
     setLoading(true);
     setError(null);
@@ -80,6 +86,11 @@ export function OperatorDrawer({
       const data = await api.caseWorkspace(id);
       setWs(data);
       setPromisePesos(String(Math.round(data.case.amount_cents / 100)));
+      setCfdiInput(data.cfdi_uuid ?? data.contract?.cfdi_uuid ?? '');
+      const enabled = data.legal.enabled_channels ?? ['whatsapp', 'sms', 'email'];
+      if (enabled.length > 0) {
+        setChannel((prev) => (enabled.includes(prev) ? prev : enabled[0]!));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo cargar el expediente');
     } finally {
@@ -239,6 +250,37 @@ export function OperatorDrawer({
     }
   };
 
+  const guardarCfdiUuid = async (uuidOverride?: string) => {
+    if (!ws) return;
+    const targetUuid = (uuidOverride ?? cfdiInput).trim();
+    if (!targetUuid) return;
+    setSavingCfdi(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await api.updateCaseCfdi(ws.case.id, targetUuid);
+      setCfdiInput(res.cfdi_uuid);
+      setNotice(`CFDI SAT (${res.cfdi_uuid}) vinculado al contrato y listo para póliza Alegra.`);
+      await cargarFicha(ws.case.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo vincular el UUID de CFDI');
+    } finally {
+      setSavingCfdi(false);
+    }
+  };
+
+  const generarCfdiDemo = () => {
+    const hex = (len: number) =>
+      Array.from({ length: len }, () => Math.floor(Math.random() * 16).toString(16))
+        .join('')
+        .toUpperCase();
+    const uuid = `${hex(8)}-${hex(4)}-4${hex(3)}-A${hex(3)}-${hex(12)}`;
+    setCfdiInput(uuid);
+    void guardarCfdiUuid(uuid);
+  };
+
+  const enabledChannels = ws?.legal.enabled_channels ?? ['whatsapp', 'sms', 'email'];
+
   const simularSpeiGateway = async (provider: 'cobre' | 'conekta') => {
     if (!ws) return;
     setSimulatingSpei(true);
@@ -331,6 +373,16 @@ export function OperatorDrawer({
 
           {ws ? (
             <>
+              {!canOperate ? (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-900 flex items-center justify-between">
+                  <span>
+                    <strong>Modo Auditor (Sólo Lectura):</strong> Puedes inspeccionar el expediente,
+                    contrato, CFDI y trazabilidad legal. Las acciones de contacto y resolución están
+                    reservadas para Operadores y Managers.
+                  </span>
+                </div>
+              ) : null}
+
               {/* 0. Diagnóstico Ejecutivo IA + Notas Internas (Estilo Payments by Wix) */}
               {ws.ai_diagnostic ? (
                 <div className="rounded-xl border border-slate-300 bg-white p-4 shadow-sm space-y-3">
@@ -364,7 +416,7 @@ export function OperatorDrawer({
                       </div>
                     </div>
 
-                    {ws.case.status !== 'paid' ? (
+                    {ws.case.status !== 'paid' && canOperate ? (
                       <div className="flex flex-col gap-1.5 shrink-0">
                         <button
                           type="button"
@@ -390,22 +442,24 @@ export function OperatorDrawer({
 
                   {/* Espacio de Notas Internas Manuales (lo que la IA pasó por alto) */}
                   <div className="pt-3 border-t border-slate-200 space-y-2">
-                    <form onSubmit={guardarNotaInterna} className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={manualNote}
-                        onChange={(e) => setManualNote(e.target.value)}
-                        placeholder="Nota interna manual (contexto adicional que la IA pasó por alto)…"
-                        className="flex-1 rounded-md border border-slate-300 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-600"
-                      />
-                      <button
-                        type="submit"
-                        disabled={!manualNote.trim() || savingNote}
-                        className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-                      >
-                        {savingNote ? 'Guardando…' : 'Guardar nota'}
-                      </button>
-                    </form>
+                    {canOperate ? (
+                      <form onSubmit={guardarNotaInterna} className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={manualNote}
+                          onChange={(e) => setManualNote(e.target.value)}
+                          placeholder="Nota interna manual (contexto adicional que la IA pasó por alto)…"
+                          className="flex-1 rounded-md border border-slate-300 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-600"
+                        />
+                        <button
+                          type="submit"
+                          disabled={!manualNote.trim() || savingNote}
+                          className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                        >
+                          {savingNote ? 'Guardando…' : 'Guardar nota'}
+                        </button>
+                      </form>
+                    ) : null}
 
                     {ws.notes && ws.notes.length > 0 ? (
                       <div className="space-y-1.5 max-h-28 overflow-y-auto">
@@ -472,6 +526,56 @@ export function OperatorDrawer({
                 </div>
               </div>
 
+              {/* 1b. Trazabilidad Fiscal CFDI SAT -> Alegra (contract_cfdi) */}
+              <div className="bg-white p-3.5 rounded-lg border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+                    <span>UUID CFDI Timbrado (SAT · Póliza Alegra)</span>
+                    {ws.cfdi_uuid || ws.contract?.cfdi_uuid ? (
+                      <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-mono text-emerald-800">
+                        VINCULADO
+                      </span>
+                    ) : (
+                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-mono text-slate-600">
+                        SIN TIMBRAR
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs font-mono text-slate-700 mt-0.5 truncate">
+                    {ws.cfdi_uuid || ws.contract?.cfdi_uuid || 'Provisión sin CFDI adjunto'}
+                  </div>
+                </div>
+
+                {canOperate ? (
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <input
+                      type="text"
+                      value={cfdiInput}
+                      onChange={(e) => setCfdiInput(e.target.value)}
+                      placeholder="UUID SAT (8-4-4-4-12)"
+                      className="w-48 rounded-md border border-slate-300 bg-slate-50 px-2 py-1 text-[11px] font-mono text-slate-900 focus:bg-white"
+                    />
+                    <button
+                      type="button"
+                      disabled={savingCfdi || !cfdiInput.trim()}
+                      onClick={() => void guardarCfdiUuid()}
+                      className="rounded-md bg-slate-900 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      {savingCfdi ? '…' : 'Vincular'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={savingCfdi}
+                      onClick={generarCfdiDemo}
+                      className="rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-800 hover:bg-emerald-100"
+                      title="Generar y vincular UUID fiscal sintético para prueba contable"
+                    >
+                      UUID Demo
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
               {/* 2. Softphone Integrado (WebRTC + Auditoría Legal) */}
               <div className="bg-slate-900 text-slate-100 rounded-xl p-4 border border-slate-800">
                 <div className="flex items-center justify-between gap-3">
@@ -498,7 +602,7 @@ export function OperatorDrawer({
                       variant="accent"
                       size="sm"
                       icon={PhoneCall}
-                      disabled={callingBusy || Boolean(ws.client?.do_not_disturb)}
+                      disabled={!canOperate || callingBusy || Boolean(ws.client?.do_not_disturb)}
                       onClick={() => void iniciarLlamada()}
                     >
                       {callingBusy ? 'Verificando…' : 'Llamar ahora'}
@@ -583,89 +687,91 @@ export function OperatorDrawer({
               </div>
 
               {/* 3. Barra de Resolución del Operador Humano */}
-              <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                    <UserCheck className="w-4 h-4 text-emerald-600" />
-                    Resolución del Caso
-                  </span>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="accent"
-                      size="sm"
-                      icon={Clock}
-                      disabled={resolving}
-                      onClick={() => setShowPromiseForm((v) => !v)}
-                    >
-                      Registrar Promesa
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      icon={CheckCircle2}
-                      disabled={resolving}
-                      onClick={() => void ejecutarResolucion('paid')}
-                    >
-                      Marcar Pagado
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      icon={Bot}
-                      disabled={resolving}
-                      onClick={() => void ejecutarResolucion('return_ai')}
-                    >
-                      Devolver a IA
-                    </Button>
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      icon={AlertTriangle}
-                      disabled={resolving}
-                      onClick={() => void ejecutarResolucion('dnd')}
-                    >
-                      No Molestar (DND)
-                    </Button>
+              {canOperate ? (
+                <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                      <UserCheck className="w-4 h-4 text-emerald-600" />
+                      Resolución del Caso
+                    </span>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="accent"
+                        size="sm"
+                        icon={Clock}
+                        disabled={resolving}
+                        onClick={() => setShowPromiseForm((v) => !v)}
+                      >
+                        Registrar Promesa
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={CheckCircle2}
+                        disabled={resolving}
+                        onClick={() => void ejecutarResolucion('paid')}
+                      >
+                        Marcar Pagado
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={Bot}
+                        disabled={resolving}
+                        onClick={() => void ejecutarResolucion('return_ai')}
+                      >
+                        Devolver a IA
+                      </Button>
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        icon={AlertTriangle}
+                        disabled={resolving}
+                        onClick={() => void ejecutarResolucion('dnd')}
+                      >
+                        No Molestar (DND)
+                      </Button>
+                    </div>
                   </div>
-                </div>
 
-                {showPromiseForm ? (
-                  <div className="pt-3 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">
-                        Fecha prometida
-                      </label>
-                      <input
-                        type="date"
-                        value={promiseDate}
-                        onChange={(e) => setPromiseDate(e.target.value)}
-                        className="w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-xs data-mono"
-                      />
+                  {showPromiseForm ? (
+                    <div className="pt-3 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 mb-1">
+                          Fecha prometida
+                        </label>
+                        <input
+                          type="date"
+                          value={promiseDate}
+                          onChange={(e) => setPromiseDate(e.target.value)}
+                          className="w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-xs data-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 mb-1">
+                          Monto prometido (MXN)
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={promisePesos}
+                          onChange={(e) => setPromisePesos(e.target.value)}
+                          className="w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-xs data-mono"
+                        />
+                      </div>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        disabled={resolving}
+                        onClick={() => void ejecutarResolucion('promise')}
+                      >
+                        Guardar Promesa
+                      </Button>
                     </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">
-                        Monto prometido (MXN)
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        step="1"
-                        value={promisePesos}
-                        onChange={(e) => setPromisePesos(e.target.value)}
-                        className="w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-xs data-mono"
-                      />
-                    </div>
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      disabled={resolving}
-                      onClick={() => void ejecutarResolucion('promise')}
-                    >
-                      Guardar Promesa
-                    </Button>
-                  </div>
-                ) : null}
-              </div>
+                  ) : null}
+                </div>
+              ) : null}
 
               {/* 4. Historial Omnicanal (IA + Humano + Softphone) */}
               <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -726,67 +832,82 @@ export function OperatorDrawer({
               </div>
 
               {/* 5. Compositor del Operador con Filtro Legal Fail-Closed */}
-              <form
-                onSubmit={(e) => void enviarMensaje(e)}
-                className="bg-white p-4 rounded-xl border border-slate-200 space-y-3"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <ShieldAlert className="w-4 h-4 text-emerald-600" />
-                    <span className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-                      Responder como Operador (Protegido por Motor Legal)
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={insertarPlantillaLegal}
-                    className="text-xs font-medium text-emerald-700 hover:text-emerald-600 underline"
-                  >
-                    Insertar identificación CONDUSEF + CLABE
-                  </button>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {(['whatsapp', 'sms', 'email'] as const).map((c) => (
+              {canOperate ? (
+                <form
+                  onSubmit={(e) => void enviarMensaje(e)}
+                  className="bg-white p-4 rounded-xl border border-slate-200 space-y-3"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <ShieldAlert className="w-4 h-4 text-emerald-600" />
+                      <span className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                        Responder como Operador (Protegido por Motor Legal)
+                      </span>
+                    </div>
                     <button
-                      key={c}
                       type="button"
-                      onClick={() => setChannel(c)}
-                      className={`px-3 py-1 rounded-md text-xs font-medium border transition-colors ${
-                        channel === c
-                          ? 'bg-slate-900 text-white border-slate-900'
-                          : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
-                      }`}
+                      onClick={insertarPlantillaLegal}
+                      className="text-xs font-medium text-emerald-700 hover:text-emerald-600 underline"
                     >
-                      {c === 'whatsapp' ? 'WhatsApp' : c === 'sms' ? 'SMS' : 'Email'}
+                      Insertar identificación CONDUSEF + CLABE
                     </button>
-                  ))}
-                </div>
+                  </div>
 
-                <textarea
-                  rows={3}
-                  value={replyText}
-                  onChange={(e) => setReplyText(e.target.value)}
-                  placeholder="Escribe el mensaje al deudor. El Motor Legal verificará razón social, horario, CLABE y lenguaje antes de permitir el envío…"
-                  className="w-full rounded-lg border border-slate-300 p-3 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-600"
-                  required
-                />
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {(['whatsapp', 'sms', 'email'] as const).map((c) => {
+                      const isChannelEnabled = enabledChannels.includes(c);
+                      const label = c === 'whatsapp' ? 'WhatsApp' : c === 'sms' ? 'SMS' : 'Email';
+                      return (
+                        <button
+                          key={c}
+                          type="button"
+                          disabled={!isChannelEnabled}
+                          onClick={() => isChannelEnabled && setChannel(c)}
+                          title={
+                            isChannelEnabled
+                              ? `Enviar por ${label}`
+                              : `Canal ${label} deshabilitado por el Manager del despacho`
+                          }
+                          className={`px-3 py-1 rounded-md text-xs font-medium border transition-colors ${
+                            !isChannelEnabled
+                              ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed line-through'
+                              : channel === c
+                                ? 'bg-slate-900 text-white border-slate-900'
+                                : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+                          }`}
+                        >
+                          {label}
+                          {!isChannelEnabled ? ' (Off)' : ''}
+                        </button>
+                      );
+                    })}
+                  </div>
 
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] text-slate-500">
-                    Si el texto infringe alguna de las 12 reglas CONDUSEF, el envío se bloqueará.
-                  </span>
-                  <Button
-                    type="submit"
-                    variant="accent"
-                    size="sm"
-                    icon={Send}
-                    disabled={sending || !replyText.trim()}
-                  >
-                    {sending ? 'Validando y enviando…' : 'Validar y Enviar'}
-                  </Button>
-                </div>
-              </form>
+                  <textarea
+                    rows={3}
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                    placeholder="Escribe el mensaje al deudor. El Motor Legal verificará razón social, horario, CLABE y lenguaje antes de permitir el envío…"
+                    className="w-full rounded-lg border border-slate-300 p-3 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-600"
+                    required
+                  />
+
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-slate-500">
+                      Si el texto infringe alguna de las 12 reglas CONDUSEF, el envío se bloqueará.
+                    </span>
+                    <Button
+                      type="submit"
+                      variant="accent"
+                      size="sm"
+                      icon={Send}
+                      disabled={sending || !replyText.trim()}
+                    >
+                      {sending ? 'Validando y enviando…' : 'Validar y Enviar'}
+                    </Button>
+                  </div>
+                </form>
+              ) : null}
             </>
           ) : null}
         </div>

@@ -6,7 +6,8 @@ import {
   assertTenantListoParaOperar,
   TenantSinIdentidadLegalError,
 } from '../src/legal/config';
-import { mergeChannelCredentials } from '../src/tenancy/channels';
+import { resolveChannels } from '../src/channels';
+import { getEnabledChannels, mergeChannelCredentials } from '../src/tenancy/channels';
 import {
   configDesdeEntorno,
   configDesdeFila,
@@ -381,5 +382,57 @@ describe('tenant platform_env sin regresión', () => {
     expect(config.horaInicio).toBe(8);
     expect(config.horaFin).toBe(22);
     expect(config.maxContactos24h).toBe(3);
+  });
+});
+
+describe('getEnabledChannels y filtro operativo de resolveChannels por despacho', () => {
+  it('cuando el despacho no tiene filas en tenant_channels, los 3 canales están activos', () => {
+    expect(getEnabledChannels([])).toEqual(['whatsapp', 'sms', 'email']);
+  });
+
+  it('cuando el Manager activa solo WhatsApp y Email, SMS queda excluido del motor y del agente', () => {
+    const channels = [
+      {
+        id: 'tc_wa',
+        tenant_id: 't_alfa',
+        channel: 'whatsapp' as const,
+        provider_account_id: '112233',
+        credentials: { whatsapp: { phone_number_id: '112233' } },
+        status: 'active' as const,
+        created_at: '2026-10-23T10:00:00Z',
+      },
+      {
+        id: 'tc_em',
+        tenant_id: 't_alfa',
+        channel: 'email' as const,
+        provider_account_id: 'cobranza.alfa.mx',
+        credentials: { email: { from_email: 'avisos@alfa.mx' } },
+        status: 'active' as const,
+        created_at: '2026-10-23T10:00:00Z',
+      },
+    ];
+
+    expect(getEnabledChannels(channels)).toEqual(['whatsapp', 'email']);
+
+    const resolved = resolveChannels(
+      {
+        id: 'cli_1',
+        name: 'María',
+        phone: '+525511223344',
+        email: 'maria@ejemplo.mx',
+        curp: null,
+        whatsapp_opt_in: 1,
+        sms_opt_in: 1,
+        email_opt_in: 1,
+        do_not_disturb: 0,
+        created_at: '2026-10-23T00:00:00Z',
+        updated_at: '2026-10-23T00:00:00Z',
+      },
+      'alto',
+      channels
+    );
+
+    expect(resolved).toEqual(['whatsapp', 'email']);
+    expect(resolved).not.toContain('sms');
   });
 });

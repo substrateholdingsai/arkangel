@@ -120,7 +120,7 @@ export async function processCase(
     throw new DeferredError('Fuera de la ventana legal de contacto', 1800);
   }
 
-  const channels = resolveChannels(client, collectionCase.score_band);
+  const channels = resolveChannels(client, collectionCase.score_band, ctx.channels);
   if (channels.length === 0) {
     await updateCase(ctx, collectionCase.id, { status: 'failed' });
     await logEvent(ctx, 'cobranza.sin_canal', {

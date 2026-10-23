@@ -181,6 +181,7 @@ export interface ContractDetail {
   clabe: string | null;
   nombre_legal: string | null;
   condusef: string | null;
+  cfdi_uuid?: string | null;
 }
 
 export interface CaseWorkspace {
@@ -213,6 +214,7 @@ export interface CaseWorkspace {
     status: string;
   }>;
   contract: ContractDetail | null;
+  cfdi_uuid?: string | null;
   messages: ConversationMessage[];
   notes?: Array<{
     id: string;
@@ -234,6 +236,7 @@ export interface CaseWorkspace {
     condusef: string | null;
     ventana: { inicio: number; fin: number };
     max_contactos_24h: number;
+    enabled_channels?: Array<'whatsapp' | 'sms' | 'email'>;
   };
 }
 
@@ -362,6 +365,15 @@ export interface TenantMember {
   role: MembershipRole;
   active: boolean;
   createdAt: number;
+}
+
+export interface TenantChannelConfig {
+  channel: 'whatsapp' | 'sms' | 'email';
+  status: 'active' | 'inactive';
+  provider_account_id: string;
+  template_name: string;
+  from_number: string;
+  from_address: string;
 }
 
 export interface AccountingMapRule {
@@ -738,5 +750,32 @@ export const api = {
     }>('/api/v1/reports/daily/send', {
       method: 'POST',
       body: JSON.stringify(input),
+    }),
+
+  updateCaseCfdi: (caseId: string, cfdiUuid: string) =>
+    request<{
+      ok: boolean;
+      contract_id: string;
+      cfdi_uuid: string;
+    }>(`/api/v1/cases/${encodeURIComponent(caseId)}/cfdi`, {
+      method: 'PUT',
+      body: JSON.stringify({ cfdi_uuid: cfdiUuid }),
+    }),
+
+  getTenantChannels: () =>
+    request<{
+      ok: boolean;
+      channels: TenantChannelConfig[];
+      enabled_channels: Array<'whatsapp' | 'sms' | 'email'>;
+    }>('/api/v1/tenant/channels'),
+
+  updateTenantChannels: (channels: TenantChannelConfig[]) =>
+    request<{
+      ok: boolean;
+      channels: TenantChannelConfig[];
+      enabled_channels: Array<'whatsapp' | 'sms' | 'email'>;
+    }>('/api/v1/tenant/channels', {
+      method: 'PUT',
+      body: JSON.stringify({ channels }),
     }),
 };

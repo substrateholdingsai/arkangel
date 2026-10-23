@@ -55,14 +55,57 @@ export function mergeChannelCredentials(channels: TenantChannel[]): TenantChanne
 
   const merged: TenantChannelCredentials = {};
 
-  const whatsapp = mejorPorCanal.get('whatsapp')?.credentials?.whatsapp;
-  if (whatsapp) merged.whatsapp = sinVacias({ ...whatsapp });
+  const whatsappRow = mejorPorCanal.get('whatsapp');
+  if (whatsappRow && whatsappRow.status !== 'inactive' && whatsappRow.credentials?.whatsapp) {
+    merged.whatsapp = sinVacias({ ...whatsappRow.credentials.whatsapp });
+  }
 
-  const sms = mejorPorCanal.get('sms')?.credentials?.sms;
-  if (sms) merged.sms = sinVacias({ ...sms });
+  const smsRow = mejorPorCanal.get('sms');
+  if (smsRow && smsRow.status !== 'inactive' && smsRow.credentials?.sms) {
+    merged.sms = sinVacias({ ...smsRow.credentials.sms });
+  }
 
-  const email = mejorPorCanal.get('email')?.credentials?.email;
-  if (email) merged.email = sinVacias({ ...email });
+  const emailRow = mejorPorCanal.get('email');
+  if (emailRow && emailRow.status !== 'inactive' && emailRow.credentials?.email) {
+    merged.email = sinVacias({ ...emailRow.credentials.email });
+  }
 
   return merged;
+}
+
+/**
+ * Devuelve la lista de canales habilitados para el despacho.
+ *
+ * - Si el despacho aún no ha configurado filas en `tenant_channels` (`channels.length === 0`),
+ *   los 3 canales de la plataforma (`whatsapp`, `sms`, `email`) quedan activos por defecto.
+ * - Si el despacho ya configuró sus canales (`channels.length > 0`), sólo operan los
+ *   canales cuya fila más reciente esté en `status === 'active'`.
+ */
+export function getEnabledChannels(channels: TenantChannel[]): ChannelName[] {
+  if (!channels || channels.length === 0) {
+    return ['whatsapp', 'sms', 'email'];
+  }
+
+  const mejorPorCanal = new Map<ChannelName, TenantChannel>();
+  for (const canal of channels) {
+    const actual = mejorPorCanal.get(canal.channel);
+    if (!actual || momento(canal.created_at) >= momento(actual.created_at)) {
+      mejorPorCanal.set(canal.channel, canal);
+    }
+  }
+
+  const tieneInactivosExplicitos = Array.from(mejorPorCanal.values()).some(
+    (c) => c.status === 'inactive'
+  );
+
+  const orden: ChannelName[] = ['whatsapp', 'sms', 'email'];
+  if (tieneInactivosExplicitos) {
+    return orden.filter((ch) => {
+      const fila = mejorPorCanal.get(ch);
+      return !fila || fila.status === 'active';
+    });
+  }
+
+  const activos = orden.filter((ch) => mejorPorCanal.get(ch)?.status === 'active');
+  return activos.length > 0 ? activos : ['whatsapp', 'sms', 'email'];
 }

@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { describe, expect, it } from 'vitest';
+import { agent } from '../src/routes/agent';
 import { api } from '../src/routes/api';
 import type { AuthVars } from '../src/auth/middleware';
 import type { Env } from '../src/types/env';
@@ -63,6 +64,8 @@ class FakeOperatorD1 {
   users: Record<string, unknown>[] = [];
   memberships: Record<string, unknown>[] = [];
   tokens: Record<string, unknown>[] = [];
+  tenantChannels: Record<string, unknown>[] = [];
+  contractCfdis: Record<string, unknown>[] = [];
 
   prepare = (sql: string) => {
     const clean = sql.replace(/\s+/g, ' ').trim();
@@ -95,6 +98,13 @@ class FakeOperatorD1 {
     }
     if (sql.includes('FROM contracts WHERE tenant_id = ? AND client_id = ?')) {
       return this.contracts.find((c) => c.tenant_id === args[0] && c.client_id === args[1]) ?? null;
+    }
+    if (sql.includes('FROM contract_cfdi WHERE tenant_id = ? AND contract_id = ?')) {
+      return (
+        this.contractCfdis.find(
+          (row) => row.tenant_id === args[0] && row.contract_id === args[1]
+        ) ?? null
+      );
     }
     if (sql.includes('COUNT(*) AS total FROM messages')) {
       return { total: 1 };
@@ -154,6 +164,16 @@ class FakeOperatorD1 {
     }
     if (sql.includes('FROM messages WHERE tenant_id = ? AND client_id = ?')) {
       return this.messages.filter((m) => m.client_id === args[1]);
+    }
+    if (sql.includes('FROM tenant_channels WHERE tenant_id = ?')) {
+      const tenantId = String(args[0]);
+      if (sql.includes("status = 'active'")) {
+        return this.tenantChannels.filter((c) => c.tenant_id === tenantId && c.status === 'active');
+      }
+      return this.tenantChannels.filter((c) => c.tenant_id === tenantId);
+    }
+    if (sql.includes('FROM cases WHERE tenant_id = ? AND case_date = ?')) {
+      return this.cases.filter((c) => c.tenant_id === args[0] && c.case_date === args[1]);
     }
     return [];
   }
@@ -282,6 +302,41 @@ class FakeOperatorD1 {
         }
       }
     }
+    if (sql.startsWith('DELETE FROM tenant_channels WHERE tenant_id = ? AND channel = ?')) {
+      const tenantId = String(args[0]);
+      const channel = String(args[1]);
+      this.tenantChannels = this.tenantChannels.filter(
+        (c) => !(c.tenant_id === tenantId && c.channel === channel)
+      );
+    }
+    if (sql.startsWith('INSERT INTO tenant_channels')) {
+      this.tenantChannels.push({
+        id: args[0],
+        tenant_id: args[1],
+        channel: args[2],
+        provider_account_id: args[3],
+        credentials: args[4],
+        status: args[5],
+        created_at: args[6],
+        updated_at: args[7],
+      });
+    }
+    if (sql.startsWith('DELETE FROM contract_cfdi WHERE tenant_id = ? AND contract_id = ?')) {
+      const tenantId = String(args[0]);
+      const contractId = String(args[1]);
+      this.contractCfdis = this.contractCfdis.filter(
+        (r) => !(r.tenant_id === tenantId && r.contract_id === contractId)
+      );
+    }
+    if (sql.startsWith('INSERT INTO contract_cfdi')) {
+      this.contractCfdis.push({
+        id: args[0],
+        tenant_id: args[1],
+        contract_id: args[2],
+        cfdi_uuid: args[3],
+        created_at: args[4],
+      });
+    }
   }
 }
 
@@ -306,6 +361,7 @@ function makeEnv(db: FakeOperatorD1): Env {
 function makeApp() {
   const app = new Hono<{ Bindings: Env; Variables: AuthVars }>();
   app.route('/api/v1', api);
+  app.route('/api/v1', agent);
   return app;
 }
 
@@ -654,5 +710,224 @@ describe('Drawer del Operador y Softphone (/api/v1/cases/:id/*)', () => {
       members: Array<{ userId: string }>;
     };
     expect(afterDelBody.members).toHaveLength(1);
+  });
+
+  it('PUT /tenant/channels configura los canales del despacho y bloquea con 422 si el operador intenta usar un canal apagado', async () => {
+    const db = new FakeOperatorD1();
+    db.tenants.push({
+      id: 't_arkangel',
+      slug: 'arkangel',
+      nombre: 'Arkangel',
+      status: 'active',
+      config_mode: 'db',
+      razon_social: 'Arkangel S.A. de C.V.',
+      condusef_registro: 'REDECO-001',
+      allowed_payment_domains: 'arksystems.site',
+      tz: 'America/Mexico_City',
+      send_window_start: 0,
+      send_window_end: 24,
+      max_contacts_per_day: 3,
+      legal_monto_tolerancia_cents: 0,
+      legal_horario_en_respuestas: 0,
+      rate_limit_rpm: 42,
+      dedupe_window_hours: 24,
+      score_amount_ceiling_cents: 200000,
+      agent_mode: 'supervised',
+      agent_auto_threshold_cents: 200000,
+      dry_run: 1,
+      cron_auto_fire: 0,
+      is_default: 1,
+      created_at: '2026-10-22T00:00:00Z',
+      updated_at: '2026-10-22T00:00:00Z',
+    });
+
+    const app = makeApp();
+    const env = makeEnv(db);
+
+    // No permite apagar los 3 canales al mismo tiempo
+    const allOffRes = await app.request(
+      '/api/v1/tenant/channels',
+      {
+        method: 'PUT',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({
+          channels: [
+            { channel: 'whatsapp', status: 'inactive' },
+            { channel: 'sms', status: 'inactive' },
+            { channel: 'email', status: 'inactive' },
+          ],
+        }),
+      },
+      env
+    );
+    expect(allOffRes.status).toBe(400);
+
+    // El Manager activa solo WhatsApp y Email (apaga SMS)
+    const putChRes = await app.request(
+      '/api/v1/tenant/channels',
+      {
+        method: 'PUT',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({
+          channels: [
+            {
+              channel: 'whatsapp',
+              status: 'active',
+              provider_account_id: '10928374650',
+              template_name: 'recordatorio_mx',
+            },
+            {
+              channel: 'sms',
+              status: 'inactive',
+              provider_account_id: '',
+              from_number: '',
+            },
+            {
+              channel: 'email',
+              status: 'active',
+              provider_account_id: 'cobranza.arksystems.site',
+              from_address: 'avisos@arksystems.site',
+            },
+          ],
+        }),
+      },
+      env
+    );
+    expect(putChRes.status).toBe(200);
+    const putChBody = (await putChRes.json()) as {
+      ok: boolean;
+      enabled_channels: string[];
+    };
+    expect(putChBody.ok).toBe(true);
+    expect(putChBody.enabled_channels).toEqual(['whatsapp', 'email']);
+
+    // Si el operador intenta responder por SMS (apagado por el Manager), recibe 422
+    const smsReply = await app.request(
+      '/api/v1/cases/cas_1/reply',
+      {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({
+          channel: 'sms',
+          body: 'Estimado Juan Pérez, le contactamos de Arkangel S.A. de C.V. (REDECO-001) sobre su saldo de $1,500.00.',
+        }),
+      },
+      env
+    );
+    expect(smsReply.status).toBe(422);
+    const smsBody = (await smsReply.json()) as { regla: string };
+    expect(smsBody.regla).toBe('canal_inactivo');
+  });
+
+  it('PUT /cases/:id/cfdi valida y vincula el UUID fiscal SAT al contrato del caso', async () => {
+    const db = new FakeOperatorD1();
+    const app = makeApp();
+    const env = makeEnv(db);
+
+    // UUID inválido -> 400
+    const badRes = await app.request(
+      '/api/v1/cases/cas_1/cfdi',
+      {
+        method: 'PUT',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({ cfdi_uuid: 'no-es-un-uuid' }),
+      },
+      env
+    );
+    expect(badRes.status).toBe(400);
+
+    // UUID SAT válido -> 200
+    const validUuid = '550e8400-e29b-41d4-a716-446655440000';
+    const okRes = await app.request(
+      '/api/v1/cases/cas_1/cfdi',
+      {
+        method: 'PUT',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({ cfdi_uuid: validUuid }),
+      },
+      env
+    );
+    expect(okRes.status).toBe(200);
+    const okBody = (await okRes.json()) as {
+      ok: boolean;
+      contract_id: string;
+      cfdi_uuid: string;
+    };
+    expect(okBody.ok).toBe(true);
+    expect(okBody.contract_id).toBe('con_1');
+    expect(okBody.cfdi_uuid).toBe(validUuid.toUpperCase());
+
+    // Verificar que workspace expone cfdi_uuid
+    const wsRes = await app.request(
+      '/api/v1/cases/cas_1/workspace',
+      { headers: AUTH_HEADERS },
+      env
+    );
+    const wsBody = (await wsRes.json()) as {
+      cfdi_uuid: string;
+      contract: { cfdi_uuid: string };
+    };
+    expect(wsBody.cfdi_uuid).toBe(validUuid.toUpperCase());
+    expect(wsBody.contract.cfdi_uuid).toBe(validUuid.toUpperCase());
+  });
+
+  it('POST /bot/classify y POST /scoring/calibrate ejecutan clasificación en tiempo real y calibración continua de Grok Bot', async () => {
+    const db = new FakeOperatorD1();
+    const app = makeApp();
+    const env = makeEnv(db);
+
+    const classifyRes = await app.request(
+      '/api/v1/bot/classify',
+      {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({
+          case_id: 'cas_1',
+          channel: 'whatsapp',
+          inbound: 'Hola, te prometo que el viernes pago los 1500 pesos sin falta',
+          apply: true,
+        }),
+      },
+      env
+    );
+    expect(classifyRes.status).toBe(200);
+    const classifyBody = (await classifyRes.json()) as {
+      ok: boolean;
+      classification: { intent: string };
+      recommended_action: string;
+      case_status: string;
+      applied: boolean;
+    };
+    expect(classifyBody.ok).toBe(true);
+    expect(classifyBody.classification.intent).toBe('promete');
+    expect(classifyBody.recommended_action).toBe('record_promise');
+    expect(classifyBody.case_status).toBe('promised');
+    expect(classifyBody.applied).toBe(true);
+    expect(db.promises).toHaveLength(1);
+
+    const calibrateRes = await app.request(
+      '/api/v1/scoring/calibrate',
+      {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({
+          date: '2026-10-22',
+          apply: true,
+        }),
+      },
+      env
+    );
+    expect(calibrateRes.status).toBe(200);
+    const calibrateBody = (await calibrateRes.json()) as {
+      ok: boolean;
+      applied: boolean;
+      calibrated: {
+        score_amount_ceiling_cents: number;
+        agent_auto_threshold_cents: number;
+      };
+    };
+    expect(calibrateBody.ok).toBe(true);
+    expect(calibrateBody.applied).toBe(true);
+    expect(calibrateBody.calibrated.score_amount_ceiling_cents).toBeGreaterThan(200000);
   });
 });

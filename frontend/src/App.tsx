@@ -91,6 +91,15 @@ export default function App() {
 
   const conectado = session !== null;
   const tenantId = activeTenant?.tenantId ?? null;
+  const role = activeTenant?.role ?? 'member';
+  const isManager = role === 'owner' || session?.platformRole === 'super_admin';
+  const isOperator = isManager || role === 'admin';
+  const canViewAccounting = isManager || role === 'member';
+  const roleLabel = isManager
+    ? 'Manager'
+    : role === 'admin'
+      ? 'Agente Operativo'
+      : 'Auditor (Lectura)';
 
   const cargar = useCallback(async () => {
     try {
@@ -417,22 +426,38 @@ export default function App() {
                 </select>
               </label>
             ) : null}
-            <Button
-              variant="secondary"
-              size="sm"
-              icon={BookOpen}
-              onClick={() => setAccountingOpen(true)}
+            <span
+              className={`hidden sm:inline-flex items-center rounded-md px-2 py-1 text-[11px] font-mono font-semibold border ${
+                isManager
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : role === 'admin'
+                    ? 'bg-slate-900 text-white border-slate-800'
+                    : 'bg-amber-50 text-amber-800 border-amber-200'
+              }`}
+              title={`Nivel de acceso activo: ${roleLabel}`}
             >
-              Contabilidad
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              icon={Settings}
-              onClick={() => setSettingsOpen(true)}
-            >
-              Configurar
-            </Button>
+              {roleLabel}
+            </span>
+            {canViewAccounting ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={BookOpen}
+                onClick={() => setAccountingOpen(true)}
+              >
+                Contabilidad
+              </Button>
+            ) : null}
+            {isManager ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={Settings}
+                onClick={() => setSettingsOpen(true)}
+              >
+                Configurar
+              </Button>
+            ) : null}
             <span className="hidden md:inline text-xs text-slate-500">
               {session?.user.fullName || session?.user.email}
             </span>
@@ -467,15 +492,21 @@ export default function App() {
             <div className="mb-6">
               <Alert tone="warn" title="Motor legal en fail-closed (regla 1.1 · LFPC Art. 112 Bis)">
                 No hay razón social registrada ante CONDUSEF configurada. El agente{' '}
-                <strong>no enviará</strong> ningún mensaje hasta que configures tu identidad legal
-                en{' '}
-                <button
-                  type="button"
-                  onClick={() => setSettingsOpen(true)}
-                  className="font-semibold underline underline-offset-2 text-amber-900 hover:text-amber-700"
-                >
-                  Configuración del Despacho
-                </button>
+                <strong>no enviará</strong> ningún mensaje hasta que{' '}
+                {isManager ? (
+                  <>
+                    configures tu identidad legal en{' '}
+                    <button
+                      type="button"
+                      onClick={() => setSettingsOpen(true)}
+                      className="font-semibold underline underline-offset-2 text-amber-900 hover:text-amber-700"
+                    >
+                      Configuración del Despacho
+                    </button>
+                  </>
+                ) : (
+                  <strong>el Manager del despacho configure la identidad legal</strong>
+                )}
                 . El dashboard sigue operativizable y la auditoría queda intacta.
               </Alert>
             </div>
@@ -514,110 +545,150 @@ export default function App() {
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             <div className="lg:col-span-1 space-y-6">
-              <div className="space-y-2">
-                <Dropzone
-                  onFile={subirCsv}
-                  busy={busy}
-                  columns="Columnas: nombre, telefono, monto, vencimiento"
-                  hint="o haz clic para seleccionar. Máx 10MB."
-                />
-                <div className="flex items-center justify-between px-1">
-                  <span className="text-[11px] text-slate-500">
-                    ¿Sin archivo a la mano? Prueba la ingesta con datos sintéticos:
-                  </span>
-                  <button
-                    type="button"
-                    onClick={descargarCsvPrueba}
-                    className="text-[11px] font-medium text-emerald-700 hover:text-emerald-600 underline underline-offset-2"
-                  >
-                    Descargar CSV de prueba
-                  </button>
-                </div>
-              </div>
-
-              <Card className="p-5" watermark={WATERMARK}>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium text-slate-500">Disparo de cobranza</p>
-                    <p className="text-2xl font-bold text-slate-900 mt-1">
-                      {enCola.toLocaleString('es-MX')} casos
-                    </p>
-                  </div>
-                  <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600">
-                    <CheckCircle2 className="w-5 h-5" />
-                  </div>
-                </div>
-                <Button
-                  variant="accent"
-                  size="md"
-                  className="w-full mt-4"
-                  disabled={enCola === 0 || disparando}
-                  onClick={disparar}
-                  icon={Loader2}
-                >
-                  {disparando ? 'Disparando…' : 'Disparar cobranza de hoy'}
-                </Button>
-                <p className="mt-3 text-xs text-slate-500">
-                  1 click · dispara {enCola.toLocaleString('es-MX')} casos · ventana legal{' '}
-                  {String(ventana.inicio).padStart(2, '0')}:00–
-                  {String(ventana.fin).padStart(2, '0')}
-                  :00 CDMX
-                </p>
-              </Card>
-
-              <Card className="p-5">
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                      Conciliación de Pagos
-                    </p>
-                    <p className="text-sm font-semibold text-slate-900 mt-0.5">
-                      Cobre · Conekta · CSV Legacy
-                    </p>
-                  </div>
-                  <div className="flex flex-col items-end gap-1">
-                    <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-emerald-700 border border-emerald-200">
-                      /webhooks/cobre
+              {isManager ? (
+                <div className="space-y-2">
+                  <Dropzone
+                    onFile={subirCsv}
+                    busy={busy}
+                    columns="Columnas: nombre, telefono, monto, vencimiento"
+                    hint="o haz clic para seleccionar. Máx 10MB."
+                  />
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-[11px] text-slate-500">
+                      ¿Sin archivo a la mano? Prueba la ingesta con datos sintéticos:
                     </span>
-                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-slate-700 border border-slate-200">
-                      /webhooks/conekta
-                    </span>
+                    <button
+                      type="button"
+                      onClick={descargarCsvPrueba}
+                      className="text-[11px] font-medium text-emerald-700 hover:text-emerald-600 underline underline-offset-2"
+                    >
+                      Descargar CSV de prueba
+                    </button>
                   </div>
                 </div>
-                <p className="mt-2 text-xs text-slate-500 leading-relaxed">
-                  Retira al instante de la cola a quienes ya pagaron vía SPEI (Cobre Enterprise o
-                  Conekta PyME) o subiendo el CSV bancario (BBVA / Banorte / STP).
-                </p>
-                {reconcileNotice ? (
-                  <div className="mt-3 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-xs text-emerald-900">
-                    {reconcileNotice}
+              ) : (
+                <Card className="p-5 border-l-4 border-l-emerald-600">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wider text-emerald-700">
+                        Vista Operativa · {roleLabel}
+                      </p>
+                      <p className="text-sm font-semibold text-slate-900 mt-0.5">
+                        {isOperator
+                          ? 'Enfoque 100% en recuperación y atención de casos'
+                          : 'Modo consulta de expedientes y cumplimiento'}
+                      </p>
+                    </div>
                   </div>
-                ) : null}
-                <div className="mt-3 flex items-center gap-2">
-                  <label className="flex-1 cursor-pointer inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 transition-colors">
-                    <span>{reconciling ? 'Conciliando…' : 'Subir CSV de Pagos'}</span>
-                    <input
-                      type="file"
-                      accept=".csv,text/csv"
-                      disabled={reconciling}
-                      className="hidden"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) void subirCsvPagos(f);
-                        e.target.value = '';
+                  <p className="mt-2 text-xs text-slate-600 leading-relaxed">
+                    {isOperator
+                      ? `Tienes ${countHuman} caso(s) delegados a humano esperando gestión directa y ${countResolved} promesa(s)/pago(s) cerrados hoy.`
+                      : 'Acceso de auditoría en tiempo real sobre cartera, reglas CONDUSEF y corte contable.'}
+                  </p>
+                  {isOperator && countHuman > 0 ? (
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      className="w-full mt-3"
+                      onClick={() => {
+                        setBandeja('human');
+                        const firstHuman = cases.find((c) => c.estado === 'human');
+                        if (firstHuman) setSelectedCaseId(firstHuman.id);
                       }}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    onClick={descargarCsvPagosPrueba}
-                    className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[11px] font-medium text-emerald-700 hover:bg-emerald-50 transition-colors"
-                    title="Descargar CSV de pagos bancarios de ejemplo"
-                  >
-                    CSV ejemplo
-                  </button>
-                </div>
-              </Card>
+                    >
+                      Atender siguiente caso urgente ({countHuman})
+                    </Button>
+                  ) : null}
+                </Card>
+              )}
+
+              {isOperator ? (
+                <>
+                  <Card className="p-5" watermark={WATERMARK}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-slate-500">Disparo de cobranza</p>
+                        <p className="text-2xl font-bold text-slate-900 mt-1">
+                          {enCola.toLocaleString('es-MX')} casos
+                        </p>
+                      </div>
+                      <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600">
+                        <CheckCircle2 className="w-5 h-5" />
+                      </div>
+                    </div>
+                    <Button
+                      variant="accent"
+                      size="md"
+                      className="w-full mt-4"
+                      disabled={enCola === 0 || disparando}
+                      onClick={disparar}
+                      icon={Loader2}
+                    >
+                      {disparando ? 'Disparando…' : 'Disparar cobranza de hoy'}
+                    </Button>
+                    <p className="mt-3 text-xs text-slate-500">
+                      1 click · dispara {enCola.toLocaleString('es-MX')} casos · ventana legal{' '}
+                      {String(ventana.inicio).padStart(2, '0')}:00–
+                      {String(ventana.fin).padStart(2, '0')}
+                      :00 CDMX
+                    </p>
+                  </Card>
+
+                  <Card className="p-5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                          Conciliación de Pagos
+                        </p>
+                        <p className="text-sm font-semibold text-slate-900 mt-0.5">
+                          Cobre · Conekta · CSV Legacy
+                        </p>
+                      </div>
+                      <div className="flex flex-col items-end gap-1">
+                        <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-emerald-700 border border-emerald-200">
+                          /webhooks/cobre
+                        </span>
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-slate-700 border border-slate-200">
+                          /webhooks/conekta
+                        </span>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500 leading-relaxed">
+                      Retira al instante de la cola a quienes ya pagaron vía SPEI (Cobre Enterprise
+                      o Conekta PyME) o subiendo el CSV bancario (BBVA / Banorte / STP).
+                    </p>
+                    {reconcileNotice ? (
+                      <div className="mt-3 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-xs text-emerald-900">
+                        {reconcileNotice}
+                      </div>
+                    ) : null}
+                    <div className="mt-3 flex items-center gap-2">
+                      <label className="flex-1 cursor-pointer inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 transition-colors">
+                        <span>{reconciling ? 'Conciliando…' : 'Subir CSV de Pagos'}</span>
+                        <input
+                          type="file"
+                          accept=".csv,text/csv"
+                          disabled={reconciling}
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) void subirCsvPagos(f);
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={descargarCsvPagosPrueba}
+                        className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[11px] font-medium text-emerald-700 hover:bg-emerald-50 transition-colors"
+                        title="Descargar CSV de pagos bancarios de ejemplo"
+                      >
+                        CSV ejemplo
+                      </button>
+                    </div>
+                  </Card>
+                </>
+              ) : null}
 
               <DarkPanel title="Estado del Sistema" icon={Activity} watermark={WATERMARK_DARK}>
                 <div className="space-y-3 text-xs font-mono">
@@ -698,14 +769,16 @@ export default function App() {
                       <Button icon={Download} onClick={exportar} disabled={cases.length === 0}>
                         Exportar
                       </Button>
-                      <Button
-                        variant="primary"
-                        onClick={disparar}
-                        disabled={enCola === 0 || disparando}
-                        icon={Loader2}
-                      >
-                        Disparar
-                      </Button>
+                      {isOperator ? (
+                        <Button
+                          variant="primary"
+                          onClick={disparar}
+                          disabled={enCola === 0 || disparando}
+                          icon={Loader2}
+                        >
+                          Disparar
+                        </Button>
+                      ) : null}
                     </>
                   }
                 />
@@ -784,14 +857,16 @@ export default function App() {
                       <StatusPill tone={legal?.identidad_configurada ? 'ok' : 'err'} icon={Scale}>
                         {legal?.identidad_configurada ? 'IDENTIDAD OK' : 'FALTA RAZÓN SOCIAL'}
                       </StatusPill>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        icon={Settings}
-                        onClick={() => setSettingsOpen(true)}
-                      >
-                        Editar
-                      </Button>
+                      {isManager ? (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          icon={Settings}
+                          onClick={() => setSettingsOpen(true)}
+                        >
+                          Editar
+                        </Button>
+                      ) : null}
                     </div>
                   }
                 />
@@ -852,20 +927,29 @@ export default function App() {
 
           <OperatorDrawer
             caseId={selectedCaseId}
+            canOperate={isOperator}
             onClose={() => setSelectedCaseId(null)}
             onUpdated={() => void cargar()}
           />
 
-          <TenantSettingsModal
-            open={settingsOpen}
-            onClose={() => setSettingsOpen(false)}
-            onSaved={() => {
-              void cargar();
-              void recargarLegal();
-            }}
-          />
+          {isManager ? (
+            <TenantSettingsModal
+              open={settingsOpen}
+              onClose={() => setSettingsOpen(false)}
+              onSaved={() => {
+                void cargar();
+                void recargarLegal();
+              }}
+            />
+          ) : null}
 
-          <AccountingReportModal open={accountingOpen} onClose={() => setAccountingOpen(false)} />
+          {canViewAccounting ? (
+            <AccountingReportModal
+              open={accountingOpen}
+              canEdit={isManager}
+              onClose={() => setAccountingOpen(false)}
+            />
+          ) : null}
 
           <CopilotWidget
             activeCaseId={selectedCaseId}
