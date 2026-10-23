@@ -335,4 +335,32 @@ describe('Drawer del Operador y Softphone (/api/v1/cases/:id/*)', () => {
     expect(body.legal_engine.conductas_auditadas).toBe(48);
     expect(body.rate_limit.max_rpm).toBe(42);
   });
+
+  it('POST /copilot/chat responde con contexto del Worker y genera borrador blindado cuando hay caso activo', async () => {
+    const db = new FakeOperatorD1();
+    const res = await makeApp().request(
+      '/api/v1/copilot/chat',
+      {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({
+          message: 'Soy nuevo y necesito redactar una respuesta para este caso abierto',
+          active_case_id: 'cas_1',
+        }),
+      },
+      makeEnv(db)
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      reply: string;
+      suggested_draft: string | null;
+      context_summary: { activeCaseName: string | null };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.reply.length).toBeGreaterThan(20);
+    expect(body.suggested_draft).toContain('Arkangel S.A. de C.V.');
+    expect(body.suggested_draft).toContain('012180001234567899');
+    expect(body.context_summary.activeCaseName).toBe('Juan Pérez');
+  });
 });

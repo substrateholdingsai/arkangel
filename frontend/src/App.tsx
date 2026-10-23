@@ -39,6 +39,7 @@ import {
 } from './api';
 import { AuthGate } from './auth/AuthGate';
 import { useAuth } from './auth/AuthContext';
+import { CopilotWidget } from './CopilotWidget';
 import { OperatorDrawer } from './OperatorDrawer';
 
 const WATERMARK = '/assets/arkangel-watermark.png';
@@ -722,6 +723,12 @@ export default function App() {
             caseId={selectedCaseId}
             onClose={() => setSelectedCaseId(null)}
             onUpdated={() => void cargar()}
+          />
+
+          <CopilotWidget
+            activeCaseId={selectedCaseId}
+            activeCaseName={cases.find((c) => c.id === selectedCaseId)?.nombre ?? null}
+            humanCount={countHuman}
           />
         </>
       ) : null}

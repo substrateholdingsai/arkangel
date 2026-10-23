@@ -397,4 +397,26 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
+
+  copilotChat: (input: {
+    message: string;
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+    active_case_id?: string | null;
+  }) =>
+    request<{
+      ok: boolean;
+      reply: string;
+      suggested_draft: string | null;
+      context_summary: {
+        tenantName: string;
+        condusef: string | null;
+        windowOpen: boolean;
+        humanCasesCount: number;
+        readyCasesCount: number;
+        activeCaseName: string | null;
+      };
+    }>('/api/v1/copilot/chat', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
 };

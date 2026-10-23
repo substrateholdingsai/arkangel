@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { askCopilot, type CopilotHistoryItem } from '../ai/copilot';
 import { adapters } from '../channels';
 import { formatMXNShort } from '../lib/money';
 import { maskPhone } from '../lib/phone';
@@ -735,5 +736,58 @@ api.get('/system/status', async (c) => {
       max_rpm: maxRpm,
       enviados_hoy: metrics.enviadas,
     },
+  });
+});
+
+/**
+ * Copiloto Operativo y QA Legal en vivo (Workers AI + Contexto completo del Worker).
+ * Permite a empleados nuevos o supervisores consultar cómo operar la plataforma,
+ * qué casos urgentes atender, reglas legales o pedir un borrador blindado para el caso activo.
+ */
+api.post('/copilot/chat', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'cases:read');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const denegado = exigeTenant(guardia.principal, ctx.tenantId);
+  if (denegado) return denegado;
+
+  const payload = (await c.req.json().catch(() => ({}))) as {
+    message?: string;
+    history?: CopilotHistoryItem[];
+    active_case_id?: string | null;
+  };
+
+  const message = typeof payload.message === 'string' ? payload.message.trim() : '';
+  if (!message) {
+    return c.json({ ok: false, error: 'Escribe una pregunta para el Copiloto.' }, 400);
+  }
+
+  const history = Array.isArray(payload.history)
+    ? payload.history.filter(
+        (h): h is CopilotHistoryItem =>
+          Boolean(h) &&
+          (h.role === 'user' || h.role === 'assistant') &&
+          typeof h.content === 'string'
+      )
+    : [];
+
+  const activeCaseId =
+    typeof payload.active_case_id === 'string' && payload.active_case_id.trim()
+      ? payload.active_case_id.trim()
+      : null;
+
+  const response = await askCopilot(ctx, {
+    message,
+    history,
+    activeCaseId,
+  });
+
+  return c.json({
+    ok: true,
+    reply: response.reply,
+    suggested_draft: response.suggestedDraft,
+    context_summary: response.contextSummary,
   });
 });
