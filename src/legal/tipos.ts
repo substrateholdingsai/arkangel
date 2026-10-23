@@ -60,9 +60,11 @@ export interface ContextoLegal {
   telefono?: string | null;
   email?: string | null;
 
-  // Montos (reglas 4.2 y 8.1)
+  // Montos y vencimiento (reglas 2.3, 4.2 y 8.1)
   montoCents: number;
   contrato?: ContratoLegal | null;
+  /** Fecha de vencimiento (`YYYY-MM-DD`). Permite bloquear cobro anticipado (Día T-1). */
+  fechaVencimiento?: string | null;
 
   // Presión y trazabilidad (reglas 2.3 y 8.7)
   contactos24h: number;

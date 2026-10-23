@@ -16,9 +16,12 @@ import {
   esDominioPermitido,
   extraerClabes,
   extraerDominios,
+  extraerTasasMentadas,
   PATRONES_AMENAZA,
+  PATRONES_DESVIO_PAGO,
   PATRONES_EXTORSION,
   PATRONES_ROL_LEGAL,
+  PATRONES_SMISHING,
   pieLegal,
   sanearAmenazas,
   sanearExtorsion,
@@ -47,27 +50,28 @@ const META = {
     id: '1.2',
     seccion: 'Identidad y Estructura Legal',
     conducta: 'Representación sin poder legal',
-    descripcion: 'Cobrador dice ser abogado sin cédula',
-    ley: 'Código Penal Federal / LFPC',
-    articulo: 'Art. 250 CP + Art. 112 LFPC',
+    descripcion: 'Cobrador dice ser abogado, banco o autoridad sin acreditación',
+    ley: 'Código Penal Federal / LFPC / LIC',
+    articulo: 'Art. 250 CP + Art. 112 LFPC + Art. 111 LIC',
     castigo: 'Prisión de 1 a 6 años y de 100 a 300 días multa (Usurpación de funciones).',
     accion: 'SANITIZE',
   },
   '2.1': {
     id: '2.1',
     seccion: 'Cobranza y Acoso',
-    conducta: 'Amenaza fuera de proceso',
-    descripcion: 'Te vamos a embargar mañana sin juicio',
+    conducta: 'Amenaza fuera de proceso o acceso ilícito al dispositivo',
+    descripcion: 'Amenaza de embargo extrajudicial o alegar acceso al dispositivo/fotos del deudor',
     ley: 'Código Penal Federal',
-    articulo: 'Art. 284 Bis (Cobranza extrajudicial ilegal)',
+    articulo: 'Art. 284 Bis (Cobranza extrajudicial ilegal) + Art. 211 Bis + Art. 282',
     castigo: 'Prisión de 2 a 5 años y multa de 50 a 300 días.',
     accion: 'SANITIZE',
   },
   '2.3': {
     id: '2.3',
     seccion: 'Cobranza y Acoso',
-    conducta: 'Hostigamiento continuo',
-    descripcion: 'Más de 3 impactos en <24h al mismo deudor',
+    conducta: 'Hostigamiento continuo o cobro anticipado (Día T-1)',
+    descripcion:
+      'Más de 3 impactos en <24h al mismo deudor o cobro antes de la fecha de vencimiento',
     ley: 'Código Penal Federal / NOM-184',
     articulo: 'Art. 284 Bis',
     castigo: 'Prisión de 2 a 5 años. Agravante si es a personas vulnerables.',
@@ -86,8 +90,9 @@ const META = {
   '3.1': {
     id: '3.1',
     seccion: 'Smishing y Fraude',
-    conducta: 'Smishing link apócrifo',
-    descripcion: 'Envío de enlaces falsos que suplantan a la entidad',
+    conducta: 'Smishing link apócrifo o acortador oculto',
+    descripcion:
+      'Envío de enlaces falsos, acortadores (bit.ly) o suplantación de marcas (Microsoft)',
     ley: 'Código Penal Federal',
     articulo: 'Art. 386 (Fraude) + 211 Bis (Acceso ilícito)',
     castigo: 'Prisión de 3 meses a 12 años (dependiendo del monto del fraude) y multas.',
@@ -96,30 +101,30 @@ const META = {
   '3.2': {
     id: '3.2',
     seccion: 'Smishing y Fraude',
-    conducta: 'QR de pago no trazable',
-    descripcion: 'SPEI a cuenta física sin CLABE del contrato',
+    conducta: 'Destino de pago no trazable o contactación de 2º nivel',
+    descripcion: 'SPEI/tarjeta/efectivo a cuenta personal fuera de la CLABE del contrato',
     ley: 'Código Penal Federal / LFPIORPI',
-    articulo: 'Art. 400 Bis (Lavado de activos)',
+    articulo: 'Art. 400 Bis (Lavado de activos) + Art. 386 (Fraude)',
     castigo: 'Prisión de 5 a 15 años y multa de 1,000 a 5,000 días.',
     accion: 'BLOCK',
   },
   '4.2': {
     id: '4.2',
     seccion: 'Ciclo de Deuda y Extorsión',
-    conducta: 'Interés sobre interés no pactado',
-    descripcion: 'Capitalización de intereses no firmada',
-    ley: 'Ley para la Transparencia y Ordenamiento de Servicios Financieros',
-    articulo: 'Art. 23 LCTC',
+    conducta: 'Interés sobre interés no pactado o tasa moratoria usuraria',
+    descripcion: 'Capitalización no firmada o tasa de mora que contradice el contrato',
+    ley: 'Ley para la Transparencia y Ordenamiento de Servicios Financieros / LACP',
+    articulo: 'Art. 23 LCTC + Art. 2 LACP + Art. 386 CPF',
     castigo: 'Nulidad de la cláusula y sanciones de CONDUSEF/Banxico.',
     accion: 'BLOCK',
   },
   '4.4': {
     id: '4.4',
     seccion: 'Ciclo de Deuda y Extorsión',
-    conducta: 'Extorsión por contactos',
-    descripcion: 'Amenaza de difundir a contactos si no paga',
+    conducta: 'Extorsión por contactos y difusión de boletines',
+    descripcion: 'Amenaza de difundir boletines a contactos de referencia, trabajo o redes',
     ley: 'Código Penal Federal',
-    articulo: 'Art. 390 (Extorsión)',
+    articulo: 'Art. 390 (Extorsión) + Art. 210 (Revelación de secretos)',
     castigo: 'Prisión de 3 a 9 años y de 300 a 900 días multa.',
     accion: 'SANITIZE',
   },
@@ -184,9 +189,7 @@ export const REGLAS: Regla[] = [
     ...META['1.2'],
     evaluar(ctx) {
       const found = contieneAlguna(ctx.mensaje, PATRONES_ROL_LEGAL);
-      return found
-        ? `El mensaje presenta al agente como "${found}" sin acreditación de cédula profesional.`
-        : null;
+      return found ? `El mensaje presenta al agente como "${found}" sin acreditación legal.` : null;
     },
     sanear(ctx) {
       const resultado = sanearRolLegal(ctx.mensaje);
@@ -198,7 +201,7 @@ export const REGLAS: Regla[] = [
     ...META['2.1'],
     evaluar(ctx) {
       const found = contieneAlguna(ctx.mensaje, PATRONES_AMENAZA);
-      return found ? `Contiene amenaza de cobro judicial: "${found}".` : null;
+      return found ? `Contiene amenaza extrajudicial o informática: "${found}".` : null;
     },
     sanear(ctx) {
       const resultado = sanearAmenazas(ctx.mensaje);
@@ -213,6 +216,18 @@ export const REGLAS: Regla[] = [
       if (ctx.respuestaExenta) return null;
       if (ctx.contactos24h >= ctx.maxContactos24h) {
         return `El deudor ya recibió ${ctx.contactos24h} impactos en 24 h (tope ${ctx.maxContactos24h}).`;
+      }
+      if (ctx.fechaVencimiento && /^\d{4}-\d{2}-\d{2}$/.test(ctx.fechaVencimiento)) {
+        const zonaHoraria = ctx.zonaHoraria ?? 'America/Mexico_City';
+        const hoyIso = new Intl.DateTimeFormat('en-CA', {
+          timeZone: zonaHoraria,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(ctx.ahora);
+        if (ctx.fechaVencimiento > hoyIso) {
+          return `Cobro anticipado (Día T-1): la deuda vence el ${ctx.fechaVencimiento} (hoy es ${hoyIso}).`;
+        }
       }
       return null;
     },
@@ -242,10 +257,14 @@ export const REGLAS: Regla[] = [
   {
     ...META['3.1'],
     evaluar(ctx) {
+      const smishing = contieneAlguna(ctx.mensaje, PATRONES_SMISHING);
+      if (smishing) {
+        return `Patrón de smishing / suplantación de marca detectado: "${smishing}".`;
+      }
       const dominios = extraerDominios(ctx.mensaje).filter((d) => d.length > 0);
       const objectionable = dominios.filter((d) => !esDominioPermitido(d, ctx.dominiosPermitidos));
       if (objectionable.length > 0) {
-        return `Enlace a dominio no autorizado: ${objectionable.join(', ')}.`;
+        return `Enlace o acortador a dominio no autorizado: ${objectionable.join(', ')}.`;
       }
       return null;
     },
@@ -259,13 +278,17 @@ export const REGLAS: Regla[] = [
     ...META['3.2'],
     accion: 'BLOCK',
     evaluar(ctx) {
+      const desvio = contieneAlguna(ctx.mensaje, PATRONES_DESVIO_PAGO);
+      if (desvio) {
+        return `Contactación de 2º nivel / desvío a medio de pago no trazable: "${desvio}".`;
+      }
       const clabes = extraerClabes(ctx.mensaje);
       if (clabes.length === 0) return null;
       if (!ctx.contrato?.clabe) {
-        return `El mensaje incluye una CLABE (${clabes[0]}) sin contrato que la respalde.`;
+        return `El mensaje incluye una cuenta/CLABE (${clabes[0]}) sin contrato que la respalde.`;
       }
       if (!clabes.includes(ctx.contrato.clabe)) {
-        return `La CLABE del mensaje (${clabes[0]}) difiere de la del contrato (${ctx.contrato.clabe}).`;
+        return `La cuenta/CLABE del mensaje (${clabes[0]}) difiere de la del contrato (${ctx.contrato.clabe}).`;
       }
       return null;
     },
@@ -275,6 +298,19 @@ export const REGLAS: Regla[] = [
     ...META['4.2'],
     accion: 'BLOCK',
     evaluar(ctx) {
+      const tasas = extraerTasasMentadas(ctx.mensaje);
+      for (const tasa of tasas) {
+        if (tasa.esDiaria && tasa.valorPct >= 1) {
+          return `Tasa de mora diaria usuraria en el mensaje (${tasa.textoOriginal}).`;
+        }
+        if (
+          ctx.contrato?.tasa_pct !== null &&
+          ctx.contrato?.tasa_pct !== undefined &&
+          tasa.valorPct > ctx.contrato.tasa_pct
+        ) {
+          return `La tasa mencionada (${tasa.valorPct}%) supera la tasa pactada en el contrato (${ctx.contrato.tasa_pct}%).`;
+        }
+      }
       if (!ctx.contrato) return null;
       const tope = ctx.contrato.monto_pactado_cents + ctx.toleranciaCents;
       if (ctx.montoCents > tope) {
@@ -288,7 +324,7 @@ export const REGLAS: Regla[] = [
     ...META['4.4'],
     evaluar(ctx) {
       const found = contieneAlguna(ctx.mensaje, PATRONES_EXTORSION);
-      return found ? `Amenaza de difusión de la deuda a contactos: "${found}".` : null;
+      return found ? `Amenaza de difusión de boletines o contacto a terceros: "${found}".` : null;
     },
     sanear(ctx) {
       const resultado = sanearExtorsion(ctx.mensaje);
@@ -302,7 +338,7 @@ export const REGLAS: Regla[] = [
     evaluar(ctx) {
       const adjuntos = ctx.adjuntos ?? [];
       const sospechoso = adjuntos.filter((a) =>
-        /juiz|sello|expediente|mandamiento|auto\s*judicial/i.test(a)
+        /juiz|juez|juzgado|sello|expediente|mandamiento|auto\s*judicial|embargo/i.test(a)
       );
       if (sospechoso.length > 0) {
         return `Se intenta enviar un documento con apariencia judicial: ${sospechoso.join(', ')}.`;

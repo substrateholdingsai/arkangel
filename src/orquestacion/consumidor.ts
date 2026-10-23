@@ -202,6 +202,7 @@ export async function processCase(
         email: client.email,
         montoCents: amountCents,
         contrato,
+        fechaVencimiento: dueDate,
         contactos24h,
         logsReales,
         logsCrm: state.attempts ?? 0,

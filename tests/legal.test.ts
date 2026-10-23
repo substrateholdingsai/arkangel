@@ -325,3 +325,126 @@ describe('motor de cumplimiento', () => {
     expect(violacion?.castigo.length).toBeGreaterThan(0);
   });
 });
+
+describe('auditoría de las 48 conductas prohibidas (Mapa Legal)', () => {
+  it('1.2/1.5: elimina usurpación de Institución de Crédito o inspectores de PROFECO/SAT', () => {
+    const res = evaluarMensaje(
+      ctx({
+        mensaje:
+          'Somos una institución de crédito y el inspector de PROFECO revisará tu saldo de $8,450.00.',
+      })
+    );
+    expect(res.permitido).toBe(true);
+    expect(reglasDe(res)).toContain('1.2');
+    expect(res.mensaje.toLowerCase()).not.toContain('institución de crédito');
+    expect(res.mensaje.toLowerCase()).not.toContain('inspector de profeco');
+  });
+
+  it('2.1 (Conducta 2.3 PDF): elimina amenazas de acceso directo al dispositivo o fotos', () => {
+    const res = evaluarMensaje(
+      ctx({
+        mensaje:
+          'Paga tu saldo de $8,450.00. Tenemos acceso directo a tu dispositivo y descargamos tus fotos.',
+      })
+    );
+    expect(res.permitido).toBe(true);
+    expect(reglasDe(res)).toContain('2.1');
+    expect(res.mensaje.toLowerCase()).not.toContain('acceso directo a tu dispositivo');
+    expect(res.mensaje.toLowerCase()).not.toContain('descargamos tus fotos');
+  });
+
+  it('2.3 (Conductas 2.7/8.3/8.4 PDF): bloquea cobro anticipado Día T-1 (deuda aún no vencida)', () => {
+    const res = evaluarMensaje(
+      ctx({
+        ahora: new Date('2026-10-20T16:00:00Z'), // hoy = 2026-10-20 en CDMX
+        fechaVencimiento: '2026-10-21', // vence mañana (T-1)
+      })
+    );
+    expect(res.permitido).toBe(false);
+    expect(res.bloqueadoPor).toBe('2.3');
+  });
+
+  it('3.1 (Conductas 3.1/3.3 PDF): elimina acortadores bit.ly sin https y plantillas de smishing Microsoft', () => {
+    const res = evaluarMensaje(
+      ctx({
+        mensaje:
+          'Cargo ppro*microsoft detectado. Liquida tu saldo de $8,450.00 en bit.ly/cobro-urgente hoy.',
+      })
+    );
+    expect(res.permitido).toBe(true);
+    expect(reglasDe(res)).toContain('3.1');
+    expect(res.mensaje.toLowerCase()).not.toContain('bit.ly');
+    expect(res.mensaje.toLowerCase()).not.toContain('ppro*microsoft');
+  });
+
+  it('3.2 (Conductas 3.5/3.6/7.1 PDF): bloquea tarjetas separadas por espacios/guiones y desvíos a cuenta personal u OXXO', () => {
+    const conTarjetaSeparada = evaluarMensaje(
+      ctx({
+        mensaje: 'Deposita $8,450.00 a la tarjeta 4152 3133 4455 6677 hoy mismo.',
+        contrato: {
+          id: 'con_1',
+          client_id: 'cli_1',
+          monto_pactado_cents: 845000,
+          tasa_pct: 12,
+          clabe: '012180012345678901',
+          nombre_legal: 'Arkelangel, S.A. de C.V.',
+          condusef: '123456',
+          created_at: '',
+          updated_at: '',
+        },
+      })
+    );
+    expect(conTarjetaSeparada.permitido).toBe(false);
+    expect(conTarjetaSeparada.bloqueadoPor).toBe('3.2');
+
+    const conCuentaPersonal = evaluarMensaje(
+      ctx({
+        mensaje: 'Tu saldo es $8,450.00, deposita en OXXO a cuenta personal del gestor.',
+      })
+    );
+    expect(conCuentaPersonal.permitido).toBe(false);
+    expect(conCuentaPersonal.bloqueadoPor).toBe('3.2');
+  });
+
+  it('4.2 (Conductas 4.5/8.6 PDF): bloquea tasa moratoria diaria usuraria (3% diario) o mayor a la del contrato', () => {
+    const usuraria = evaluarMensaje(
+      ctx({
+        mensaje: 'Tu saldo es $8,450.00 con tasa de mora del 3% diario a partir de hoy.',
+      })
+    );
+    expect(usuraria.permitido).toBe(false);
+    expect(usuraria.bloqueadoPor).toBe('4.2');
+
+    const contradiceContrato = evaluarMensaje(
+      ctx({
+        mensaje: 'Tu saldo es $8,450.00 con interés moratorio del 5% mensual.',
+        contrato: {
+          id: 'con_1',
+          client_id: 'cli_1',
+          monto_pactado_cents: 845000,
+          tasa_pct: 2,
+          clabe: '012180012345678901',
+          nombre_legal: 'Arkelangel, S.A. de C.V.',
+          condusef: '123456',
+          created_at: '',
+          updated_at: '',
+        },
+      })
+    );
+    expect(contradiceContrato.permitido).toBe(false);
+    expect(contradiceContrato.bloqueadoPor).toBe('4.2');
+  });
+
+  it('4.4 (Conductas 2.4/2.6 PDF): elimina amenazas de boletines, recursos humanos y redes sociales', () => {
+    const res = evaluarMensaje(
+      ctx({
+        mensaje:
+          'Tu saldo es $8,450.00. Emitiremos un boletín a recursos humanos de tu trabajo y en redes sociales.',
+      })
+    );
+    expect(res.permitido).toBe(true);
+    expect(reglasDe(res)).toContain('4.4');
+    expect(res.mensaje.toLowerCase()).not.toContain('boletín');
+    expect(res.mensaje.toLowerCase()).not.toContain('recursos humanos');
+  });
+});
