@@ -68,6 +68,11 @@ export function OperatorDrawer({
   );
   const [callingBusy, setCallingBusy] = useState(false);
 
+  // Notas internas del operador (estilo Payments by Wix) y conciliación Cobre SPEI
+  const [manualNote, setManualNote] = useState('');
+  const [savingNote, setSavingNote] = useState(false);
+  const [simulatingSpei, setSimulatingSpei] = useState(false);
+
   const cargarFicha = useCallback(async (id: string) => {
     setLoading(true);
     setError(null);
@@ -217,6 +222,48 @@ export function OperatorDrawer({
     }
   };
 
+  const guardarNotaInterna = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!ws || !manualNote.trim()) return;
+    setSavingNote(true);
+    setError(null);
+    try {
+      await api.addCaseNote(ws.case.id, manualNote.trim());
+      setManualNote('');
+      setNotice('Nota interna guardada en el expediente (no visible para el deudor).');
+      await cargarFicha(ws.case.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo guardar la nota interna');
+    } finally {
+      setSavingNote(false);
+    }
+  };
+
+  const simularSpeiCobre = async () => {
+    if (!ws) return;
+    setSimulatingSpei(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const tracking = `COBRE${Date.now().toString().slice(-8)}`;
+      await api.reconcileCobreSpei({
+        clabe: ws.contract?.clabe ?? null,
+        reference: ws.case.id,
+        amount_cents: ws.case.amount_cents,
+        tracking_key: tracking,
+      });
+      setNotice(
+        `Cash-In SPEI conciliado vía Cobre (Rastreo ${tracking}). Deuda liquidada y caso retirado de la cola.`
+      );
+      await cargarFicha(ws.case.id);
+      onUpdated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo conciliar el pago SPEI');
+    } finally {
+      setSimulatingSpei(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/50 backdrop-blur-[1px]">
       <div className="w-full max-w-2xl bg-white h-full shadow-2xl border-l border-slate-200 flex flex-col overflow-hidden">
@@ -270,6 +317,93 @@ export function OperatorDrawer({
 
           {ws ? (
             <>
+              {/* 0. Diagnóstico Ejecutivo IA + Notas Internas (Estilo Payments by Wix) */}
+              {ws.ai_diagnostic ? (
+                <div className="rounded-xl border border-slate-300 bg-white p-4 shadow-sm space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-2.5">
+                      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-emerald-400">
+                        <Bot className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                            Diagnóstico Ejecutivo IA
+                          </span>
+                          {ws.ai_diagnostic.payment_status === 'paid' ? (
+                            <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-emerald-800">
+                              CONCILIADO
+                            </span>
+                          ) : ws.ai_diagnostic.payment_status === 'claimed_paid' ? (
+                            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-amber-800">
+                              REPORTA PAGO
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="text-sm font-semibold text-slate-900 mt-0.5">
+                          {ws.ai_diagnostic.headline}
+                        </p>
+                        <p className="text-xs text-slate-600 mt-1">{ws.ai_diagnostic.reason}</p>
+                        <p className="text-xs font-medium text-emerald-800 mt-1.5">
+                          → Siguiente paso: {ws.ai_diagnostic.recommended_action}
+                        </p>
+                      </div>
+                    </div>
+
+                    {ws.case.status !== 'paid' ? (
+                      <button
+                        type="button"
+                        disabled={simulatingSpei}
+                        onClick={() => void simularSpeiCobre()}
+                        className="shrink-0 rounded-lg border border-emerald-600 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                        title="Simular webhook SPEI de Cobre en tiempo real sobre la CLABE de este contrato"
+                      >
+                        {simulatingSpei ? 'Conciliando…' : '⚡ Conciliar SPEI (Cobre)'}
+                      </button>
+                    ) : null}
+                  </div>
+
+                  {/* Espacio de Notas Internas Manuales (lo que la IA pasó por alto) */}
+                  <div className="pt-3 border-t border-slate-200 space-y-2">
+                    <form onSubmit={guardarNotaInterna} className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={manualNote}
+                        onChange={(e) => setManualNote(e.target.value)}
+                        placeholder="Nota interna manual (contexto adicional que la IA pasó por alto)…"
+                        className="flex-1 rounded-md border border-slate-300 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-600"
+                      />
+                      <button
+                        type="submit"
+                        disabled={!manualNote.trim() || savingNote}
+                        className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                      >
+                        {savingNote ? 'Guardando…' : 'Guardar nota'}
+                      </button>
+                    </form>
+
+                    {ws.notes && ws.notes.length > 0 ? (
+                      <div className="space-y-1.5 max-h-28 overflow-y-auto">
+                        {ws.notes.map((n) => (
+                          <div
+                            key={n.id}
+                            className="rounded bg-amber-50/70 border border-amber-200/80 px-2.5 py-1.5 text-xs text-slate-800 flex items-baseline justify-between gap-2"
+                          >
+                            <span>
+                              <strong className="font-semibold text-amber-900">Nota:</strong>{' '}
+                              {n.note}
+                            </span>
+                            <span className="text-[10px] font-mono text-slate-400 shrink-0">
+                              {n.created_at.slice(11, 16)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+
               {/* 1. Ficha Financiera y Legal (Ley de las Cifras §3.1) */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-white p-3.5 rounded-lg border border-slate-200">

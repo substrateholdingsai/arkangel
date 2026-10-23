@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { parseCobreWebhook, verifyCobreHmac } from '../channels/cobre';
 import { parseResendPayload } from '../channels/resend';
 import { parseTelnyxPayload } from '../channels/telnyx';
 import { parseWhatsAppPayload, whatsappChallengeResponse } from '../channels/whatsapp';
@@ -8,7 +9,8 @@ import type { AuthVars } from '../auth/middleware';
 import type { Env } from '../types/env';
 import { handleInbound } from '../orquestacion/inbound';
 import { updateMessageStatus } from '../services/mensajes';
-import { resolveTenantIdForInbound } from '../tenancy/context';
+import { reconcilePayment } from '../services/pagos';
+import { resolveTenantContext, resolveTenantIdForInbound } from '../tenancy/context';
 
 export const webhooks = new Hono<{ Bindings: Env; Variables: AuthVars }>();
 
@@ -97,6 +99,55 @@ webhooks.post('/resend', async (c) => {
   const parsed = parseResendPayload(safeJson(raw));
   await processParsed(c.env, parsed);
   return c.json({ ok: true });
+});
+
+// ── Cobre (Cash-In SPEI / CLABEs Virtuales) ───────────────────────────
+webhooks.post('/cobre', async (c) => {
+  const raw = await c.req.text();
+
+  const webhookSecret = c.env.COBRE_WEBHOOK_SECRET;
+  if (webhookSecret) {
+    const sig = c.req.header('x-cobre-signature') ?? c.req.header('cobre-signature') ?? '';
+    if (!sig) return c.json({ error: 'missing_signature' }, 401);
+    const valid = await verifyCobreHmac(webhookSecret, raw, sig);
+    if (!valid) {
+      logger.warn('Firma HMAC de Cobre inválida');
+      return c.json({ error: 'invalid_signature' }, 401);
+    }
+  }
+
+  const payment = parseCobreWebhook(safeJson(raw));
+  if (!payment) {
+    return c.json({ ok: true, ignored: true });
+  }
+
+  // Resolver el tenant dueño de la CLABE virtual en contracts
+  let tenantId: string | undefined;
+  if (payment.clabe) {
+    try {
+      const row = await c.env.DB.prepare(
+        'SELECT tenant_id FROM contracts WHERE clabe = ? ORDER BY updated_at DESC LIMIT 1'
+      )
+        .bind(payment.clabe)
+        .first<{ tenant_id: string }>();
+      if (row?.tenant_id) tenantId = row.tenant_id;
+    } catch {
+      /* fallback al tenant por defecto */
+    }
+  }
+
+  const ctx = await resolveTenantContext(c.env, tenantId ? { tenantId } : {});
+  const result = await reconcilePayment(ctx, payment);
+
+  logger.info('Webhook de Cobre procesado', {
+    tenantId: ctx.tenantId,
+    status: result.status,
+    clabe: payment.clabe,
+    amountCents: payment.amountCents,
+    trackingKey: payment.trackingKey,
+  });
+
+  return c.json({ ok: true, result });
 });
 
 function safeJson(raw: string): unknown {

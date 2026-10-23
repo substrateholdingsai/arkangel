@@ -98,6 +98,12 @@ export interface Env {
   ALEGRA_IVA_PCT?: string;
   ALEGRA_CUENTA_CONTINGENCIA?: string;
   ALEGRA_CUENTA_CONTINGENCIA_CREDITO?: string;
+
+  // ── Infraestructura de Pagos Modernos (Cobre · SPEI / CLABEs Virtuales) ──
+  COBRE_BASE_URL?: string;
+  COBRE_USER_ID?: string;
+  COBRE_SECRET?: string;
+  COBRE_WEBHOOK_SECRET?: string;
 }
 
 export interface CobranzaQueueMessage {

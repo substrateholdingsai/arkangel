@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { askCopilot, type CopilotHistoryItem } from '../ai/copilot';
 import { adapters } from '../channels';
-import { formatMXNShort } from '../lib/money';
+import { parseCobreWebhook } from '../channels/cobre';
+import { formatMXN, formatMXNShort } from '../lib/money';
 import { maskPhone } from '../lib/phone';
 import { isWithinSendWindow, localHour } from '../lib/score';
 import { configLegal } from '../legal/config';
@@ -31,6 +32,7 @@ import {
 } from '../services/mensajes';
 import { listAudit, registrarViolaciones, resumenCumplimiento } from '../services/legalAudit';
 import { dailyMetrics } from '../services/metricas';
+import { parsePaymentCsv, reconcilePayment, reconcilePaymentBatch } from '../services/pagos';
 import { recordPromise } from '../services/promesas';
 import { todayIso } from '../services/db';
 import { dispararHoy } from '../orquestacion/disparador';
@@ -165,6 +167,94 @@ api.get('/cases/:id/workspace', async (c) => {
     countContactos24h(ctx, item.client_id),
   ]);
 
+  // Notas manuales del agente (estilo Payments by Wix)
+  let notes: Array<{ id: string; note: string; actor: string; created_at: string }> = [];
+  try {
+    const notesRows = await ctx.env.DB.prepare(
+      "SELECT id, payload, created_at FROM events WHERE tenant_id = ? AND case_id = ? AND type = 'operador.nota_interna' ORDER BY created_at DESC LIMIT 20"
+    )
+      .bind(ctx.tenantId, item.id)
+      .all<{ id: string; payload: string | null; created_at: string }>();
+    notes = (notesRows.results ?? []).map((r) => {
+      let parsed: { note?: string; actor?: string } = {};
+      try {
+        parsed = r.payload ? (JSON.parse(r.payload) as { note?: string; actor?: string }) : {};
+      } catch {
+        parsed = {};
+      }
+      return {
+        id: r.id,
+        note: parsed.note ?? '',
+        actor: parsed.actor ?? 'operador',
+        created_at: r.created_at,
+      };
+    });
+  } catch {
+    notes = [];
+  }
+
+  // Construcción del Diagnóstico Ejecutivo IA (Handoff sin leer el hilo completo)
+  const inboundMsgs = messages.filter((m) => m.direction === 'inbound');
+  const lastInbound = inboundMsgs.length > 0 ? inboundMsgs[inboundMsgs.length - 1]! : null;
+  let lastIntention: string | null = null;
+  let confidence = 0.85;
+  if (lastInbound?.meta) {
+    try {
+      const m = JSON.parse(lastInbound.meta) as {
+        intencion?: string;
+        confianza?: number;
+        payment_reconciled?: boolean;
+      };
+      if (m.intencion) lastIntention = m.intencion;
+      if (typeof m.confianza === 'number') confidence = m.confianza;
+      if (m.payment_reconciled) lastIntention = 'conciliado';
+    } catch {
+      /* ignore */
+    }
+  }
+
+  let headline = `Caso en seguimiento por ${formatMXN(item.amount_cents)}.`;
+  let reason = 'Gestión preventiva automática.';
+  let paymentStatus: 'paid' | 'promised' | 'claimed_paid' | 'pending' = 'pending';
+  let recommendedAction = 'Monitorear respuesta del cliente.';
+
+  if (item.status === 'paid' || lastIntention === 'conciliado') {
+    headline = `Pago conciliado y liquidado (${formatMXN(item.amount_cents)}).`;
+    reason = 'Fondos confirmados por motor de conciliación (Cobre SPEI / Tesorería).';
+    paymentStatus = 'paid';
+    recommendedAction = 'No contactar al cliente. Caso cerrado.';
+  } else if (lastIntention === 'paga') {
+    headline = `⚠️ Cliente reporta haber realizado el pago de ${formatMXN(item.amount_cents)}.`;
+    reason = `El deudor indicó pago en su último mensaje ("${lastInbound?.body.slice(0, 90) ?? ''}").`;
+    paymentStatus = 'claimed_paid';
+    recommendedAction =
+      'Verificar recepción SPEI en Cobre o estado de cuenta antes de insistir en el cobro.';
+  } else if (item.status === 'promised' || lastIntention === 'promete') {
+    headline = `Promesa de pago activa por ${formatMXN(item.amount_cents)}.`;
+    reason = lastInbound
+      ? `Compromiso capturado por IA: "${lastInbound.body.slice(0, 90)}".`
+      : 'Promesa registrada en el expediente.';
+    paymentStatus = 'promised';
+    recommendedAction =
+      'Esperar liquidación automática vía CLABE virtual Cobre o CSV bancario en la fecha prometida.';
+  } else if (lastIntention === 'pide_factura') {
+    headline = `Cliente reconoce el saldo (${formatMXN(item.amount_cents)}) pero solicita CFDI / convenio.`;
+    reason = `Escalado por IA (${Math.round(confidence * 100)}% confianza): "${lastInbound?.body.slice(0, 100) ?? ''}"`;
+    recommendedAction =
+      'Confirmar envío de CFDI al correo y registrar fecha de Promesa de Pago arriba.';
+  } else if (lastIntention === 'molesto' || lastIntention === 'rechaza') {
+    headline = `Cliente solicitó atención de ejecutivo humano (${formatMXN(item.amount_cents)}).`;
+    reason = `Escalado por IA para contención empática: "${lastInbound?.body.slice(0, 100) ?? ''}"`;
+    recommendedAction =
+      'Acordar fecha viable de pago respetando CLABE contractual o aplicar Baja DND si revoca consentimiento.';
+  } else if (item.status === 'human') {
+    headline = `Caso delegado a supervisor humano (${formatMXN(item.amount_cents)}).`;
+    reason = lastInbound
+      ? `Último mensaje del cliente: "${lastInbound.body.slice(0, 100)}"`
+      : 'Superó umbral de riesgo o requiere validación manual.';
+    recommendedAction = 'Revisar condiciones del contrato y registrar acuerdo o promesa.';
+  }
+
   const legal = configLegal(ctx);
 
   return c.json({
@@ -174,12 +264,60 @@ api.get('/cases/:id/workspace', async (c) => {
     debts,
     contract,
     messages,
+    notes,
+    ai_diagnostic: {
+      headline,
+      reason,
+      payment_status: paymentStatus,
+      recommended_action: recommendedAction,
+      intention: lastIntention,
+      confidence,
+    },
     contactos_24h: contactos24h,
     legal: {
       nombre_legal: legal.nombreLegal || null,
       condusef: legal.condusef || null,
       ventana: { inicio: legal.horaInicio, fin: legal.horaFin },
       max_contactos_24h: legal.maxContactos24h,
+    },
+  });
+});
+
+/**
+ * Notas internas manuales del operador (estilo Payments by Wix).
+ * Permite dejar contexto que la IA no vio sin enviar mensajes al deudor.
+ */
+api.post('/cases/:id/notes', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'cases:write');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const denegado = exigeTenant(guardia.principal, ctx.tenantId);
+  if (denegado) return denegado;
+
+  const item = await getCase(ctx, c.req.param('id'));
+  if (!item) return c.json({ error: 'not_found' }, 404);
+
+  const payload = (await c.req.json().catch(() => ({}))) as { note?: string };
+  const note = typeof payload.note === 'string' ? payload.note.trim() : '';
+  if (!note) {
+    return c.json({ ok: false, error: 'La nota no puede estar vacía.' }, 400);
+  }
+
+  const actor = guardia.principal.actorId || 'operador';
+  await logEvent(ctx, 'operador.nota_interna', {
+    caseId: item.id,
+    clientId: item.client_id,
+    payload: { note: note.slice(0, 1000), actor },
+  });
+
+  return c.json({
+    ok: true,
+    note: {
+      note: note.slice(0, 1000),
+      actor,
+      created_at: new Date().toISOString(),
     },
   });
 });
@@ -789,5 +927,98 @@ api.post('/copilot/chat', async (c) => {
     reply: response.reply,
     suggested_draft: response.suggestedDraft,
     context_summary: response.contextSummary,
+  });
+});
+
+/**
+ * Embudo Canónico de Conciliación de Pagos (`POST /api/v1/payments/reconcile`).
+ * Acepta:
+ *  1) `multipart/form-data` con campo `file` (CSV bancario legacy: BBVA, Banorte, Santander, STP).
+ *  2) JSON con `{ csv: "..." }` (CSV crudo).
+ *  3) JSON con evento de Cobre (`{ event: "money_movements.status.completed", data: { ... } }`).
+ *  4) JSON directo (`{ clabe, amount_cents, tracking_key, reference, phone, email, source }`).
+ */
+api.post('/payments/reconcile', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'cases:write');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const denegado = exigeTenant(guardia.principal, ctx.tenantId);
+  if (denegado) return denegado;
+
+  const contentType = c.req.header('content-type') ?? '';
+
+  if (contentType.includes('multipart/form-data')) {
+    const form = await c.req.formData();
+    const file = form.get('file');
+    const csvText = file instanceof File ? await file.text() : String(form.get('csv') ?? '');
+    if (!csvText.trim()) {
+      return c.json({ ok: false, error: 'Archivo CSV de pagos vacío.' }, 400);
+    }
+    const items = parsePaymentCsv(csvText);
+    if (items.length === 0) {
+      return c.json(
+        { ok: false, error: 'No se encontraron filas de pago válidas en el CSV.' },
+        400
+      );
+    }
+    const summary = await reconcilePaymentBatch(ctx, items);
+    return c.json({ ok: true, mode: 'csv_legacy', ...summary });
+  }
+
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+
+  if (typeof body.csv === 'string' && body.csv.trim()) {
+    const items = parsePaymentCsv(body.csv);
+    const summary = await reconcilePaymentBatch(ctx, items);
+    return c.json({ ok: true, mode: 'csv_legacy', ...summary });
+  }
+
+  // Si es un payload de Cobre SPEI (`event: "money_movements.status.completed"` o `data.virtual_clabe`)
+  const cobrePayment = parseCobreWebhook(body);
+  if (cobrePayment && (body.event || body.data || body.source === 'cobre_spei')) {
+    const single = await reconcilePayment(ctx, cobrePayment);
+    return c.json({
+      ok: true,
+      mode: 'cobre_spei',
+      total: 1,
+      reconciled: single.status === 'reconciled' ? 1 : 0,
+      duplicate: single.status === 'duplicate' ? 1 : 0,
+      unmatched: single.status === 'unmatched' ? 1 : 0,
+      totalReconciledCents: single.appliedCents,
+      results: [single],
+    });
+  }
+
+  const amountCents =
+    typeof body.amount_cents === 'number'
+      ? Math.round(body.amount_cents)
+      : typeof body.amount === 'number'
+        ? Math.round(body.amount * 100)
+        : 0;
+
+  const single = await reconcilePayment(ctx, {
+    clabe: typeof body.clabe === 'string' ? body.clabe : null,
+    reference: typeof body.reference === 'string' ? body.reference : null,
+    phone: typeof body.phone === 'string' ? body.phone : null,
+    email: typeof body.email === 'string' ? body.email : null,
+    trackingKey: typeof body.tracking_key === 'string' ? body.tracking_key : null,
+    amountCents,
+    source:
+      body.source === 'cobre_spei' || body.source === 'csv_legacy' || body.source === 'api_webhook'
+        ? body.source
+        : 'manual_operator',
+  });
+
+  return c.json({
+    ok: true,
+    mode: 'single',
+    total: 1,
+    reconciled: single.status === 'reconciled' ? 1 : 0,
+    duplicate: single.status === 'duplicate' ? 1 : 0,
+    unmatched: single.status === 'unmatched' ? 1 : 0,
+    totalReconciledCents: single.appliedCents,
+    results: [single],
   });
 });

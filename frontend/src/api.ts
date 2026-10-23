@@ -214,6 +214,20 @@ export interface CaseWorkspace {
   }>;
   contract: ContractDetail | null;
   messages: ConversationMessage[];
+  notes?: Array<{
+    id: string;
+    note: string;
+    actor: string;
+    created_at: string;
+  }>;
+  ai_diagnostic?: {
+    headline: string;
+    reason: string;
+    payment_status: 'paid' | 'promised' | 'claimed_paid' | 'pending';
+    recommended_action: string;
+    intention: string | null;
+    confidence: number;
+  };
   contactos_24h: number;
   legal: {
     nombre_legal: string | null;
@@ -418,5 +432,59 @@ export const api = {
     }>('/api/v1/copilot/chat', {
       method: 'POST',
       body: JSON.stringify(input),
+    }),
+
+  addCaseNote: (caseId: string, note: string) =>
+    request<{
+      ok: boolean;
+      note: { note: string; actor: string; created_at: string };
+    }>(`/api/v1/cases/${encodeURIComponent(caseId)}/notes`, {
+      method: 'POST',
+      body: JSON.stringify({ note }),
+    }),
+
+  reconcilePaymentsCsv: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<{
+      ok: boolean;
+      mode: string;
+      total: number;
+      reconciled: number;
+      duplicate: number;
+      unmatched: number;
+      totalReconciledCents: number;
+    }>('/api/v1/payments/reconcile', {
+      method: 'POST',
+      body: form,
+    });
+  },
+
+  reconcileCobreSpei: (input: {
+    clabe?: string | null;
+    reference?: string | null;
+    amount_cents: number;
+    tracking_key: string;
+  }) =>
+    request<{
+      ok: boolean;
+      mode: string;
+      total: number;
+      reconciled: number;
+      duplicate: number;
+      unmatched: number;
+      totalReconciledCents: number;
+    }>('/api/v1/payments/reconcile', {
+      method: 'POST',
+      body: JSON.stringify({
+        event: 'money_movements.status.completed',
+        data: {
+          virtual_clabe: input.clabe,
+          reference: input.reference,
+          amount_cents: input.amount_cents,
+          cep_tracking_key: input.tracking_key,
+          completed_at: new Date().toISOString(),
+        },
+      }),
     }),
 };

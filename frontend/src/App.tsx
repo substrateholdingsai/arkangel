@@ -77,6 +77,8 @@ export default function App() {
   const [sys, setSys] = useState<SystemStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
+  const [reconcileNotice, setReconcileNotice] = useState<string | null>(null);
   const [disparando, setDisparando] = useState(false);
   const [bandeja, setBandeja] = useState<'all' | 'human' | 'resolved'>('all');
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
@@ -264,6 +266,40 @@ export default function App() {
     link.download = 'arkangel-demo-deudores.csv';
     link.click();
     URL.revokeObjectURL(url);
+  };
+
+  const descargarCsvPagosPrueba = () => {
+    const samplePayments = [
+      ['clabe', 'monto', 'clave_rastreo', 'referencia', 'telefono'],
+      ['646180157000000505', '$12,400.00', '20261022COBRE88101', 'Folio 8390', '+525560987654'],
+      ['646180157000000303', '$3,900.00', '20261022BBVA88102', 'Folio 9104', '+528183456789'],
+    ];
+    const csv = samplePayments
+      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'arkangel-demo-pagos-tesoreria.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const subirCsvPagos = async (file: File) => {
+    setReconciling(true);
+    setError(null);
+    setReconcileNotice(null);
+    try {
+      const res = await api.reconcilePaymentsCsv(file);
+      setReconcileNotice(
+        `Conciliación completada: ${res.reconciled} pago(s) aplicado(s) (${formatMonto(res.totalReconciledCents)}), ${res.duplicate} duplicado(s), ${res.unmatched} sin match.`
+      );
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falló la conciliación de pagos');
+    } finally {
+      setReconciling(false);
+    }
   };
 
   const columnas: Columna<CaseRow>[] = [
@@ -496,6 +532,55 @@ export default function App() {
                   {String(ventana.fin).padStart(2, '0')}
                   :00 CDMX
                 </p>
+              </Card>
+
+              <Card className="p-5">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                      Conciliación de Pagos
+                    </p>
+                    <p className="text-sm font-semibold text-slate-900 mt-0.5">
+                      Cobre SPEI Webhook + CSV Legacy
+                    </p>
+                  </div>
+                  <span className="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-mono font-semibold text-emerald-700 border border-emerald-200">
+                    /webhooks/cobre
+                  </span>
+                </div>
+                <p className="mt-2 text-xs text-slate-500 leading-relaxed">
+                  Retira al instante de la cola a quienes ya pagaron por CLABE virtual (Cobre) o
+                  subiendo el estado de cuenta bancario (BBVA / Banorte / STP).
+                </p>
+                {reconcileNotice ? (
+                  <div className="mt-3 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-xs text-emerald-900">
+                    {reconcileNotice}
+                  </div>
+                ) : null}
+                <div className="mt-3 flex items-center gap-2">
+                  <label className="flex-1 cursor-pointer inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 transition-colors">
+                    <span>{reconciling ? 'Conciliando…' : 'Subir CSV de Pagos'}</span>
+                    <input
+                      type="file"
+                      accept=".csv,text/csv"
+                      disabled={reconciling}
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void subirCsvPagos(f);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={descargarCsvPagosPrueba}
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[11px] font-medium text-emerald-700 hover:bg-emerald-50 transition-colors"
+                    title="Descargar CSV de pagos bancarios de ejemplo"
+                  >
+                    CSV ejemplo
+                  </button>
+                </div>
               </Card>
 
               <DarkPanel title="Estado del Sistema" icon={Activity} watermark={WATERMARK_DARK}>
