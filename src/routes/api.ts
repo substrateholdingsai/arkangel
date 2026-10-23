@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { askCopilot, type CopilotHistoryItem } from '../ai/copilot';
 import { adapters } from '../channels';
 import { parseCobreWebhook } from '../channels/cobre';
+import { parseConektaWebhook } from '../channels/conekta';
 import { formatMXN, formatMXNShort } from '../lib/money';
 import { maskPhone } from '../lib/phone';
 import { isWithinSendWindow, localHour } from '../lib/score';
@@ -973,6 +974,24 @@ api.post('/payments/reconcile', async (c) => {
     const items = parsePaymentCsv(body.csv);
     const summary = await reconcilePaymentBatch(ctx, items);
     return c.json({ ok: true, mode: 'csv_legacy', ...summary });
+  }
+
+  // Si es un payload de Conekta (`type: "order.paid"` / `"charge.paid"`)
+  if (body.type === 'order.paid' || body.type === 'charge.paid' || body.source === 'conekta_spei') {
+    const conektaPayment = parseConektaWebhook(body);
+    if (conektaPayment) {
+      const single = await reconcilePayment(ctx, conektaPayment);
+      return c.json({
+        ok: true,
+        mode: 'conekta_spei',
+        total: 1,
+        reconciled: single.status === 'reconciled' ? 1 : 0,
+        duplicate: single.status === 'duplicate' ? 1 : 0,
+        unmatched: single.status === 'unmatched' ? 1 : 0,
+        totalReconciledCents: single.appliedCents,
+        results: [single],
+      });
+    }
   }
 
   // Si es un payload de Cobre SPEI (`event: "money_movements.status.completed"` o `data.virtual_clabe`)

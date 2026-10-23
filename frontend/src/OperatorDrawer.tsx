@@ -239,22 +239,36 @@ export function OperatorDrawer({
     }
   };
 
-  const simularSpeiCobre = async () => {
+  const simularSpeiGateway = async (provider: 'cobre' | 'conekta') => {
     if (!ws) return;
     setSimulatingSpei(true);
     setError(null);
     setNotice(null);
     try {
-      const tracking = `COBRE${Date.now().toString().slice(-8)}`;
-      await api.reconcileCobreSpei({
-        clabe: ws.contract?.clabe ?? null,
-        reference: ws.case.id,
-        amount_cents: ws.case.amount_cents,
-        tracking_key: tracking,
-      });
-      setNotice(
-        `Cash-In SPEI conciliado vía Cobre (Rastreo ${tracking}). Deuda liquidada y caso retirado de la cola.`
-      );
+      const suffix = Date.now().toString().slice(-8);
+      if (provider === 'cobre') {
+        const tracking = `COBRE${suffix}`;
+        await api.reconcileCobreSpei({
+          clabe: ws.contract?.clabe ?? null,
+          reference: ws.case.id,
+          amount_cents: ws.case.amount_cents,
+          tracking_key: tracking,
+        });
+        setNotice(
+          `Cash-In SPEI conciliado vía Cobre Enterprise (Rastreo ${tracking}). Deuda liquidada.`
+        );
+      } else {
+        const orderId = `ord_cnk_${suffix}`;
+        await api.reconcileConektaSpei({
+          clabe: ws.contract?.clabe ?? null,
+          case_id: ws.case.id,
+          amount_cents: ws.case.amount_cents,
+          order_id: orderId,
+        });
+        setNotice(
+          `Evento order.paid conciliado vía Conekta SPEI (Orden ${orderId}). Deuda liquidada.`
+        );
+      }
       await cargarFicha(ws.case.id);
       onUpdated();
     } catch (err) {
@@ -351,15 +365,26 @@ export function OperatorDrawer({
                     </div>
 
                     {ws.case.status !== 'paid' ? (
-                      <button
-                        type="button"
-                        disabled={simulatingSpei}
-                        onClick={() => void simularSpeiCobre()}
-                        className="shrink-0 rounded-lg border border-emerald-600 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-100 transition-colors disabled:opacity-50"
-                        title="Simular webhook SPEI de Cobre en tiempo real sobre la CLABE de este contrato"
-                      >
-                        {simulatingSpei ? 'Conciliando…' : '⚡ Conciliar SPEI (Cobre)'}
-                      </button>
+                      <div className="flex flex-col gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          disabled={simulatingSpei}
+                          onClick={() => void simularSpeiGateway('cobre')}
+                          className="rounded-lg border border-emerald-600 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                          title="Simular webhook SPEI de Cobre (Enterprise) sobre la CLABE de este contrato"
+                        >
+                          {simulatingSpei ? 'Conciliando…' : '⚡ SPEI Cobre'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={simulatingSpei}
+                          onClick={() => void simularSpeiGateway('conekta')}
+                          className="rounded-lg border border-slate-300 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-50"
+                          title="Simular webhook order.paid de Conekta (PyME / Mid-Market) sobre la CLABE de este contrato"
+                        >
+                          ⚡ SPEI Conekta
+                        </button>
+                      </div>
                     ) : null}
                   </div>
 

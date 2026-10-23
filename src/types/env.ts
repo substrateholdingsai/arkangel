@@ -99,11 +99,13 @@ export interface Env {
   ALEGRA_CUENTA_CONTINGENCIA?: string;
   ALEGRA_CUENTA_CONTINGENCIA_CREDITO?: string;
 
-  // ── Infraestructura de Pagos Modernos (Cobre · SPEI / CLABEs Virtuales) ──
+  // ── Infraestructura de Pagos Modernos (Cobre Enterprise & Conekta Mid-Market · SPEI) ──
   COBRE_BASE_URL?: string;
   COBRE_USER_ID?: string;
   COBRE_SECRET?: string;
   COBRE_WEBHOOK_SECRET?: string;
+  CONEKTA_API_KEY?: string;
+  CONEKTA_WEBHOOK_PUBLIC_KEY?: string;
 }
 
 export interface CobranzaQueueMessage {

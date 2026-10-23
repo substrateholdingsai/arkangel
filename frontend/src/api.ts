@@ -487,4 +487,50 @@ export const api = {
         },
       }),
     }),
+
+  reconcileConektaSpei: (input: {
+    clabe?: string | null;
+    case_id?: string | null;
+    amount_cents: number;
+    order_id: string;
+  }) =>
+    request<{
+      ok: boolean;
+      mode: string;
+      total: number;
+      reconciled: number;
+      duplicate: number;
+      unmatched: number;
+      totalReconciledCents: number;
+    }>('/api/v1/payments/reconcile', {
+      method: 'POST',
+      body: JSON.stringify({
+        type: 'order.paid',
+        data: {
+          object: {
+            id: input.order_id,
+            amount: input.amount_cents,
+            currency: 'MXN',
+            payment_status: 'paid',
+            metadata: {
+              case_id: input.case_id,
+            },
+            charges: {
+              data: [
+                {
+                  id: `chg_${input.order_id}`,
+                  status: 'paid',
+                  amount: input.amount_cents,
+                  payment_method: {
+                    type: 'spei',
+                    clabe: input.clabe,
+                    reference: input.order_id,
+                  },
+                },
+              ],
+            },
+          },
+        },
+      }),
+    }),
 };

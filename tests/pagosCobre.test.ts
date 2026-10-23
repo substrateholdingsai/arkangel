@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { authenticateCobre, parseCobreWebhook, verifyCobreHmac } from '../src/channels/cobre';
+import {
+  conektaAuthHeaders,
+  createConektaSpeiOrder,
+  parseConektaWebhook,
+} from '../src/channels/conekta';
 import { parsePaymentCsv, reconcilePayment } from '../src/services/pagos';
 import type { TenantContext } from '../src/tenancy/types';
 import type { Env } from '../src/types/env';
@@ -233,5 +238,94 @@ describe('Motor de Conciliación Canónico y Cobre SPEI', () => {
     expect(rows[0]?.amountCents).toBe(845000);
     expect(rows[0]?.trackingKey).toBe('20261022BBVA001');
     expect(rows[1]?.amountCents).toBe(1520000);
+  });
+
+  it('conektaAuthHeaders construye cabeceras Bearer y Basic v2.2.0 y parseConektaWebhook normaliza order.paid', () => {
+    const bearer = conektaAuthHeaders('key_Private123', 'bearer');
+    expect(bearer.Authorization).toBe('Bearer key_Private123');
+    expect(bearer.Accept).toContain('application/vnd.conekta-v2.2.0+json');
+
+    const basic = conektaAuthHeaders('key_Private123', 'basic');
+    expect(basic.Authorization).toBe(`Basic ${btoa('key_Private123:')}`);
+
+    const webhookPayload = {
+      id: 'evt_conekta_1',
+      type: 'order.paid',
+      data: {
+        object: {
+          id: 'ord_2s8K1A6nvfccT98w3',
+          amount: 845000,
+          currency: 'MXN',
+          payment_status: 'paid',
+          metadata: {
+            tenant_id: 't_arkangel',
+            case_id: 'cas_1',
+          },
+          charges: {
+            data: [
+              {
+                id: 'chg_2s8K1A6nvfccT98w3',
+                status: 'paid',
+                amount: 845000,
+                payment_method: {
+                  type: 'spei',
+                  clabe: '646180157000000101',
+                  reference: 'ord_2s8K1A6nvfccT98w3',
+                },
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const parsed = parseConektaWebhook(webhookPayload);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.source).toBe('conekta_spei');
+    expect(parsed?.clabe).toBe('646180157000000101');
+    expect(parsed?.amountCents).toBe(845000);
+    expect(parsed?.trackingKey).toBe('ord_2s8K1A6nvfccT98w3');
+    expect(parsed?.reference).toBe('cas_1');
+  });
+
+  it('createConektaSpeiOrder crea orden SPEI en /orders y devuelve la CLABE interbancaria asignada', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: 'ord_spei_001',
+          charges: {
+            data: [
+              {
+                payment_method: {
+                  type: 'spei',
+                  clabe: '646180111812345678',
+                  receiving_account_bank: 'STP',
+                },
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      )
+    );
+
+    const res = await createConektaSpeiOrder(
+      { CONEKTA_API_KEY: 'key_test_123' } as unknown as Env,
+      {
+        tenantId: 't_arkangel',
+        caseId: 'cas_1',
+        clientId: 'cli_1',
+        customerName: 'Carlos Mendoza',
+        customerEmail: 'cmendoza@ejemplo.mx',
+        customerPhone: '+525548901234',
+        amountCents: 845000,
+        description: 'Folio 8841',
+      }
+    );
+
+    expect(res?.orderId).toBe('ord_spei_001');
+    expect(res?.clabe).toBe('646180111812345678');
+    expect(res?.bank).toBe('STP');
+    fetchSpy.mockRestore();
   });
 });

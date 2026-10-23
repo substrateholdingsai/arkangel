@@ -7,7 +7,8 @@ import { listPendingDebts, markDebtStatus } from './deudas';
 import { logEvent } from './eventos';
 import { recordMessage } from './mensajes';
 
-export type PaymentSource = 'cobre_spei' | 'csv_legacy' | 'api_webhook' | 'manual_operator';
+export type PaymentSource =
+  'cobre_spei' | 'conekta_spei' | 'csv_legacy' | 'api_webhook' | 'manual_operator';
 
 export interface CanonicalPaymentInput {
   /** Clave de rastreo SPEI, movement_id de Cobre o folio único bancario (idempotencia). */
@@ -257,11 +258,13 @@ export async function reconcilePayment(
   const sourceLabel =
     input.source === 'cobre_spei'
       ? 'Cobre SPEI Webhook'
-      : input.source === 'csv_legacy'
-        ? 'Conciliación CSV Bancario'
-        : input.source === 'manual_operator'
-          ? 'Conciliación Manual'
-          : 'Webhook de Pago';
+      : input.source === 'conekta_spei'
+        ? 'Conekta SPEI Webhook (order.paid)'
+        : input.source === 'csv_legacy'
+          ? 'Conciliación CSV Bancario'
+          : input.source === 'manual_operator'
+            ? 'Conciliación Manual'
+            : 'Webhook de Pago';
 
   if (caseId) {
     await recordMessage(ctx, {

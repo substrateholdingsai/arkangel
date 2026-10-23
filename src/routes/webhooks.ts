@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { parseCobreWebhook, verifyCobreHmac } from '../channels/cobre';
+import { parseConektaWebhook, verifyConektaDigest } from '../channels/conekta';
 import { parseResendPayload } from '../channels/resend';
 import { parseTelnyxPayload } from '../channels/telnyx';
 import { parseWhatsAppPayload, whatsappChallengeResponse } from '../channels/whatsapp';
@@ -140,6 +141,63 @@ webhooks.post('/cobre', async (c) => {
   const result = await reconcilePayment(ctx, payment);
 
   logger.info('Webhook de Cobre procesado', {
+    tenantId: ctx.tenantId,
+    status: result.status,
+    clabe: payment.clabe,
+    amountCents: payment.amountCents,
+    trackingKey: payment.trackingKey,
+  });
+
+  return c.json({ ok: true, result });
+});
+
+// ── Conekta (SPEI CLABE / OXXO Pay · `order.paid` & `charge.paid`) ─────
+webhooks.post('/conekta', async (c) => {
+  const raw = await c.req.text();
+
+  const publicKey = c.env.CONEKTA_WEBHOOK_PUBLIC_KEY;
+  if (publicKey) {
+    const digest = c.req.header('digest') ?? c.req.header('DIGEST') ?? '';
+    if (!digest) return c.json({ error: 'missing_digest' }, 401);
+    const valid = await verifyConektaDigest(publicKey, raw, digest);
+    if (!valid) {
+      logger.warn('Firma RSA DIGEST de Conekta inválida');
+      return c.json({ error: 'invalid_digest' }, 401);
+    }
+  }
+
+  const parsedJson = safeJson(raw);
+  const payment = parseConektaWebhook(parsedJson);
+  if (!payment) {
+    return c.json({ ok: true, ignored: true });
+  }
+
+  // Resolver tenant por metadata.tenant_id o por CLABE en contracts
+  let tenantId: string | undefined;
+  const rootObj = parsedJson as {
+    data?: { object?: { metadata?: { tenant_id?: string } } };
+  };
+  if (typeof rootObj?.data?.object?.metadata?.tenant_id === 'string') {
+    tenantId = rootObj.data.object.metadata.tenant_id;
+  }
+
+  if (!tenantId && payment.clabe) {
+    try {
+      const row = await c.env.DB.prepare(
+        'SELECT tenant_id FROM contracts WHERE clabe = ? ORDER BY updated_at DESC LIMIT 1'
+      )
+        .bind(payment.clabe)
+        .first<{ tenant_id: string }>();
+      if (row?.tenant_id) tenantId = row.tenant_id;
+    } catch {
+      /* fallback al tenant por defecto */
+    }
+  }
+
+  const ctx = await resolveTenantContext(c.env, tenantId ? { tenantId } : {});
+  const result = await reconcilePayment(ctx, payment);
+
+  logger.info('Webhook de Conekta procesado', {
     tenantId: ctx.tenantId,
     status: result.status,
     clabe: payment.clabe,

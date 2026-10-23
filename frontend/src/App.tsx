@@ -541,16 +541,21 @@ export default function App() {
                       Conciliación de Pagos
                     </p>
                     <p className="text-sm font-semibold text-slate-900 mt-0.5">
-                      Cobre SPEI Webhook + CSV Legacy
+                      Cobre · Conekta · CSV Legacy
                     </p>
                   </div>
-                  <span className="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-mono font-semibold text-emerald-700 border border-emerald-200">
-                    /webhooks/cobre
-                  </span>
+                  <div className="flex flex-col items-end gap-1">
+                    <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-emerald-700 border border-emerald-200">
+                      /webhooks/cobre
+                    </span>
+                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-slate-700 border border-slate-200">
+                      /webhooks/conekta
+                    </span>
+                  </div>
                 </div>
                 <p className="mt-2 text-xs text-slate-500 leading-relaxed">
-                  Retira al instante de la cola a quienes ya pagaron por CLABE virtual (Cobre) o
-                  subiendo el estado de cuenta bancario (BBVA / Banorte / STP).
+                  Retira al instante de la cola a quienes ya pagaron vía SPEI (Cobre Enterprise o
+                  Conekta PyME) o subiendo el CSV bancario (BBVA / Banorte / STP).
                 </p>
                 {reconcileNotice ? (
                   <div className="mt-3 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-xs text-emerald-900">
