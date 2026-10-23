@@ -1,50 +1,55 @@
 # ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · 260 tests verdes · lint + typecheck + build limpios.
-> Última actualización: 2026-10-22 (mini-spike latencia: streaming LLM + modelo 8B + prompt voz implementados; **falta plan de pago Workers AI** para medir p50/p95 reales).
+> **Estado**: `main` · **17 suites / 270 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site` (`54e3d15f`).
+> Última actualización: 2026-10-22 (Sprint 6: Drawer del Operador estilo Wix Payments con Diagnóstico IA + Notas, Copilot IA Flotante, Telemetría del Sistema 100% dinámica, Motor de Conciliación de Pagos Conekta/Cobre/CSV, y Panel Self-Serve de Configuración del Despacho en la UI).
 
 ## Vista general
 
-Worker Cloudflare (Hono/TS) de cobranza asistida por IA sobre WhatsApp/SMS/Email.
+Worker Cloudflare (Hono/TS) de cobranza asistida por IA sobre WhatsApp/SMS/Email + Softphone Auditado.
 D1 + KV + Queues + Durable Objects + R2. Workers AI (Llama 3.3) con fallback
-heurístico. Motor legal fail-closed (12 reglas). Scoring Sherman v2. Dashboard
-"1 botón · 0 tablas". Módulo contable: `legal_audit` → asientos → Alegra (MCP).
+heurístico. Motor legal fail-closed (12 reglas / 48 conductas auditadas). Scoring Sherman v2. Dashboard
+"1 botón · 0 tablas" con bandeja de escalamiento humano, **Copilot IA para operadores**, **conciliación de pagos en tiempo real (Conekta / Cobre / CSV bancario)** y **configuración self-serve del despacho**. Módulo contable: `legal_audit` → asientos → Alegra (MCP).
 **Multi-tenant completo en datos**: `tenant_id` en todas las tablas de negocio (Fase 4),
-identidad nativa en D1, config por tenant (Fase 2), catálogo de tenants (Fase 1).
+identidad nativa en D1, config por tenant editable en UI (Fase 2 + UI Self-Serve), catálogo de tenants (Fase 1).
 
 ## Estructura
 
 ```
 src/
 ├── index.ts                 entry, routing, dispatch de cron (6 AM cobranza / 23:59 CDMX contable)
-├── routes/                  health · ingest · api · webhooks · agent (Grok Bot) · contabilidad ·
-│                            autenticacion (login/register/logout/session) · guard (scope por
-│                            ruta) · tenant (contexto) · auth (cabeceras)
-├── services/                casos, clientes, deudas, mensajes, promesas, metricas,
-│                            legalAudit (ledger append-only), eventos, contratos, db
-├── orquestacion/            disparador, consumidor (cola), inbound
+├── routes/                  health · ingest · api · webhooks (whatsapp/telnyx/resend/conekta/cobre) ·
+│                            agent (Grok Bot) · contabilidad · autenticacion (login/register/logout/session) ·
+│                            guard (scope por ruta) · tenant (contexto) · auth (cabeceras)
+├── services/                casos, clientes, deudas, mensajes, promesas, metricas, pagos (conciliación),
+│                            legalAudit (ledger append-only), eventos, contratos, ingesta, db
+├── orquestacion/            disparador, consumidor (cola), inbound, voice
 ├── legal/                   motor, reglas (catálogo), config, sanitizador, tipos
-├── ai/                      agent (redactMessage), classify, prompts
-├── channels/                whatsapp, telnyx, resend, types
+├── ai/                      agent (redactMessage + streaming), classify, copilot (asistente operador), prompts
+├── channels/                whatsapp, telnyx, resend, conekta (SPEI/OXXO), cobre (SPEI B2B), types
 ├── cron/                    manana · contabilidadDaily · reconciliacion
 ├── contabilidad/            buildPayload · sendToAlegra · alegraClient · schemas
 ├── tenancy/                 types · config (resolución) · context · repository · channels · keys ·
 │                            referencia (cabecera de tenant)
 ├── auth/                    native (PBKDF2, sesiones, membresías) · middleware (sesión +
 │                            membresía) · guards (principal + scope) · scopes (catálogo) ·
-│                            principal
-├── durable/                 call-lock
-├── lib/                     crypto, csv, http, idempotencia, logger, money, phone, score
+│                            principal · email (Resend)
+├── durable/                 call-lock · call-session · rate-limiter
+├── voice/                   stt (Deepgram Nova-3) · tts (Deepgram Aura-2-ES)
+├── lib/                     crypto, csv, http, idempotencia, logger, medidas, money, phone, score
 └── types/                   env, cobranza
 frontend/                    React + Vite (dashboard) + AuthProvider/AuthGate
-│                            (frontend/src/auth/: AuthContext · AuthGate)
-design-system/               tokens + componentes reutilizables
+│                            ├── App.tsx (KPIs, Dropzone, Casos, Telemetría Viva, Motor Legal)
+│                            ├── OperatorDrawer.tsx (Diagnóstico IA estilo Wix, Softphone, Notas, Conciliación)
+│                            ├── CopilotWidget.tsx (Chat IA flotante con contexto del Worker en vivo)
+│                            ├── TenantSettingsModal.tsx (Configuración legal/operativa self-serve + Webhooks)
+│                            └── auth/: AuthContext · AuthGate
+design-system/               Meridian Core v1.0: tokens + componentes reutilizables
 migrations/                  0001_init · 0002_legal · 0003_alegra_sync · 0004_tenants ·
 │                             0005_clerk_auth · 0006_tenant_isolation · 0007_native_auth ·
-│                             0008_drop_clerk
-scripts/                     seed.sql, seed-owner.ts, forge_arkangel_watermark.py
-docs/                        arquitectura.md · map.md · runbook-cobranza.md
-tests/                       13 archivos (unit + auth nativa + transporte MCP sobre HTTP real)
+│                             0008_drop_clerk · 0009_tenant_config · 0010_spike_calls
+scripts/                     seed.sql, seed-demo-data.sql, seed-owner.ts, forge_arkangel_watermark.py
+docs/                        arquitectura.md · map.md · runbook-cobranza.md · demo-deudores.csv · ARKANGEL-MERIDIAN.md
+tests/                       17 archivos (270 tests: unit + auth nativa + operador + copilot + pagos Conekta/Cobre + MCP)
 ```
 
 ## Endpoints
@@ -66,6 +71,16 @@ Cada ruta exige **su** scope: sin credencial → 401, con credencial pero sin sc
 | GET      | `/api/v1/metrics/today`                   | `metrics:read`                                    | Métricas del día                                                                         |
 | POST     | `/api/v1/disparar`                        | `cases:dispatch`                                  | Encola los casos listos (botón verde)                                                    |
 | GET      | `/api/v1/cases/:id`                       | `cases:read`                                      | Detalle de un caso                                                                       |
+| GET      | `/api/v1/cases/:id/workspace`             | `cases:read`                                      | Workspace del operador: caso, cliente, contrato, deudas, mensajes y **Diagnóstico IA**   |
+| POST     | `/api/v1/cases/:id/reply`                 | `messages:send`                                   | Respuesta humana auditada por las 12 reglas del Motor Legal (422 si viola)               |
+| POST     | `/api/v1/cases/:id/resolve`               | `cases:resolve`                                   | Resolución humana (`promise`, `paid`, `dnd`, `return_to_ai`)                             |
+| POST     | `/api/v1/cases/:id/call`                  | `messages:send`                                   | Softphone auditado: inicio con guion CONDUSEF (`start`) y bitácora de cierre (`complete`) |
+| POST     | `/api/v1/cases/:id/notes`                 | `cases:resolve`                                   | Notas internas manuales del operador sobre la ficha del caso                             |
+| POST     | `/api/v1/payments/reconcile`              | `cases:resolve`                                   | Conciliación de pagos individual (JSON) o masiva (CSV bancario BBVA/Banorte/STP)         |
+| GET      | `/api/v1/system/status`                   | `metrics:read`                                    | Telemetría en vivo: D1 latencia/clientes, Workers AI, Cola, Motor Legal, Ventana y RPM   |
+| POST     | `/api/v1/copilot/chat`                    | `cases:read`                                      | Copilot IA para operadores con acceso en vivo al estado del Worker y caso activo         |
+| GET      | `/api/v1/tenant/settings`                 | `legal:read`                                      | Configuración legal/operativa del despacho + URLs de webhooks                            |
+| PUT      | `/api/v1/tenant/settings`                 | `legal:config`                                    | Guardado self-serve de Razón Social, REDECO, dominios, ventana NOM-184 y modo IA         |
 | GET      | `/api/v1/clients/:id`                     | `clients:read`                                    | Cliente + deudas pendientes                                                              |
 | GET      | `/api/v1/clients/:id/conversation`        | `messages:read`                                   | Historial de mensajes                                                                    |
 | GET      | `/api/v1/legal/catalogo`                  | `legal:read`                                      | 12 reglas con ley, artículo y castigo                                                    |
@@ -76,6 +91,8 @@ Cada ruta exige **su** scope: sin credencial → 401, con credencial pero sin sc
 | GET/POST | `/webhooks/whatsapp`                      | firma de Meta                                     | Verificación del challenge + mensajes y estados                                          |
 | POST     | `/webhooks/telnyx`                        | firma Ed25519                                     | SMS entrante y estados                                                                   |
 | POST     | `/webhooks/resend`                        | —                                                 | Email entrante                                                                           |
+| POST     | `/webhooks/conekta`                       | RSA-SHA256 `Digest`                               | Conciliación automática SPEI / OXXO Pay (Conekta v2.2 — PyMEs/Mid-Market México)         |
+| POST     | `/webhooks/cobre`                         | HMAC-SHA256 `event-signature`                     | Conciliación automática SPEI corporativo (Cobre B2B — Enterprise)                        |
 
 Tokens de máquina: `ADMIN_TOKEN` (plataforma, break-glass), `INTAKE_TOKEN`
 (`service_ingest`) y `GROK_BOT_TOKEN` (`service_agent`). Los de servicio quedan
@@ -232,11 +249,37 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
      Pipeline `voice.ts` reescrito para lanzar TTS al primer fin de frase. **`npm run verify` verde (239 tests)**.
      **Bloqueante de medición**: la cuenta gratuita de Workers AI (10 000 neuronas/día) agotó antes de completar las 10 llamadas de prueba. **Requiere plan de pago** (cuesta centavos/día) para repetir el arnés y obtener p50/p95 reales.
 
+### Sprint 6 — Operación Humana Asistida por IA, Conciliación de Pagos y Self-Serve UI (2026-10-22)
+
+- [x] **Workspace de Casos Delegados a Humano + Softphone Auditado (`OperatorDrawer.tsx`)**:
+  - Bandeja segmentada en `App.tsx`: `Todos`, `Delegados a Humano` (badge rojo), `Promesas / Pagados`.
+  - **Diagnóstico Ejecutivo IA estilo Payments by Wix** (`ai_diagnostic` en `GET /api/v1/cases/:id/workspace`): el empleado no lee hilos largos; ve de inmediato qué hizo la IA, por qué escaló el caso, el nivel de urgencia (`alta`/`media`/`baja`) y la acción recomendada.
+  - **Notas Internas Manuales** (`POST /api/v1/cases/:id/notes`): espacio limpio para anotar contexto adicional que la IA no vio.
+  - **Softphone Auditado** (`POST /api/v1/cases/:id/call`): exige confirmar el guion obligatorio CONDUSEF (Regla 1.1) antes de abrir audio y registra duración + acuerdo al colgar.
+  - **Interceptor Legal Humano** (`POST /api/v1/cases/:id/reply`): cada mensaje escrito por un humano pasa por `evaluarCumplimiento()`; si incluye amenazas, lenguaje prohibido o CLABE apócrifa, devuelve HTTP 422 y bloquea el envío.
+- [x] **Copilot IA Flotante para Operadores (`src/ai/copilot.ts` + `CopilotWidget.tsx`)**:
+  - Sustituye los manuales en PDF por un asistente conversacional conectado en vivo a D1, al estado legal del despacho y al caso activo abierto en pantalla.
+  - Genera borradores pre-blindados con la Razón Social, REDECO, saldo exacto y CLABE de 18 dígitos del contrato.
+- [x] **Panel "Estado del Sistema" 100% Dinámico (`GET /api/v1/system/status`)**:
+  - Mide latencia real de D1 (`ms`) y clientes registrados, estado de Workers AI, casos activos en cola, estado del Motor Legal (`12 reglas · 48 cond.`), estado en vivo de la ventana NOM-184 (`ABIERTA`/`CERRADA`) y barra de RPM de WhatsApp consultada al Durable Object `RateLimiterDO`. Refresco automático cada 15s.
+- [x] **Motor Canónico de Conciliación de Pagos (`src/services/pagos.ts`) — 3 Tiers**:
+  - Cruza pagos por **CLABE de 18 dígitos** (`contracts.clabe`), teléfono E.164, `case_id` o `client_id`.
+  - Al conciliar un pago: liquida o descuenta `debts`, pasa `cases.status = 'paid'`, cumple `promises`, inserta notificación en el timeline del caso para que ningún agente llame por error a quien ya pagó, y envía agradecimiento automático por WhatsApp si la ventana NOM-184 está abierta.
+  - **Tier 1 (PyME / Mid-Market México — Recomendado)**: **Conekta** (`src/channels/conekta.ts` + `POST /webhooks/conekta`) con verificación RSA-SHA256 (`Digest`) y creación de órdenes SPEI con CLABE dinámica (`createConektaSpeiOrder`).
+  - **Tier 2 (Enterprise / Corporativo)**: **Cobre** (`src/channels/cobre.ts` + `POST /webhooks/cobre`) con autenticación `POST /v1/auth` y verificación HMAC-SHA256 (`event-signature`).
+  - **Tier 3 (Bancos Legacy BBVA / Banorte / Santander / STP)**: Carga de CSV de estados de cuenta bancarios directo desde el dashboard (`POST /api/v1/payments/reconcile`).
+- [x] **Panel Self-Serve de Configuración del Despacho (`TenantSettingsModal.tsx` + `GET/PUT /api/v1/tenant/settings`)**:
+  - Permite al `owner` o `compliance` editar desde la UI la **Razón Social**, **Folio REDECO**, **Dominios de pago permitidos**, **Ventana horaria NOM-184**, **Máximo de contactos/24h**, **RPM de WhatsApp**, **Modo del Agente IA** y **Modo Dry Run**.
+  - Al guardar Razón Social y REDECO, conmuta `tenants.config_mode = 'db'` y actualiza `contracts` del despacho automáticamente.
+  - Incluye copiado en 1 clic de las URLs de Webhooks (`Conekta`, `Cobre`, `WhatsApp`).
+- [x] **Datos Sintéticos de Demostración en Producción**:
+  - `scripts/seed-demo-data.sql` y botón **"Descargar CSV de prueba"** en el dashboard (`docs/demo-deudores.csv`). Auto-creación de contratos con CLABE de 18 dígitos durante la ingesta CSV (`src/services/ingesta.ts`).
+
 ## Verificación realizada
 
 | Qué                             | Cómo                                                                                              | Resultado                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Suite unitaria                  | `npm test` (14 archivos)                                                                          | 248/248                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Suite unitaria                  | `npm test` (17 archivos)                                                                          | **270/270**                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Estilo y tipos                  | `npm run lint` · `npm run typecheck`                                                              | limpios                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Build del worker                | `npm run build:worker`                                                                            | limpio                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Migraciones                     | `wrangler d1 migrations apply --local` (BD nueva)                                                 | 8 migraciones OK; esquema igual al que lee el código                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -295,12 +338,13 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
 ## Próximos (por riesgo)
 
 1. **[x] Cambio de contraseña en el panel** — implementado en `POST /api/auth/change-password` (valida la actual, aplica política de la nueva, revoca todas las sesiones y limpia la cookie).
-2. **Activar plan de pago Workers AI** y repetir `SPIKE_LLAMADAS=20 npm run spike:voz` — bloquea la medición de latencia real (cuota gratuita 10 k neuronas/día agotada).
-3. **Cargar la fila de `t_arkangel`** (razón social + CONDUSEF) y pasarla a `config_mode='db'`.
-4. **Fase 5** — firma de Meta en POST (el enrutado por tenant ya está).
-5. **Fase 6** — contabilidad por tenant (Alegra propio, mapa de cuentas por cliente).
-6. **Ensayo end-to-end** con un Alegra de pruebas + cerrar el contrato MCP.
-7. **Secretos + bucket R2 + primera corrida real** (las migraciones 003/004/005/006/007/008 ya están en remoto).
-8. **[x] Alinear el cron de cobranza** con el huso CDMX — `wrangler.jsonc` pasó de `"0 6 * * *"` (06:00 UTC = 00:00 CDMX) a `"0 12 * * *"` (12:00 UTC = 6 AM CDT).
-9. **[x] CI en GitHub Actions** — `.github/workflows/ci.yml` corre `npm run verify` (format, lint, typecheck, test, build) en `push` y `PR` a `main`.
-10. **[x] Ejecutar el spike de voz** — **hecho** (2026-10-22): 20 llamadas con `npm run spike:voz`, p50/p95 medidos. Veredicto **NO-GO por latencia** (round-trip p95 3914 ms vs 1500 ms), a causa del LLM sin streaming; el ajuste es `agent.ts` con streaming. Detalle en `docs/spike-voz.md`.
+2. **[x] Cargar la fila de `t_arkangel` y Panel Self-Serve de Configuración** — implementado en `GET/PUT /api/v1/tenant/settings` + `TenantSettingsModal.tsx`; `t_arkangel` sembrado en remoto con `config_mode='db'`.
+3. **[x] Operación Humana + Copilot IA + Conciliación de Pagos (Conekta / Cobre / CSV)** — desplegado en `https://arkangel.arksystems.site`.
+4. **Activar plan de pago Workers AI** y repetir `SPIKE_LLAMADAS=20 npm run spike:voz` — bloquea la medición de latencia real (cuota gratuita 10 k neuronas/día agotada).
+5. **Fase 5** — firma de Meta en POST (el enrutado por tenant ya está).
+6. **Fase 6** — contabilidad por tenant (Alegra propio, mapa de cuentas por cliente).
+7. **Ensayo end-to-end** con un Alegra de pruebas + cerrar el contrato MCP.
+8. **Secretos + bucket R2 + primera corrida real** (las migraciones 003/004/005/006/007/008/009/010 ya están en remoto).
+9. **[x] Alinear el cron de cobranza** con el huso CDMX — `wrangler.jsonc` pasó de `"0 6 * * *"` (06:00 UTC = 00:00 CDMX) a `"0 12 * * *"` (12:00 UTC = 6 AM CDT).
+10. **[x] CI en GitHub Actions** — `.github/workflows/ci.yml` corre `npm run verify` (format, lint, typecheck, test, build) en `push` y `PR` a `main`.
+11. **[x] Ejecutar el spike de voz** — **hecho** (2026-10-22): 20 llamadas con `npm run spike:voz`, p50/p95 medidos. Veredicto **NO-GO por latencia** (round-trip p95 3914 ms vs 1500 ms), a causa del LLM sin streaming; el ajuste es `agent.ts` con streaming. Detalle en `docs/spike-voz.md`.
