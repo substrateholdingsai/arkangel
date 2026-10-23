@@ -9,6 +9,7 @@ import {
   Loader2,
   LogOut,
   Scale,
+  Settings,
 } from 'lucide-react';
 import {
   Alert,
@@ -41,6 +42,7 @@ import { AuthGate } from './auth/AuthGate';
 import { useAuth } from './auth/AuthContext';
 import { CopilotWidget } from './CopilotWidget';
 import { OperatorDrawer } from './OperatorDrawer';
+import { TenantSettingsModal } from './TenantSettingsModal';
 
 const WATERMARK = '/assets/arkangel-watermark.png';
 const WATERMARK_DARK = '/assets/arkangel-watermark-dark.png';
@@ -82,6 +84,7 @@ export default function App() {
   const [disparando, setDisparando] = useState(false);
   const [bandeja, setBandeja] = useState<'all' | 'human' | 'resolved'>('all');
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const conectado = session !== null;
   const tenantId = activeTenant?.tenantId ?? null;
@@ -106,23 +109,25 @@ export default function App() {
     }
   }, [logout]);
 
+  const recargarLegal = useCallback(async () => {
+    try {
+      const [estado, catalogo] = await Promise.all([api.legalEstado(), api.legalCatalogo()]);
+      setLegal(estado);
+      setReglas(catalogo.reglas);
+    } catch (e) {
+      if (esSesionInvalida(e)) void logout();
+      /* el panel de cumplimiento no debe bloquear la operación */
+    }
+  }, [logout]);
+
   useEffect(() => {
     if (conectado) void cargar();
   }, [conectado, cargar, tenantId]);
 
   useEffect(() => {
     if (!conectado) return;
-    void (async () => {
-      try {
-        const [estado, catalogo] = await Promise.all([api.legalEstado(), api.legalCatalogo()]);
-        setLegal(estado);
-        setReglas(catalogo.reglas);
-      } catch (e) {
-        if (esSesionInvalida(e)) void logout();
-        /* el panel de cumplimiento no debe bloquear la operación */
-      }
-    })();
-  }, [conectado, logout, tenantId]);
+    void recargarLegal();
+  }, [conectado, recargarLegal, tenantId]);
 
   // Refresco continuo de telemetría en vivo cada 15s
   useEffect(() => {
@@ -409,6 +414,14 @@ export default function App() {
                 </select>
               </label>
             ) : null}
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={Settings}
+              onClick={() => setSettingsOpen(true)}
+            >
+              Configurar
+            </Button>
             <span className="hidden md:inline text-xs text-slate-500">
               {session?.user.fullName || session?.user.email}
             </span>
@@ -443,9 +456,16 @@ export default function App() {
             <div className="mb-6">
               <Alert tone="warn" title="Motor legal en fail-closed (regla 1.1 · LFPC Art. 112 Bis)">
                 No hay razón social registrada ante CONDUSEF configurada. El agente{' '}
-                <strong>no enviará</strong> ningún mensaje hasta que definas{' '}
-                <code>LEGAL_RAZON_SOCIAL</code> en las variables del worker. El dashboard sigue
-                operativizable y la auditoría queda intacta.
+                <strong>no enviará</strong> ningún mensaje hasta que configures tu identidad legal
+                en{' '}
+                <button
+                  type="button"
+                  onClick={() => setSettingsOpen(true)}
+                  className="font-semibold underline underline-offset-2 text-amber-900 hover:text-amber-700"
+                >
+                  Configuración del Despacho
+                </button>
+                . El dashboard sigue operativizable y la auditoría queda intacta.
               </Alert>
             </div>
           ) : null}
@@ -749,9 +769,19 @@ export default function App() {
                   title="Motor de cumplimiento — la ley como código"
                   subtitle="Catálogo legal ejecutable, aplicado antes de cada contacto"
                   actions={
-                    <StatusPill tone={legal?.identidad_configurada ? 'ok' : 'err'} icon={Scale}>
-                      {legal?.identidad_configurada ? 'IDENTIDAD OK' : 'FALTA RAZÓN SOCIAL'}
-                    </StatusPill>
+                    <div className="flex items-center gap-2">
+                      <StatusPill tone={legal?.identidad_configurada ? 'ok' : 'err'} icon={Scale}>
+                        {legal?.identidad_configurada ? 'IDENTIDAD OK' : 'FALTA RAZÓN SOCIAL'}
+                      </StatusPill>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={Settings}
+                        onClick={() => setSettingsOpen(true)}
+                      >
+                        Editar
+                      </Button>
+                    </div>
                   }
                 />
                 <div className="p-6">
@@ -813,6 +843,15 @@ export default function App() {
             caseId={selectedCaseId}
             onClose={() => setSelectedCaseId(null)}
             onUpdated={() => void cargar()}
+          />
+
+          <TenantSettingsModal
+            open={settingsOpen}
+            onClose={() => setSettingsOpen(false)}
+            onSaved={() => {
+              void cargar();
+              void recargarLegal();
+            }}
           />
 
           <CopilotWidget

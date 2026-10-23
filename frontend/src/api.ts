@@ -329,6 +329,32 @@ export interface SystemStatus {
   };
 }
 
+export interface TenantSettings {
+  tenant_id: string;
+  slug: string;
+  nombre: string;
+  config_mode: 'db' | 'platform_env';
+  razon_social: string;
+  condusef_registro: string;
+  allowed_payment_domains: string;
+  tz: string;
+  send_window_start: number;
+  send_window_end: number;
+  max_contacts_per_day: number;
+  rate_limit_rpm: number;
+  agent_mode: string;
+  agent_auto_threshold_cents: number;
+  dry_run: boolean;
+}
+
+export interface TenantWebhooks {
+  conekta: string;
+  cobre: string;
+  whatsapp: string;
+  telnyx: string;
+  resend: string;
+}
+
 export const api = {
   todayCases: () =>
     request<{ ok: boolean; date: string; count: number; total_cents: number; cases: CaseRow[] }>(
@@ -532,5 +558,21 @@ export const api = {
           },
         },
       }),
+    }),
+
+  getTenantSettings: () =>
+    request<{
+      ok: boolean;
+      settings: TenantSettings;
+      webhooks: TenantWebhooks;
+    }>('/api/v1/tenant/settings'),
+
+  updateTenantSettings: (input: Partial<TenantSettings>) =>
+    request<{
+      ok: boolean;
+      settings: TenantSettings;
+    }>('/api/v1/tenant/settings', {
+      method: 'PUT',
+      body: JSON.stringify(input),
     }),
 };

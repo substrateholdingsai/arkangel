@@ -59,6 +59,7 @@ class FakeOperatorD1 {
   messages: Record<string, unknown>[] = [];
   promises: Record<string, unknown>[] = [];
   audits: Record<string, unknown>[] = [];
+  tenants: Record<string, unknown>[] = [];
 
   prepare = (sql: string) => {
     const clean = sql.replace(/\s+/g, ' ').trim();
@@ -75,7 +76,13 @@ class FakeOperatorD1 {
 
   first(sql: string, args: unknown[]): unknown {
     if (sql.includes('FROM tenants')) {
-      throw new Error('D1_ERROR: no such table: tenants');
+      if (this.tenants.length === 0) {
+        throw new Error('D1_ERROR: no such table: tenants');
+      }
+      if (sql.includes('is_default = 1')) {
+        return this.tenants[0] ?? null;
+      }
+      return this.tenants.find((t) => t.id === args[0] || t.slug === args[0]) ?? null;
     }
     if (sql.includes('FROM cases WHERE tenant_id = ? AND id = ?')) {
       return this.cases.find((c) => c.tenant_id === args[0] && c.id === args[1]) ?? null;
@@ -160,6 +167,33 @@ class FakeOperatorD1 {
     }
     if (sql.startsWith('INSERT INTO legal_audit')) {
       this.audits.push({ regla: args[4], accion: args[8] });
+    }
+    if (sql.startsWith('UPDATE tenants')) {
+      const id = String(args[args.length - 1]);
+      const t = this.tenants.find((row) => row.id === id);
+      if (t) {
+        t.nombre = args[0];
+        t.config_mode = args[1];
+        t.razon_social = args[2];
+        t.condusef_registro = args[3];
+        t.allowed_payment_domains = args[4];
+        t.send_window_start = args[5];
+        t.send_window_end = args[6];
+        t.max_contacts_per_day = args[7];
+        t.rate_limit_rpm = args[8];
+        t.agent_mode = args[9];
+        t.agent_auto_threshold_cents = args[10];
+        t.dry_run = args[11];
+      }
+    }
+    if (sql.startsWith('UPDATE contracts SET nombre_legal')) {
+      const tenantId = String(args[2]);
+      for (const c of this.contracts) {
+        if (c.tenant_id === tenantId) {
+          c.nombre_legal = String(args[0]);
+          c.condusef = String(args[1]);
+        }
+      }
     }
   }
 }
@@ -362,5 +396,80 @@ describe('Drawer del Operador y Softphone (/api/v1/cases/:id/*)', () => {
     expect(body.suggested_draft).toContain('Arkangel S.A. de C.V.');
     expect(body.suggested_draft).toContain('012180001234567899');
     expect(body.context_summary.activeCaseName).toBe('Juan Pérez');
+  });
+
+  it('GET y PUT /tenant/settings permiten configurar identidad legal y parámetros operativos desde la UI', async () => {
+    const db = new FakeOperatorD1();
+    db.tenants.push({
+      id: 't_arkangel',
+      slug: 'arkangel-default',
+      nombre: 'Arkangel Demo',
+      razon_social: null,
+      condusef_registro: null,
+      allowed_payment_domains: 'arksystems.site',
+      send_window_start: 8,
+      send_window_end: 21,
+      max_contacts_per_day: 3,
+      rate_limit_rpm: 40,
+      dry_run: 1,
+      config_mode: 'env_fallback',
+      agent_mode: 'assist',
+      agent_auto_threshold_cents: 500000,
+      status: 'active',
+    });
+
+    const app = makeApp();
+    const env = makeEnv(db);
+
+    const getRes = await app.request('/api/v1/tenant/settings', { headers: AUTH_HEADERS }, env);
+    expect(getRes.status).toBe(200);
+    const getBody = (await getRes.json()) as {
+      ok: boolean;
+      settings: { tenant_id: string; nombre: string };
+      webhooks: { conekta: string; cobre: string };
+    };
+    expect(getBody.ok).toBe(true);
+    expect(getBody.settings.tenant_id).toBe('t_arkangel');
+    expect(getBody.webhooks.conekta).toContain('/webhooks/conekta');
+    expect(getBody.webhooks.cobre).toContain('/webhooks/cobre');
+
+    const putRes = await app.request(
+      '/api/v1/tenant/settings',
+      {
+        method: 'PUT',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({
+          nombre: 'Cobranza FinTech MX',
+          razon_social: 'Cobranza FinTech S.A.P.I. de C.V.',
+          condusef_registro: 'REDECO-2026-9988',
+          allowed_payment_domains: 'conekta.com,cobre.co',
+          send_window_start: 8,
+          send_window_end: 20,
+          max_contacts_per_day: 2,
+          rate_limit_rpm: 35,
+          agent_mode: 'autonomous',
+          agent_auto_threshold_cents: 1200000,
+          dry_run: false,
+        }),
+      },
+      env
+    );
+    expect(putRes.status).toBe(200);
+    const putBody = (await putRes.json()) as {
+      ok: boolean;
+      settings: {
+        razon_social: string;
+        condusef_registro: string;
+        config_mode: string;
+        dry_run: boolean;
+      };
+    };
+    expect(putBody.ok).toBe(true);
+    expect(putBody.settings.razon_social).toBe('Cobranza FinTech S.A.P.I. de C.V.');
+    expect(putBody.settings.condusef_registro).toBe('REDECO-2026-9988');
+    expect(putBody.settings.config_mode).toBe('db');
+    expect(putBody.settings.dry_run).toBe(false);
+    expect(db.contracts[0]?.nombre_legal).toBe('Cobranza FinTech S.A.P.I. de C.V.');
+    expect(db.contracts[0]?.condusef).toBe('REDECO-2026-9988');
   });
 });

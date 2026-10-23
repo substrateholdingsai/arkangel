@@ -1041,3 +1041,207 @@ api.post('/payments/reconcile', async (c) => {
     results: [single],
   });
 });
+
+/**
+ * Configuración Legal y Operativa del Despacho (`GET /api/v1/tenant/settings` y `PUT /api/v1/tenant/settings`).
+ * Permite editar razón social, registro CONDUSEF/REDECO, dominios permitidos,
+ * ventana horaria NOM-184, límites de contacto y modo de operación IA desde la UI.
+ */
+api.get('/tenant/settings', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'legal:read');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const denegado = exigeTenant(guardia.principal, ctx.tenantId);
+  if (denegado) return denegado;
+
+  const appUrl = (ctx.env.APP_URL || 'https://arkangel.arksystems.site').replace(/\/+$/, '');
+
+  return c.json({
+    ok: true,
+    settings: {
+      tenant_id: ctx.tenantId,
+      slug: ctx.tenant.slug,
+      nombre: ctx.tenant.nombre,
+      config_mode: ctx.tenant.config_mode,
+      razon_social: ctx.config.razonSocial,
+      condusef_registro: ctx.config.condusef,
+      allowed_payment_domains: ctx.config.dominiosPermitidos.join(', '),
+      tz: ctx.config.tz,
+      send_window_start: ctx.config.horaInicio,
+      send_window_end: ctx.config.horaFin,
+      max_contacts_per_day: ctx.config.maxContactos24h,
+      rate_limit_rpm: ctx.config.rateLimitRpm,
+      agent_mode: ctx.config.agentMode,
+      agent_auto_threshold_cents: ctx.config.agentAutoThresholdCents,
+      dry_run: ctx.config.dryRun,
+    },
+    webhooks: {
+      conekta: `${appUrl}/webhooks/conekta`,
+      cobre: `${appUrl}/webhooks/cobre`,
+      whatsapp: `${appUrl}/webhooks/whatsapp`,
+      telnyx: `${appUrl}/webhooks/telnyx`,
+      resend: `${appUrl}/webhooks/resend`,
+    },
+  });
+});
+
+api.put('/tenant/settings', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'legal:config');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const denegado = exigeTenant(guardia.principal, ctx.tenantId);
+  if (denegado) return denegado;
+
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+
+  const nombre =
+    typeof body.nombre === 'string' && body.nombre.trim()
+      ? body.nombre.trim().slice(0, 120)
+      : ctx.tenant.nombre;
+
+  const razonSocial =
+    typeof body.razon_social === 'string'
+      ? body.razon_social.trim().slice(0, 200)
+      : ctx.config.razonSocial;
+
+  const condusefRegistro =
+    typeof body.condusef_registro === 'string'
+      ? body.condusef_registro.trim().slice(0, 80)
+      : ctx.config.condusef;
+
+  const allowedPaymentDomains =
+    typeof body.allowed_payment_domains === 'string'
+      ? body.allowed_payment_domains
+          .split(',')
+          .map((d) =>
+            d
+              .trim()
+              .toLowerCase()
+              .replace(/^https?:\/\//, '')
+              .replace(/\/.*$/, '')
+          )
+          .filter(Boolean)
+          .join(',')
+      : ctx.config.dominiosPermitidos.join(',');
+
+  const sendWindowStart =
+    typeof body.send_window_start === 'number'
+      ? Math.max(0, Math.min(22, Math.round(body.send_window_start)))
+      : ctx.config.horaInicio;
+
+  const sendWindowEnd =
+    typeof body.send_window_end === 'number'
+      ? Math.max(sendWindowStart + 1, Math.min(24, Math.round(body.send_window_end)))
+      : ctx.config.horaFin;
+
+  const maxContactsPerDay =
+    typeof body.max_contacts_per_day === 'number'
+      ? Math.max(1, Math.min(10, Math.round(body.max_contacts_per_day)))
+      : ctx.config.maxContactos24h;
+
+  const rateLimitRpm =
+    typeof body.rate_limit_rpm === 'number'
+      ? Math.max(1, Math.min(600, Math.round(body.rate_limit_rpm)))
+      : ctx.config.rateLimitRpm;
+
+  const agentMode =
+    body.agent_mode === 'autonomous' || body.agent_mode === 'supervised'
+      ? body.agent_mode
+      : ctx.config.agentMode;
+
+  const agentAutoThresholdCents =
+    typeof body.agent_auto_threshold_cents === 'number'
+      ? Math.max(0, Math.round(body.agent_auto_threshold_cents))
+      : ctx.config.agentAutoThresholdCents;
+
+  const dryRun =
+    typeof body.dry_run === 'boolean' ? (body.dry_run ? 1 : 0) : ctx.config.dryRun ? 1 : 0;
+
+  const configMode = razonSocial && condusefRegistro ? 'db' : ctx.tenant.config_mode;
+
+  await ctx.env.DB.prepare(
+    `UPDATE tenants
+     SET nombre = ?,
+         config_mode = ?,
+         razon_social = ?,
+         condusef_registro = ?,
+         allowed_payment_domains = ?,
+         send_window_start = ?,
+         send_window_end = ?,
+         max_contacts_per_day = ?,
+         rate_limit_rpm = ?,
+         agent_mode = ?,
+         agent_auto_threshold_cents = ?,
+         dry_run = ?,
+         updated_at = datetime('now')
+     WHERE id = ?`
+  )
+    .bind(
+      nombre,
+      configMode,
+      razonSocial,
+      condusefRegistro,
+      allowedPaymentDomains,
+      sendWindowStart,
+      sendWindowEnd,
+      maxContactsPerDay,
+      rateLimitRpm,
+      agentMode,
+      agentAutoThresholdCents,
+      dryRun,
+      ctx.tenantId
+    )
+    .run();
+
+  if (razonSocial && condusefRegistro) {
+    try {
+      await ctx.env.DB.prepare(
+        "UPDATE contracts SET nombre_legal = ?, condusef = ?, updated_at = datetime('now') WHERE tenant_id = ?"
+      )
+        .bind(razonSocial, condusefRegistro, ctx.tenantId)
+        .run();
+    } catch {
+      /* si contracts no está en un mock de prueba, continúa */
+    }
+  }
+
+  await logEvent(ctx, 'tenant.config_actualizada', {
+    payload: {
+      actor: guardia.principal.actorId,
+      razonSocial,
+      condusefRegistro,
+      allowedPaymentDomains,
+      sendWindowStart,
+      sendWindowEnd,
+      maxContactsPerDay,
+      rateLimitRpm,
+      agentMode,
+      dryRun: Boolean(dryRun),
+    },
+  });
+
+  return c.json({
+    ok: true,
+    settings: {
+      tenant_id: ctx.tenantId,
+      slug: ctx.tenant.slug,
+      nombre,
+      config_mode: configMode,
+      razon_social: razonSocial,
+      condusef_registro: condusefRegistro,
+      allowed_payment_domains: allowedPaymentDomains,
+      tz: ctx.config.tz,
+      send_window_start: sendWindowStart,
+      send_window_end: sendWindowEnd,
+      max_contacts_per_day: maxContactsPerDay,
+      rate_limit_rpm: rateLimitRpm,
+      agent_mode: agentMode,
+      agent_auto_threshold_cents: agentAutoThresholdCents,
+      dry_run: Boolean(dryRun),
+    },
+  });
+});
