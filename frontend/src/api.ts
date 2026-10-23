@@ -275,6 +275,46 @@ export interface LegalEstado {
   resumen: LegalResumen;
 }
 
+export interface SystemStatus {
+  ok: boolean;
+  timestamp: string;
+  d1: {
+    ok: boolean;
+    latency_ms: number;
+    clients_total: number;
+  };
+  workers_ai: {
+    ok: boolean;
+    model: string;
+    dry_run: boolean;
+  };
+  queue: {
+    ok: boolean;
+    ready: number;
+    sending: number;
+  };
+  legal_engine: {
+    ok: boolean;
+    reglas_activas: number;
+    conductas_auditadas: number;
+    razon_social: string | null;
+    condusef: string | null;
+    bloqueos_hoy: number;
+  };
+  ventana: {
+    inicio: number;
+    fin: number;
+    tz: string;
+    hora_local: number;
+    abierta_ahora: boolean;
+  };
+  rate_limit: {
+    whatsapp_rpm: number;
+    max_rpm: number;
+    enviados_hoy: number;
+  };
+}
+
 export const api = {
   todayCases: () =>
     request<{ ok: boolean; date: string; count: number; total_cents: number; cases: CaseRow[] }>(
@@ -283,6 +323,8 @@ export const api = {
 
   todayMetrics: () =>
     request<{ ok: boolean; date: string; metrics: DailyMetrics }>('/api/v1/metrics/today'),
+
+  systemStatus: () => request<SystemStatus>('/api/v1/system/status'),
 
   legalEstado: () => request<LegalEstado>('/api/v1/legal/hoy'),
 

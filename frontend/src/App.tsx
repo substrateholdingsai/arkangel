@@ -35,6 +35,7 @@ import {
   type DailyMetrics,
   type LegalEstado,
   type LegalRegla,
+  type SystemStatus,
 } from './api';
 import { AuthGate } from './auth/AuthGate';
 import { useAuth } from './auth/AuthContext';
@@ -72,6 +73,7 @@ export default function App() {
   const [cases, setCases] = useState<CaseRow[]>([]);
   const [legal, setLegal] = useState<LegalEstado | null>(null);
   const [reglas, setReglas] = useState<LegalRegla[]>([]);
+  const [sys, setSys] = useState<SystemStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [disparando, setDisparando] = useState(false);
@@ -79,12 +81,18 @@ export default function App() {
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
 
   const conectado = session !== null;
+  const tenantId = activeTenant?.tenantId ?? null;
 
   const cargar = useCallback(async () => {
     try {
-      const [casos, metricas] = await Promise.all([api.todayCases(), api.todayMetrics()]);
+      const [casos, metricas, status] = await Promise.all([
+        api.todayCases(),
+        api.todayMetrics(),
+        api.systemStatus().catch(() => null),
+      ]);
       setCases(casos.cases);
       setMetrics(metricas.metrics);
+      if (status) setSys(status);
       setError(null);
     } catch (e) {
       if (esSesionInvalida(e)) {
@@ -97,7 +105,7 @@ export default function App() {
 
   useEffect(() => {
     if (conectado) void cargar();
-  }, [conectado, cargar]);
+  }, [conectado, cargar, tenantId]);
 
   useEffect(() => {
     if (!conectado) return;
@@ -111,7 +119,21 @@ export default function App() {
         /* el panel de cumplimiento no debe bloquear la operación */
       }
     })();
-  }, [conectado, logout]);
+  }, [conectado, logout, tenantId]);
+
+  // Refresco continuo de telemetría en vivo cada 15s
+  useEffect(() => {
+    if (!conectado) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const status = await api.systemStatus();
+        setSys(status);
+      } catch (e) {
+        if (esSesionInvalida(e)) void logout();
+      }
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, [conectado, logout, tenantId]);
 
   // Mientras dispara, se refrescan las métricas en vivo.
   useEffect(() => {
@@ -184,6 +206,61 @@ export default function App() {
     const link = document.createElement('a');
     link.href = url;
     link.download = `arkangel-casos-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const descargarCsvPrueba = () => {
+    const sampleRows = [
+      ['nombre', 'telefono', 'email', 'monto', 'vencimiento', 'folio'],
+      [
+        'Valeria Montoya Ríos',
+        '+525541239801',
+        'valeria.montoya@ejemplo.mx',
+        '$4,850.00',
+        '2026-09-25',
+        'EXP-2026-101',
+      ],
+      [
+        'Alejandro Cárdenas Vega',
+        '+525582341902',
+        'acardenas@ejemplo.mx',
+        '$12,400.00',
+        '2026-08-14',
+        'EXP-2026-102',
+      ],
+      [
+        'Mariana Solís Echeverría',
+        '+523319874503',
+        'mariana.solis@ejemplo.mx',
+        '$2,150.00',
+        '2026-10-05',
+        'EXP-2026-103',
+      ],
+      [
+        'Héctor Villalobos Méndez',
+        '+528187654304',
+        'hvillalobos@ejemplo.mx',
+        '$19,800.00',
+        '2026-07-20',
+        'EXP-2026-104',
+      ],
+      [
+        'Sofía Castellanos Luna',
+        '+525571112205',
+        'sofia.luna@ejemplo.mx',
+        '$6,300.00',
+        '2026-09-10',
+        'EXP-2026-105',
+      ],
+    ];
+    const csv = sampleRows
+      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'arkangel-demo-deudores.csv';
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -369,12 +446,26 @@ export default function App() {
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             <div className="lg:col-span-1 space-y-6">
-              <Dropzone
-                onFile={subirCsv}
-                busy={busy}
-                columns="Columnas: nombre, telefono, monto, vencimiento"
-                hint="o haz clic para seleccionar. Máx 10MB."
-              />
+              <div className="space-y-2">
+                <Dropzone
+                  onFile={subirCsv}
+                  busy={busy}
+                  columns="Columnas: nombre, telefono, monto, vencimiento"
+                  hint="o haz clic para seleccionar. Máx 10MB."
+                />
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-[11px] text-slate-500">
+                    ¿Sin archivo a la mano? Prueba la ingesta con datos sintéticos:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={descargarCsvPrueba}
+                    className="text-[11px] font-medium text-emerald-700 hover:text-emerald-600 underline underline-offset-2"
+                  >
+                    Descargar CSV de prueba
+                  </button>
+                </div>
+              </div>
 
               <Card className="p-5" watermark={WATERMARK}>
                 <div className="flex items-center justify-between gap-3">
@@ -408,28 +499,66 @@ export default function App() {
 
               <DarkPanel title="Estado del Sistema" icon={Activity} watermark={WATERMARK_DARK}>
                 <div className="space-y-3 text-xs font-mono">
-                  <DarkRow label="D1 Database" value="OK" />
-                  <DarkRow label="Workers AI (redactMessage)" value="Operativo" />
                   <DarkRow
-                    label="arkangel-cobranza-queue"
-                    value={`${enCola} pendientes`}
-                    tone={enCola > 0 ? 'warn' : 'ok'}
+                    label="D1 Database"
+                    value={
+                      sys
+                        ? sys.d1.ok
+                          ? `OK · ${sys.d1.latency_ms}ms (${sys.d1.clients_total} cte)`
+                          : 'Error D1'
+                        : 'Conectando…'
+                    }
+                    tone={!sys ? 'muted' : sys.d1.ok ? 'ok' : 'err'}
                   />
                   <DarkRow
-                    label="Motor legal (12 reglas)"
-                    value={legal?.identidad_configurada ? 'OK' : 'Bloqueado'}
-                    tone={legal?.identidad_configurada ? 'ok' : 'err'}
+                    label={`Workers AI (${sys?.workers_ai.model ?? 'llama-3.3-70b'})`}
+                    value={
+                      sys
+                        ? sys.workers_ai.ok
+                          ? sys.workers_ai.dry_run
+                            ? 'Dry-Run'
+                            : 'Operativo'
+                          : 'Sin binding'
+                        : 'Verificando…'
+                    }
+                    tone={!sys ? 'muted' : sys.workers_ai.ok ? 'ok' : 'err'}
+                  />
+                  <DarkRow
+                    label="arkangel-cobranza-queue"
+                    value={
+                      sys
+                        ? sys.queue.sending > 0
+                          ? `${sys.queue.ready} listos · ${sys.queue.sending} env.`
+                          : `${sys.queue.ready} pendientes`
+                        : `${enCola} pendientes`
+                    }
+                    tone={(sys?.queue.ready ?? enCola) > 0 ? 'warn' : 'ok'}
+                  />
+                  <DarkRow
+                    label={`Motor legal (${sys?.legal_engine.reglas_activas ?? 12} reglas · ${sys?.legal_engine.conductas_auditadas ?? 48} cond.)`}
+                    value={
+                      (sys?.legal_engine.ok ?? legal?.identidad_configurada)
+                        ? `OK${sys?.legal_engine.condusef ? ` · ${sys.legal_engine.condusef}` : ''}`
+                        : 'Bloqueado (Fail-closed)'
+                    }
+                    tone={(sys?.legal_engine.ok ?? legal?.identidad_configurada) ? 'ok' : 'err'}
                   />
                   <DarkRow
                     label="Ventana legal (NOM-184)"
-                    value={`${String(ventana.inicio).padStart(2, '0')}:00-${String(ventana.fin).padStart(2, '0')}:00`}
-                    tone="muted"
+                    value={`${String(ventana.inicio).padStart(2, '0')}:00-${String(ventana.fin).padStart(2, '0')}:00 · ${
+                      sys ? (sys.ventana.abierta_ahora ? 'Abierta' : 'Cerrada') : 'CDMX'
+                    }`}
+                    tone={!sys ? 'muted' : sys.ventana.abierta_ahora ? 'ok' : 'warn'}
                   />
                   <div className="pt-3 mt-3 border-t border-slate-800 space-y-3">
-                    <RateBar label="Rate Limit (WhatsApp)" value={envios % 42} max={42} />
+                    <RateBar
+                      label="Rate Limit (WhatsApp RPM)"
+                      value={sys?.rate_limit.whatsapp_rpm ?? 0}
+                      max={sys?.rate_limit.max_rpm ?? 42}
+                    />
                     <DarkRow
                       label="Mensajes enviados hoy"
-                      value={envios.toLocaleString('es-MX')}
+                      value={(sys?.rate_limit.enviados_hoy ?? envios).toLocaleString('es-MX')}
                       tone="muted"
                     />
                   </div>

@@ -89,6 +89,9 @@ class FakeOperatorD1 {
     if (sql.includes('COUNT(*) AS total FROM messages')) {
       return { total: 1 };
     }
+    if (sql.includes('COUNT(*) AS total FROM clients')) {
+      return { total: this.clients.length };
+    }
     if (sql.includes('SELECT row_hash FROM legal_audit')) {
       return null;
     }
@@ -308,5 +311,28 @@ describe('Drawer del Operador y Softphone (/api/v1/cases/:id/*)', () => {
     expect(endRes.status).toBe(200);
     expect(db.messages).toHaveLength(1);
     expect(String(db.messages[0]?.body)).toContain('Llamada Softphone · 95s');
+  });
+
+  it('GET /system/status devuelve telemetría en vivo de D1, Workers AI, Cola, Motor Legal y RPM', async () => {
+    const db = new FakeOperatorD1();
+    const res = await makeApp().request(
+      '/api/v1/system/status?date=2026-10-22',
+      { headers: AUTH_HEADERS },
+      makeEnv(db)
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      d1: { ok: boolean; latency_ms: number; clients_total: number };
+      legal_engine: { ok: boolean; reglas_activas: number; conductas_auditadas: number };
+      rate_limit: { whatsapp_rpm: number; max_rpm: number };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.d1.ok).toBe(true);
+    expect(body.d1.clients_total).toBe(1);
+    expect(body.legal_engine.ok).toBe(true);
+    expect(body.legal_engine.reglas_activas).toBe(12);
+    expect(body.legal_engine.conductas_auditadas).toBe(48);
+    expect(body.rate_limit.max_rpm).toBe(42);
   });
 });

@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { adapters } from '../channels';
 import { formatMXNShort } from '../lib/money';
 import { maskPhone } from '../lib/phone';
+import { isWithinSendWindow, localHour } from '../lib/score';
 import { configLegal } from '../legal/config';
 import { catalogoReglas, evaluarMensaje } from '../legal/motor';
 import type { AuthVars } from '../auth/middleware';
@@ -626,5 +627,113 @@ api.get('/legal/hoy', async (c) => {
     ventana: { inicio: legal.horaInicio, fin: legal.horaFin },
     resumen,
     auditoria,
+  });
+});
+
+/**
+ * Telemetría en vivo del sistema para el widget "Estado del Sistema".
+ * Mide latencia real de D1, estado de Workers AI, cola activa, motor legal,
+ * ventana NOM-184 en tiempo real y RPM del Durable Object / D1.
+ */
+api.get('/system/status', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'metrics:read');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+
+  const date = c.req.query('date') ?? todayIso(ctx.config.tz);
+  const t0 = Date.now();
+
+  let d1Ok = true;
+  let clientsTotal = 0;
+  let rpmDb = 0;
+  try {
+    const oneMinAgo = new Date(Date.now() - 60_000).toISOString();
+    const [clientsRow, rpmRow] = await Promise.all([
+      ctx.env.DB.prepare('SELECT COUNT(*) AS total FROM clients WHERE tenant_id = ?')
+        .bind(ctx.tenantId)
+        .first<{ total: number }>(),
+      ctx.env.DB.prepare(
+        "SELECT COUNT(*) AS total FROM messages WHERE tenant_id = ? AND direction = 'outbound' AND created_at >= ?"
+      )
+        .bind(ctx.tenantId, oneMinAgo)
+        .first<{ total: number }>(),
+    ]);
+    clientsTotal = Number(clientsRow?.total ?? 0);
+    rpmDb = Number(rpmRow?.total ?? 0);
+  } catch {
+    d1Ok = false;
+  }
+  const latencyMs = Math.max(1, Date.now() - t0);
+
+  const [metrics, resumen] = await Promise.all([
+    dailyMetrics(ctx, date),
+    resumenCumplimiento(ctx, date),
+  ]);
+
+  const maxRpm = ctx.config.rateLimitRpm || 42;
+  let doRpm = 0;
+  try {
+    if (ctx.env.RATE_LIMITER) {
+      const doId = ctx.env.RATE_LIMITER.idFromName(`${ctx.tenantId}:whatsapp`);
+      const stub = ctx.env.RATE_LIMITER.get(doId);
+      const res = await stub.fetch(`https://rate-limiter/status?action=status&rpm=${maxRpm}`);
+      if (res.ok) {
+        const data = await res.json<{ count?: number }>();
+        doRpm = Number(data.count ?? 0);
+      }
+    }
+  } catch {
+    /* fallback silencioso al conteo de ventana de 60s en D1 */
+  }
+
+  const legal = configLegal(ctx);
+  const reglasActivas = catalogoReglas().length;
+  const now = new Date();
+  const abiertaAhora = isWithinSendWindow(now, legal.horaInicio, legal.horaFin, ctx.config.tz);
+  const horaLocal = localHour(now, ctx.config.tz);
+  const aiModel = (ctx.env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast')
+    .replace('@cf/meta/', '')
+    .replace('-instruct-fp8-fast', '');
+
+  return c.json({
+    ok: true,
+    timestamp: now.toISOString(),
+    d1: {
+      ok: d1Ok,
+      latency_ms: latencyMs,
+      clients_total: clientsTotal,
+    },
+    workers_ai: {
+      ok: Boolean(ctx.env.AI),
+      model: aiModel,
+      dry_run: ctx.config.dryRun,
+    },
+    queue: {
+      ok: Boolean(ctx.env.COBRANZA_QUEUE),
+      ready: metrics.por_estado?.ready ?? 0,
+      sending: metrics.por_estado?.sending ?? 0,
+    },
+    legal_engine: {
+      ok: Boolean(legal.nombreLegal && legal.condusef),
+      reglas_activas: reglasActivas,
+      conductas_auditadas: 48,
+      razon_social: legal.nombreLegal || null,
+      condusef: legal.condusef || null,
+      bloqueos_hoy: resumen.bloqueos,
+    },
+    ventana: {
+      inicio: legal.horaInicio,
+      fin: legal.horaFin,
+      tz: ctx.config.tz,
+      hora_local: horaLocal,
+      abierta_ahora: abiertaAhora,
+    },
+    rate_limit: {
+      whatsapp_rpm: Math.min(maxRpm, Math.max(doRpm, rpmDb)),
+      max_rpm: maxRpm,
+      enviados_hoy: metrics.enviadas,
+    },
   });
 });

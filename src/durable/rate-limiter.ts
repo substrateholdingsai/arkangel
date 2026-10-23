@@ -16,7 +16,8 @@ export class RateLimiterDO extends DurableObject<Env, RateLimiterState> {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const action = url.searchParams.get('action') ?? 'acquire';
+    const pathAction = url.pathname.replace(/^\/+/, '');
+    const action = url.searchParams.get('action') ?? (pathAction || 'acquire');
     const rpm = Number(url.searchParams.get('rpm') ?? '42');
     const windowMs = 60000;
 
