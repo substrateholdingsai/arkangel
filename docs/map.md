@@ -1,529 +1,317 @@
 # ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · **23 suites / 358 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.
-> Última actualización: 2026-10-25 (Sprint 13: Conector ATEB Servicios PSC — Secretaría de Economía Acreditado, Capa Transversal de Custodia WORM 10 años conforme a Art. 49 Código de Comercio, Cuaderno Procesal Judicial Art. 1298-A CCom y Materialidad Fiscal SAT CFF Arts. 29-A y 69-B / LISR Art. 27 Fracc. XV).
+> **Estado**: `main` · **23 suites / 358 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.  
+> Última actualización: **2026-10-25** (Sprint 13: Conector ATEB Servicios PSC — Acreditado Secretaría de Economía, Custodia Criptográfica WORM 10 años Art. 49 CCom, Cuaderno Procesal Judicial Art. 1298-A CCom y Materialidad Fiscal SAT Arts. 29-A / 69-B CFF y 27 Fracc. XV LISR + Cierre formal de Spike de Voz con Telnyx Voice AI Assistants en producción).
 
-## Vista general
+---
 
-Worker Cloudflare (Hono/TS) de cobranza asistida por IA sobre WhatsApp/SMS/Email + Softphone Auditado.
-D1 + KV + Queues + Durable Objects + R2. Workers AI (Llama 3.3) con fallback
-heurístico. Motor legal fail-closed (12 reglas / 48 conductas auditadas). Scoring Sherman v2. Dashboard
-"1 botón · 0 tablas" con bandeja de escalamiento humano, **Copilot IA para operadores**, **conciliación de pagos en tiempo real (Conekta / Cobre / CSV bancario)** y **configuración self-serve del despacho**. Módulo contable: `legal_audit` → asientos → Alegra (MCP).
-**Multi-tenant completo en datos**: `tenant_id` en todas las tablas de negocio (Fase 4),
-identidad nativa en D1, config por tenant editable en UI (Fase 2 + UI Self-Serve), catálogo de tenants (Fase 1).
+## 1. Vista general y nuevos paradigmas
 
-## Estructura
+Arkangel es una plataforma de cobranza agéntica, omnicanal y de certeza procesal ejecutada en el edge sobre **Cloudflare Workers (Hono/TypeScript)** con stack desacoplado:
+* **Almacenamiento y Eventos**: Cloudflare D1 (SQLite distribuido) + KV (caché distribuida) + Queues (despacho asíncrono) + Durable Objects (rate limiter por tenant/canal y gestión de estados de llamadas) + R2 (almacenamiento de cortes y evidencias).
+* **Inteligencia Artificial Dual**:
+  * Workers AI (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`) para redacción asistida, clasificación de intenciones y Copilot del operador.
+  * **Telnyx Voice AI Assistants**: Telefonía saliente PSTN a números móviles y fijos de México (+52), latencia conversacional ultrabaja (< 800 ms), Answering Machine Detection (AMD hardware), grabación estéreo dual-channel y puenteo en caliente a humanos (`call.bridge`).
+* **Protocolo A2A (Agent-to-Agent Collections)**: Servidor MCP JSON-RPC 2.0 (`/api/v1/a2a/mcp`) y endpoints REST para negociación autónoma programática entre agentes deudores de IA y el despacho, con verificación estricta de secreto financiero (Reglas CONDUSEF 4.1 y 4.2) y quitas algorítmicas deterministas.
+* **Portal de Autoservicio del Deudor**: Riel público `/pay/:id` con desglose de quita, **1-Click SPEI Checkout** (resolución automática de banco receptor STP/BBVA/Banamex/etc.) y emisión digital de Carta Convenio y Carta Finiquito con sello SHA-256 (Art. 112 Bis LFPC).
+* **Certeza Jurídica & Prueba Plena (NOM-151 + ATEB PSC)**:
+  * Motor de Constancias Digitales NOM-151-SCFI-2016 con hash determinista SHA-256 de mensajes de datos.
+  * **Conector Dual-Engine ATEB PSC**: Modo A (Cumplimiento Pleno Oficial con estampillas RFC 3161 TSA y constancias ASN.1 DER del PSC acreditado por la Secretaría de Economía) y Modo B (Evidencia Interna Preparada para Migración con failover resiliente).
+  * **Custodia WORM (Write Once, Read Many)**: Bitácora inmutable encadenada con retención mínima obligatoria de 10 años conforme al Art. 49 del Código de Comercio.
+  * **Cuaderno Procesal Judicial & Carpeta SAT**: Expediente foliado descargable e imprimible para Juicios Ejecutivos y Orales Mercantiles (Art. 1298-A CCom) con cálculo de intereses moratorios al 6% anual (Art. 362 CCom) y materialidad fiscal probatoria ante el SAT (Arts. 29-A y 69-B CFF, y deducción de incobrables Art. 27 Fracc. XV LISR).
+* **Motor Legal Fail-Closed**: Auditoría estricta de 12 reglas / 48 conductas prohibidas (CONDUSEF / REDECO / NOM-184 / LFPC / Código Penal Federal).
+* **Scoring Sherman v2**: Algoritmo de propensión de pago y priorización de cartera con calibración continua.
+* **Módulo Contable (Alegra MCP)**: Reconciliación contable en dos fases, idempotencia criptográfica y publicación diaria en R2 y Alegra.
+* **Multi-Tenant Total**: Aislamiento estricto de datos con `tenant_id` en todas las tablas, RBAC en tres roles (`owner`, `admin`/operador, `member`/auditor), catálogo contable por despacho y consola de configuración self-serve.
+
+---
+
+## 2. Estructura del repositorio
 
 ```
 src/
-├── index.ts                 entry, routing, dispatch de cron (6 AM cobranza / 23:59 CDMX contable)
-├── routes/                  health · ingest · api · webhooks (whatsapp/telnyx/resend/conekta/cobre) ·
-│                            agent (Grok Bot) · contabilidad · autenticacion (login/register/logout/session) ·
-│                            guard (scope por ruta) · tenant (contexto) · auth (cabeceras)
-├── services/                casos, clientes, deudas, mensajes, promesas, metricas, pagos (conciliación),
-│                            legalAudit (ledger append-only), eventos, contratos, ingesta, db
-├── orquestacion/            disparador, consumidor (cola), inbound, voice
-├── legal/                   motor, reglas (catálogo), config, sanitizador, tipos
-├── ai/                      agent (redactMessage + streaming), classify, copilot (asistente operador), prompts
-├── channels/                whatsapp, telnyx, telnyxVoice (Call Control v2 / WebRTC), resend, conekta (SPEI/OXXO), cobre (SPEI B2B), types, diagnostics
-├── cron/                    manana · contabilidadDaily · reconciliacion
-├── contabilidad/            buildPayload · sendToAlegra · alegraClient · schemas
-├── tenancy/                 types · config (resolución) · context · repository · channels · keys ·
-│                            referencia (cabecera de tenant)
-├── auth/                    native (PBKDF2, sesiones, membresías) · middleware (sesión +
-│                            membresía) · guards (principal + scope) · scopes (catálogo) ·
-│                            principal · email (Resend)
-├── durable/                 call-lock · call-session · rate-limiter
-├── voice/                   stt (Deepgram Nova-3) · tts (Deepgram Aura-2-ES)
-├── lib/                     crypto, csv, http, idempotencia, logger, medidas, money, phone, score
-└── types/                   env, cobranza
-frontend/                    React + Vite (dashboard) + AuthProvider/AuthGate
-│                            ├── App.tsx (KPIs, Dropzone, Casos con Buscador/Sort/Paginación, Telemetría Viva, Motor Legal)
-│                            ├── OperatorDrawer.tsx (Diagnóstico IA, Semáforo NOM-184, Sherman v2, Softphone Telnyx PSTN/Directo, Micrófono Real, Transferencia en Caliente)
-│                            ├── CopilotWidget.tsx (Mascota 3D Spline, Web Speech API, Chat IA con Worker en vivo)
-│                            ├── TenantSettingsModal.tsx (Configuración legal/operativa self-serve, Test Canales + Webhooks)
-│                            └── auth/: AuthContext · AuthGate
-design-system/               Meridian Core v1.0: tokens + componentes reutilizables
-migrations/                  0001_init · 0002_legal · 0003_alegra_sync · 0004_tenants ·
-│                             0005_clerk_auth · 0006_tenant_isolation · 0007_native_auth ·
-│                             0008_drop_clerk · 0009_tenant_config · 0010_spike_calls · 0011_a2a_protocol
+├── index.ts                 Entry point, routing global, triggers de cron (6:00 AM CDMX cobranza / 23:59 CDMX contable)
+├── routes/                  
+│   ├── health.ts            Health check (/api/v1/health) y liveness del worker
+│   ├── ingest.ts            Ingesta de carteras CSV multipart o JSON (/api/v1/ingest/csv)
+│   ├── api.ts               Core API: casos, softphone, llamadas, notas, CFDI, conciliación, métricas, copilot, tenants
+│   ├── nom151.ts            Constancias NOM-151, emisión, verificación judicial pública, bitácora WORM, cuaderno procesal y config ATEB PSC
+│   ├── portal.ts            Portal público de autoservicio del deudor (/api/v1/portal/*, /pay/:id, cartas finiquito)
+│   ├── a2a.ts               Protocolo Agent-to-Agent: auth con secreto financiero, negociación de quitas y servidor MCP JSON-RPC 2.0
+│   ├── webhooks.ts          Recepción y validación criptográfica (Telnyx Ed25519, Meta HMAC-SHA256, Resend, Conekta RSA, Cobre HMAC)
+│   ├── agent.ts             Endpoints agénticos del Grok Bot (/api/v1/state, /decide, /dispatch, /audit, /classify, /calibrate)
+│   ├── contabilidad.ts      Corte contable diario y resumen para auditoría (/api/v1/contabilidad/resumen)
+│   ├── autenticacion.ts     Auth nativa (login, logout, session, request-password-reset, reset-password, change-password)
+│   ├── guard.ts             Guardias de seguridad y validación de scopes por rol
+│   ├── tenant.ts            Resolución de contexto multitenant
+│   ├── auth.ts              Helpers de autenticación y cabeceras
+│   └── spike.ts             Rutas de benchmarking experimental (archivado)
+├── services/                
+│   ├── casos.ts             Gestión del ciclo de vida de casos (ready, queued, contacted, promised, paid, escalated, dnd)
+│   ├── clientes.ts          Directorio de titulares deudores, teléfonos E.164, CURP y RFC
+│   ├── deudas.ts            Obligaciones financieras, saldos pendientes y fechas de vencimiento
+│   ├── contratos.ts         Contratos base, razones sociales, cuentas CLABE de 18 dígitos y registro REDECO
+│   ├── mensajes.ts          Bitácora omnicanal de mensajes (WhatsApp, SMS, Email, Softphone)
+│   ├── promesas.ts          Registro y cómputo de promesas de pago (IA, Softphone, A2A, Portal)
+│   ├── metricas.ts          Cómputo en tiempo real de KPIs diarios (incluyendo llamadas y minutos Voice AI)
+│   ├── pagos.ts             Motor de conciliación canónica de pagos (Conekta, Cobre, extracto bancario CSV)
+│   ├── legalAudit.ts        Ledger criptográfico append-only de cumplimiento legal y reglas CONDUSEF
+│   ├── eventos.ts           Trazabilidad de auditoría unificada de plataforma
+│   ├── ingesta.ts           Procesamiento y saneamiento de archivos CSV de carteras
+│   ├── nom151.ts            Motor criptográfico de constancias digitales NOM-151-SCFI-2016 y hashing SHA-256
+│   ├── atebPscClient.ts     Cliente WebService SOAP/REST para ATEB Servicios PSC (Modo A oficial / Modo B presuntivo)
+│   ├── custodyWorm.ts       Bitácora de custodia inmutable encadenada WORM (retención a 10 años Art. 49 CCom)
+│   ├── judicialDocket.ts    Generador de Cuaderno Procesal Judicial (Art. 1298-A CCom) y Carpeta Fiscal SAT (Arts. 29-A, 69-B CFF, 27-XV LISR)
+│   ├── debtorPortal.ts      Lógica de consulta, cálculo de quitas y emisión de finiquitos para deudores
+│   ├── a2a.ts               Lógica de secreto financiero, evaluación de ofertas y convenios entre agentes
+│   └── db.ts                Helpers y tipos para consultas en Cloudflare D1
+├── orquestacion/            Disparador de cartera, consumidor de cola Cloudflare Queues, inbound y orquestador
+├── legal/                   Motor legal fail-closed, catálogo de 12 reglas, sanitizador y tipos legales
+├── ai/                      Agente LLM Workers AI, streaming, clasificación de intenciones, copilot y prompts
+├── channels/                
+│   ├── whatsapp.ts          Adaptador WhatsApp Business vía Telnyx API v2 con validación Ed25519
+│   ├── telnyx.ts            Adaptador SMS transaccional con palabras clave de opt-out (STOP/BAJA)
+│   ├── telnyxVoice.ts       Telefonía PSTN Call Control v2, Voice AI Assistants, AMD, WebRTC y bridging
+│   ├── resend.ts            Adaptador de correo electrónico transaccional y reportes
+│   ├── conekta.ts           Integración de pasarela SPEI / OXXO Pay con órdenes de CLABE dinámica
+│   ├── cobre.ts             Integración de pagos B2B corporativos vía rieles SPEI
+│   ├── diagnostics.ts       Diagnóstico interactivo de conectividad y handshake de canales con telemetría
+│   └── types.ts             Interfaces comunes de adaptadores
+├── cron/                    Crons programados: manana.ts (cobranza 6 AM CDMX), contabilidadDaily.ts (23:59 CDMX), reconciliacion.ts
+├── contabilidad/            buildPayload, sendToAlegra, alegraClient (MCP JSON-RPC 2.0 / SSE) y esquemas Zod
+├── tenancy/                 Tipos, resolución de contexto, repositorio, canales por tenant, llaves y middleware
+├── auth/                    Autenticación nativa (PBKDF2-SHA256), sesiones hasheadas en D1, membresías, guards, scopes y email Resend
+├── durable/                 Durable Objects: RateLimiterDO (límites atómicos por tenant/canal), CallLockDO y CallSessionDO
+├── lib/                     Criptografía, parseo CSV, utilidades HTTP, idempotencia, logger estructurado W3C, money, phone, score
+└── types/                   Variables de entorno (env.ts) y modelos de cobranza (cobranza.ts)
+
+frontend/                    Single Page Application React + Vite + Tailwind CSS
+├── App.tsx                  Dashboard principal: KPIs omnicanal y Voice AI, Dropzone CSV, tabla con buscador/orden/paginación, telemetría
+├── OperatorDrawer.tsx       Workspace del operador: Diagnóstico IA, Semáforo NOM-184, Sherman v2, Softphone Telnyx PSTN/AI, links a NOM-151 y Cuaderno
+├── Nom151Modal.tsx          Modal de constancias NOM-151, acta notarial imprimible y cotejo pericial
+├── JudicialDocketModal.tsx  Modal del Cuaderno Judicial y Carpeta Fiscal SAT con liquidación de intereses (Art. 362 CCom) y exportación PDF
+├── DebtorPortal.tsx         Portal público de autoservicio del deudor: 1-Click SPEI Checkout y descarga de Carta Finiquito
+├── CopilotWidget.tsx        Mascota 3D interactiva Spline ("Ark"), reconocimiento de voz Web Speech API y asistente IA con Worker
+├── TenantSettingsModal.tsx  Configuración self-serve del despacho: Razón Social, REDECO, Sincronización en 1-clic Asistente Telnyx, Test Canales
+├── AccountingReportModal.tsx Visualización de corte contable en vivo (?live=1) y verificación de cadena de bloques del ledger
+├── main.tsx                 Punto de entrada React
+└── auth/                    AuthContext.tsx y AuthGate.tsx (inicio de sesión, selector de despachos y recuperación de contraseña)
+
+design-system/               Meridian Core: componentes accesibles reutilizables (KpiCard, DataTable, PageShell, Dropzone, Button, Alert, etc.)
+migrations/                  0001 a 0013 (init, legal, alegra, tenants, native auth, tenant config, a2a, nom151, ateb_psc_integration)
 scripts/                     seed.sql, seed-demo-data.sql, seed-owner.ts, forge_arkangel_watermark.py
-docs/                        arquitectura.md · map.md · runbook-cobranza.md · demo-deudores.csv · ARKANGEL-MERIDIAN.md
-tests/                       20 archivos (326 tests: unit + telnyx voice ai/webrtc + auth nativa + operador + copilot + pagos Conekta/Cobre + protocolo A2A + MCP + canales/diagnóstico + semáforo NOM-184)
+docs/                        Documentación técnica de arquitectura, spike de voz, contrato Alegra MCP, instructivos por rol (INDEX + 01 al 06)
+tests/                       23 suites unitarias y de integración (358 tests aprobados al 100%)
 ```
 
-## Endpoints
+---
 
-Auth = sesión nativa (cookie `ark_session`) o token de máquina.
-Cada ruta exige **su** scope: sin credencial → 401, con credencial pero sin scope → 403.
+## 3. Matriz de endpoints del Worker
 
-| Método   | Ruta                                       | Scope                                             | Descripción                                                                               |
-| -------- | ------------------------------------------ | ------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| POST     | `/api/auth/register`                       | —                                                 | **Cerrado** (403 `registro_cerrado`): el panel es por invitación; altas con `seed-owner`  |
-| POST     | `/api/auth/login`                          | público                                           | Verifica la contraseña (PBKDF2) y emite la cookie `ark_session`                           |
-| POST     | `/api/auth/logout`                         | sesión                                            | Revoca la sesión en D1 y borra la cookie                                                  |
-| GET      | `/api/auth/session`                        | público                                           | Usuario y despachos, si la cookie es válida                                               |
-| POST     | `/api/auth/request-password-reset`         | público                                           | Envía el enlace de restablecimiento (siempre 202)                                         |
-| POST     | `/api/auth/reset-password`                 | público                                           | Consume el enlace y fija la nueva contraseña                                              |
-| GET      | `/api/v1/health`                           | público                                           | Liveness del worker                                                                       |
-| POST     | `/api/v1/ingest/csv`                       | `ingest:write`                                    | Ingesta del CSV (multipart o JSON)                                                        |
-| GET      | `/api/v1/cases/today`                      | `cases:read`                                      | Casos del día + vista previa                                                              |
-| GET      | `/api/v1/metrics/today`                    | `metrics:read`                                    | Métricas del día                                                                          |
-| POST     | `/api/v1/disparar`                         | `cases:dispatch`                                  | Encola los casos listos (botón verde)                                                     |
-| GET      | `/api/v1/cases/:id`                        | `cases:read`                                      | Detalle de un caso                                                                        |
-| GET      | `/api/v1/cases/:id/workspace`              | `cases:read`                                      | Workspace del operador: caso, cliente, contrato, deudas, mensajes y **Diagnóstico IA**    |
-| POST     | `/api/v1/cases/:id/reply`                  | `messages:send`                                   | Respuesta humana auditada por las 12 reglas del Motor Legal (422 si viola)                |
-| POST     | `/api/v1/cases/:id/resolve`                | `cases:resolve`                                   | Resolución humana (`promise`, `paid`, `dnd`, `return_to_ai`)                              |
-| POST     | `/api/v1/cases/:id/call`                   | `messages:send`                                   | Softphone auditado: inicio con guion CONDUSEF (`start`) con opción Telnyx PSTN / Voice AI + AMD y bitácora de cierre (`complete`) |
-| POST     | `/api/v1/cases/:id/call/transfer`          | `messages:send`                                   | Transferencia en caliente de llamada activa (Call Bridging AI ↔ Operador Humano)          |
-| GET      | `/api/v1/telnyx/webrtc-token`              | `messages:send`                                   | Emite credenciales SIP/WebRTC para el softphone del operador autenticado en el navegador |
-| POST     | `/api/v1/telnyx/assistant/sync`            | `legal:config`                                    | Sincroniza/aprovisiona el Asistente de Voz Legal en Telnyx inyectando reglas CONDUSEF     |
-| POST     | `/api/v1/cases/:id/notes`                  | `cases:resolve`                                   | Notas internas manuales del operador sobre la ficha del caso                              |
-| PUT      | `/api/v1/cases/:id/cfdi`                   | `cases:write`                                     | Vincula UUID de CFDI timbrado (SAT) al contrato (`contract_cfdi` → `cfdi_relacionado`)    |
-| POST     | `/api/v1/payments/reconcile`               | `cases:resolve`                                   | Conciliación de pagos individual (JSON) o masiva (CSV bancario BBVA/Banorte/STP)          |
-| GET      | `/api/v1/system/status`                    | `metrics:read`                                    | Telemetría en vivo: D1 latencia/clientes, Workers AI, Cola, Motor Legal, Ventana y RPM    |
-| POST     | `/api/v1/copilot/chat`                     | `cases:read`                                      | Copilot IA para operadores con acceso en vivo al estado del Worker y caso activo          |
-| GET      | `/api/v1/tenant/settings`                  | `legal:read`                                      | Configuración legal/operativa del despacho + URLs de webhooks                             |
-| PUT      | `/api/v1/tenant/settings`                  | `legal:config`                                    | Guardado self-serve de Razón Social, REDECO, dominios, ventana NOM-184 y modo IA          |
-| GET      | `/api/v1/tenant/channels`                  | `legal:read`                                      | Canales activos e inactivos del despacho (`whatsapp`, `sms`, `email`) + enrutado          |
-| PUT      | `/api/v1/tenant/channels`                  | `legal:config`                                    | Configuración self-serve de canales activos y credenciales de enrutado por el Manager     |
-| POST     | `/api/v1/tenant/channels/test`             | `legal:read`                                      | Test interactivo de handshake y credenciales de canal (Telnyx / WhatsApp / Resend)        |
-| GET      | `/api/v1/tenant/members`                   | `legal:read`                                      | Lista de miembros del despacho (`owner`, `admin`/operador, `member`/viewer)               |
-| POST     | `/api/v1/tenant/members/invite`            | `legal:config`                                    | Invitación self-serve de miembros por correo (Resend + enlace de activación de 7 días)    |
-| DELETE   | `/api/v1/tenant/members/:userId`           | `legal:config`                                    | Revocación de acceso de un miembro (con protección del último `owner`)                    |
-| GET      | `/api/v1/clients/:id`                      | `clients:read`                                    | Cliente + deudas pendientes                                                               |
-| GET      | `/api/v1/clients/:id/conversation`         | `messages:read`                                   | Historial de mensajes                                                                     |
-| GET      | `/api/v1/legal/catalogo`                   | `legal:read`                                      | 12 reglas con ley, artículo y castigo                                                     |
-| GET      | `/api/v1/legal/hoy`                        | `legal:read`                                      | Resumen de cumplimiento + auditoría                                                       |
-| GET      | `/api/v1/contabilidad/resumen`             | `accounting:read`                                 | Corte contable (JSON de R2 o cálculo en vivo con `?live=1`)                               |
-| GET      | `/api/v1/tenant/accounting-map`            | `accounting:read`                                 | Catálogo de cuentas contables Alegra por regla legal del despacho (auto-seed 12 reglas)   |
-| PUT      | `/api/v1/tenant/accounting-map`            | `legal:config`                                    | Edición self-serve de cuentas Débito/Crédito y tipo de póliza por despacho (Fase 6)       |
-| GET      | `/api/v1/reports/daily`                    | `metrics:read`                                    | Reporte Ejecutivo Diario consolidado (Cobranza + Cumplimiento CONDUSEF + Contabilidad)    |
-| POST     | `/api/v1/reports/daily/send`               | `metrics:read`                                    | Envío por correo (Resend) del Reporte Ejecutivo Diario a propietarios/contadores          |
-| GET      | `/api/v1/state`                            | `agent:read`                                      | Estado del bot (modo, cola, pendientes)                                                   |
-| POST     | `/api/v1/decide` · `/dispatch` · `/audit`  | `agent:decide` · `agent:dispatch` · `agent:audit` | Decisión, envío y auditoría de acciones                                                   |
-| POST     | `/api/v1/bot/classify` · `/classify`       | `agent:decide`                                    | Clasificación en tiempo real por Grok Bot + transición automática de promesa/humano       |
-| POST     | `/api/v1/scoring/calibrate` · `/calibrate` | `agent:decide`                                    | Calibración continua de scoring Sherman v2 y umbrales autónomos según conversión real     |
-| GET/POST | `/webhooks/whatsapp`                       | firma de Meta                                     | Verificación del challenge + mensajes y estados                                           |
-| POST     | `/webhooks/telnyx`                         | firma Ed25519                                     | SMS entrante y estados                                                                    |
-| POST     | `/webhooks/resend`                         | —                                                 | Email entrante                                                                            |
-| POST     | `/webhooks/conekta`                        | RSA-SHA256 `Digest`                               | Conciliación automática SPEI / OXXO Pay (Conekta v2.2 — PyMEs/Mid-Market México)          |
-| POST     | `/webhooks/cobre`                          | HMAC-SHA256 `event-signature`                     | Conciliación automática SPEI corporativo (Cobre B2B — Enterprise)                         |
-| POST     | `/api/v1/a2a/auth`                         | público                                           | Autenticación de agentes deudores con RFC/PIN (Reglas 4.1 y 4.2 CONDUSEF)                 |
-| GET      | `/api/v1/a2a/terms/:caseId`                | público / token A2A                               | Opciones de liquidación y quita máxima autorizada por política del despacho               |
-| POST     | `/api/v1/a2a/negotiate`                    | público / token A2A                               | Negociación algorítmica de quita y parcialidades: convenio con CLABE o contraoferta        |
-| GET      | `/api/v1/a2a/agreement/:id`                | público / token A2A                               | Detalle, estado y CLABE SPEI del convenio pactado entre agentes                          |
-| POST     | `/api/v1/a2a/mcp`                          | público / token A2A                               | Interfaz Model Context Protocol JSON-RPC 2.0 (`tools/list` y `tools/call` para IAs)       |
+| Método | Ruta | Scope / Auth | Descripción y propósito |
+| :--- | :--- | :--- | :--- |
+| **Autenticación Nativa** | | | |
+| POST | `/api/auth/register` | — | Cerrado (403 `registro_cerrado`): altas exclusivas por invitación o script `seed-owner` |
+| POST | `/api/auth/login` | público | Autenticación PBKDF2 y emisión de cookie segura `ark_session` (HttpOnly, SameSite=Lax, 30 días) |
+| POST | `/api/auth/logout` | sesión | Revocación inmediata de sesión en D1 y limpieza de cookie |
+| GET | `/api/auth/session` | público | Estado de la sesión actual, usuario y lista de despachos donde tiene membresía |
+| POST | `/api/auth/request-password-reset` | público | Envío seguro de enlace de restablecimiento con token hash de un solo uso vía Resend |
+| POST | `/api/auth/reset-password` | público | Validación del token de un solo uso y actualización de contraseña |
+| POST | `/api/auth/change-password` | sesión | Cambio de contraseña por el usuario activo con política estricta y revocación de sesiones previas |
+| **Operación de Cartera & Métricas** | | | |
+| GET | `/api/v1/health` | público | Liveness y health check del worker |
+| POST | `/api/v1/ingest/csv` | `ingest:write` | Ingesta de cartera (multipart CSV o JSON) con generación automática de contratos y CLABEs |
+| GET | `/api/v1/cases/today` | `cases:read` | Listado de casos activos del día con paginación y búsqueda |
+| GET | `/api/v1/metrics/today` | `metrics:read` | KPIs del día: casos, promesas, recaudación, más métricas de Voice AI (minutos, llamadas, audiopromesas) |
+| POST | `/api/v1/disparar` | `cases:dispatch` | Disparo masivo de mensajes a la cola de Cloudflare Queues respetando ventana NOM-184 |
+| GET | `/api/v1/cases/:id` | `cases:read` | Detalle específico de un caso |
+| GET | `/api/v1/cases/:id/workspace` | `cases:read` | Ficha técnica completa del caso para el operador con Diagnóstico Ejecutivo IA |
+| POST | `/api/v1/cases/:id/reply` | `messages:send` | Envío de mensaje humano filtrado e interceptado por las 12 reglas del Motor Legal (422 si viola) |
+| POST | `/api/v1/cases/:id/resolve` | `cases:resolve` | Resolución manual de caso (`promise`, `paid`, `dnd`, `return_to_ai`) |
+| POST | `/api/v1/cases/:id/notes` | `cases:resolve` | Notas internas del operador sobre el expediente del caso |
+| PUT | `/api/v1/cases/:id/cfdi` | `cases:write` | Vinculación del UUID de CFDI timbrado ante el SAT con el contrato del caso |
+| POST | `/api/v1/payments/reconcile` | `cases:resolve` | Conciliación de pagos manual individual o masiva mediante extracto bancario CSV |
+| GET | `/api/v1/system/status` | `metrics:read` | Telemetría viva del sistema: latencia D1, Workers AI, Cola, Motor Legal, Ventana NOM-184 y RPM |
+| POST | `/api/v1/copilot/chat` | `cases:read` | Chat conversacional del Copilot IA conectado en vivo a D1 y al caso en pantalla |
+| **Telefonía & Telnyx Voice AI** | | | |
+| POST | `/api/v1/cases/:id/call` | `messages:send` | Marcación saliente PSTN (+52) con AMD (detección de contestadora) o Softphone con guion legal |
+| POST | `/api/v1/cases/:id/call/transfer` | `messages:send` | Transferencia en caliente de llamada activa (Call Bridging AI ↔ Supervisor Humano) |
+| GET | `/api/v1/telnyx/webrtc-token` | `messages:send` | Generación de credenciales SIP/WebRTC para llamadas directas desde el navegador del operador |
+| POST | `/api/v1/telnyx/assistant/sync` | `legal:config` | **Sincronización en 1 clic**: Aprovisiona o actualiza el Asistente de Voz Telnyx con reglas del tenant |
+| **NOM-151, ATEB PSC & Cuaderno Judicial** | | | |
+| GET | `/api/v1/nom151/:folio` | público | Validación matemática pública del hash y constancia NOM-151 para jueces, deudores y peritos |
+| GET | `/api/v1/nom151/:folio/document` | público | Acta notarial formal de la constancia digital NOM-151 en formato imprimible |
+| GET | `/api/v1/nom151/cases/:caseId` | `cases:read` | Listado de constancias NOM-151 emitidas para un expediente |
+| POST | `/api/v1/nom151/cases/:caseId/issue` | `messages:send` | Emisión y sellado de constancia NOM-151 (Modo A ATEB PSC o Modo B presuntivo) |
+| GET | `/api/v1/nom151/cases/:caseId/worm-chain` | `cases:read` | Verificación criptográfica de integridad de la bitácora WORM encadenada (10 años Art. 49 CCom) |
+| GET | `/api/v1/nom151/cases/:caseId/docket/printable` | `cases:read` | **Cuaderno Procesal Judicial & Carpeta SAT**: Vista imprimible oficial con liquidación de intereses (6%) |
+| GET | `/api/v1/nom151/psc/settings` | `legal:config` | Consulta de credenciales del Conector ATEB PSC del despacho (enmascaradas) |
+| POST | `/api/v1/nom151/psc/settings` | `legal:config` | Configuración self-serve de credenciales ATEB PSC (Modo A Pleno vs Modo B) |
+| **Portal de Autoservicio del Deudor** | | | |
+| GET | `/api/v1/portal/:id` | público | Ficha pública segura de deudor con enmascaramiento CONDUSEF, quita autorizada y CLABE SPEI |
+| POST | `/api/v1/portal/:id/report-payment` | público | Reporte de pago SPEI por el deudor con clave de rastreo bancario; genera promesa con confianza 0.99 |
+| GET | `/pay/:id` o `/portal/:id` | público | Enrutamiento web amigable de acceso directo al portal de autoservicio |
+| **Protocolo A2A (Agent-to-Agent)** | | | |
+| POST | `/api/v1/a2a/auth` | público | Autenticación de agentes deudores con PIN o RFC/CURP conforme a Reglas 4.1 y 4.2 CONDUSEF |
+| GET | `/api/v1/a2a/terms/:caseId` | público / token A2A | Consulta de condiciones y quita máxima autorizada por las políticas del despacho |
+| POST | `/api/v1/a2a/negotiate` | público / token A2A | Negociación algorítmica de quita: emite convenio formal con CLABE o formula contraoferta |
+| GET | `/api/v1/a2a/agreement/:id` | público / token A2A | Detalle y estado del convenio pactado entre agentes |
+| POST | `/api/v1/a2a/mcp` | público / token A2A | Servidor Model Context Protocol (MCP) JSON-RPC 2.0 (`tools/list` y `tools/call` para agentes de IA) |
+| **Configuración del Despacho (Tenant Self-Serve)** | | | |
+| GET | `/api/v1/tenant/settings` | `legal:read` | Configuración legal/operativa del despacho y URLs de webhooks |
+| PUT | `/api/v1/tenant/settings` | `legal:config` | Guardado de Razón Social, REDECO, dominios, horario NOM-184 y modo de agente |
+| GET | `/api/v1/tenant/channels` | `legal:read` | Consulta de canales operativos del despacho (`whatsapp`, `sms`, `email`) |
+| PUT | `/api/v1/tenant/channels` | `legal:config` | Activación/desactivación de canales y credenciales de enrutado |
+| POST | `/api/v1/tenant/channels/test` | `legal:read` | Test interactivo de conectividad y handshake en vivo con telemetría de latencia |
+| GET | `/api/v1/tenant/members` | `legal:read` | Directorio de miembros del despacho |
+| POST | `/api/v1/tenant/members/invite` | `legal:config` | Envío de invitación por correo a nuevos miembros con enlace seguro de activación |
+| DELETE | `/api/v1/tenant/members/:userId` | `legal:config` | Revocación de acceso de un miembro del despacho (protege al último owner) |
+| **Contabilidad, Legal & Agéntico** | | | |
+| GET | `/api/v1/legal/catalogo` | `legal:read` | Catálogo de las 12 reglas con leyes, artículos y sanciones |
+| GET | `/api/v1/legal/hoy` | `legal:read` | Resumen de cumplimiento y auditorías legales del día |
+| GET | `/api/v1/contabilidad/resumen` | `accounting:read` | Resumen contable (desde R2 o proyectado en vivo con `?live=1`) |
+| GET | `/api/v1/tenant/accounting-map` | `accounting:read` | Mapa de cuentas contables Alegra por regla legal del despacho |
+| PUT | `/api/v1/tenant/accounting-map` | `legal:config` | Edición self-serve de cuentas contables débito/crédito por despacho |
+| GET | `/api/v1/reports/daily` | `metrics:read` | Reporte Ejecutivo Diario consolidado |
+| POST | `/api/v1/reports/daily/send` | `metrics:read` | Envío por correo (Resend) del Reporte Ejecutivo Diario a dueños y contadores |
+| GET | `/api/v1/state` | `agent:read` | Estado del bot agéntico (modo, cola, pendientes) |
+| POST | `/api/v1/decide` · `/dispatch` · `/audit` | `agent:decide` / etc. | Operación agéntica autónoma del bot |
+| POST | `/api/v1/bot/classify` | `agent:decide` | Clasificación en tiempo real de mensajes entrantes con transición automática |
+| POST | `/api/v1/scoring/calibrate` | `agent:decide` | Calibración algorítmica continua de Sherman v2 según cobranza real |
+| **Webhooks Receptores** | | | |
+| GET/POST | `/webhooks/whatsapp` | Meta HMAC-SHA256 | Verificación de challenge y recepción de mensajes WhatsApp Business |
+| POST | `/webhooks/telnyx` | Telnyx Ed25519 | Webhook omnicanal Telnyx: SMS, WhatsApp v2, eventos de llamada, AMD, grabaciones y Voice AI |
+| POST | `/webhooks/resend` | — | Recepción de eventos de correo electrónico |
+| POST | `/webhooks/conekta` | Conekta RSA-SHA256 | Conciliación automática de órdenes SPEI / OXXO Pay (PyME México) |
+| POST | `/webhooks/cobre` | Cobre HMAC-SHA256 | Conciliación automática de pagos SPEI corporativos (Enterprise) |
 
-Tokens de máquina: `ADMIN_TOKEN` (plataforma, break-glass), `INTAKE_TOKEN`
-(`service_ingest`) y `GROK_BOT_TOKEN` (`service_agent`). Los de servicio quedan
-acotados al tenant de la cabecera y nunca obtienen alcance de plataforma.
+---
 
-La sesión humana viaja en la cookie `ark_session` (`HttpOnly`, `SameSite=Lax`,
-30 días). `X-Tenant-Id` **selecciona** entre los despachos del usuario: pedir
-uno del que no es miembro es 403 `tenant_forbidden`, no un cambio de alcance.
+## 4. Esquema de base de datos D1
 
-## Datos
+| Tabla | Migración | Rol y contenido |
+| :--- | :--- | :--- |
+| `tenants` | 0004, 0009, 0011 | Catálogo de despachos: razón social, REDECO, ventana NOM-184, rate limit, config de agente y políticas A2A |
+| `tenant_channels` | 0004, 0009 | Enrutado y credenciales por canal de cada despacho (WhatsApp phone ID, SMS profile ID, dominio email) |
+| `tenant_memberships` | 0007 | Relación usuario ↔ despacho con asignación estricta de roles (`owner`, `admin`, `member`) |
+| `users` | 0007 | Directorio de usuarios: correo electrónico, hash PBKDF2 y rol de plataforma |
+| `auth_sessions` | 0007 | Sesiones activas con hash criptográfico SHA-256 del token, expiración y control de revocación |
+| `auth_tokens` | 0007 | Tokens temporales de un solo uso para restablecimiento de contraseña e invitaciones |
+| `auth_rate_limits` | 0007 | Control de fuerza bruta en autenticación por correo e IP |
+| `clients` | 0001, 0006, 0011 | Directorio de deudores con `tenant_id`, teléfono E.164, CURP, RFC y PIN de autenticación A2A |
+| `debts` | 0001, 0006 | Adeudos por cliente, montos en centavos, fecha de vencimiento y estado |
+| `cases` | 0001, 0006 | Casos de cobranza diarios con estado, score Sherman v2 y canal asignado |
+| `contracts` | 0001, 0006 | Contratos de cobranza con CLABE autorizada de 18 dígitos, razón social y registro REDECO |
+| `messages` | 0001, 0006 | Mensajes enviados y recibidos por todos los canales con estados de entrega |
+| `promises` | 0001, 0006 | Promesas de pago comprometidas (por IA, operador, Voice AI, portal o A2A) con montos y fechas |
+| `events` | 0001, 0006 | Bitácora de eventos y telemetría de auditoría unificada del sistema |
+| `legal_audit` | 0002, 0006 | **Ledger append-only** de cumplimiento legal con verificación de las 12 reglas CONDUSEF |
+| `ledger_checkpoint` | 0003, 0006 | Encabezado de la cadena de hashes del ledger contable y legal por fecha de corte |
+| `alegra_sync` | 0003, 0006 | Registro de sincronización con Alegra: idempotency keys, estado y journal IDs |
+| `legal_accounting_map` | 0003 | Catálogo maestro de cuentas contables Alegra por regla legal (12 reglas sembradas) |
+| `tenant_accounting_map`| 0004, 0006 | Configuración particular de cuentas contables Alegra parametrizada por despacho |
+| `alegra_journal_lines` | 0003, 0006 | Trazabilidad detallada de asientos (`legal_audit.id` → journal id en Alegra) |
+| `contract_cfdi` | 0003, 0006 | UUIDs de CFDI timbrados vinculados al contrato mercantil |
+| `intakes` | 0001, 0006 | Registro de archivos CSV ingeridos con totales de filas y metadatos |
+| `a2a_agreements` | 0011 | Convenios pactados programáticamente entre agentes de IA bajo el protocolo A2A |
+| `nom151_certificates` | 0012, 0013 | Constancias NOM-151 emitidas: folios, hashes deterministas SHA-256, sellos, proveedor PSC y nivel de cumplimiento |
+| `worm_audit_log` | 0013 | **Bitácora WORM inmutable encadenada** (`prev_hash` -> `entry_hash`) para retención de 10 años conforme a Art. 49 CCom |
+| `tenant_psc_settings` | 0013 | Credenciales de Conector ATEB PSC por despacho (Modo A oficial vs Modo B presuntivo) |
 
-| Tabla                         | Rol                                                                                |
-| ----------------------------- | ---------------------------------------------------------------------------------- |
-| `clients` · `debts` · `cases` | Cartera y casos del día                                                            |
-| `contracts`                   | Monto pactado, CLABE, razón legal (base de las reglas 8.1/3.2/4.2)                 |
-| `messages` · `promises`       | Bitácora de mensajes y promesas de pago                                            |
-| `events`                      | Auditoría append-only de cada acción                                               |
-| `legal_audit`                 | **Ledger append-only** del cumplimiento (regla, ley, artículo, castigo)            |
-| `alegra_sync`                 | Corte enviado a Alegra (idempotency key, estado, journal id)                       |
-| `legal_accounting_map`        | Mapa regla legal → cuentas contables (12 reglas sembradas)                         |
-| `alegra_journal_lines`        | Trazabilidad asiento por asiento (`legal_audit.id` → journal id)                   |
-| `ledger_checkpoint`           | Cabeza de la cadena de hashes del ledger por día                                   |
-| `contract_cfdi`               | UUID del CFDI timbrado por contrato (opcional)                                     |
-| `tenants`                     | **Catálogo de clientes**: razón social, CONDUSEF, ventana, límites, modo de config |
-| `tenant_channels`             | Enrutado y credenciales por canal (phone_number_id, messaging_profile_id, dominio) |
-| `tenant_accounting_map`       | Mapa regla legal → cuentas contables, por tenant                                   |
-| `users`                       | Identidad humana: correo, hash PBKDF2, rol de plataforma                           |
-| `tenant_memberships`          | **Rol** del usuario dentro de cada despacho (`owner`/`admin`/`member`)             |
-| `auth_sessions`               | Sesiones activas: `token_hash` (SHA-256), caducidad y revocación                   |
-| `auth_tokens`                 | Tokens de un solo uso (restablecer contraseña)                                     |
-| `auth_rate_limits`            | Ventana de intentos de acceso por correo e IP                                      |
+---
 
-## Sprints / bitácora
+## 5. Bitácora cronológica de sprints
 
-### Sprint 0 — Base
+### Sprints 0 al 5 — Fundaciones del Sistema y Aislamiento Nativo
+* **Sprint 0 — Base**: Worker Hono + D1/KV/Queue/DO, canales WhatsApp/SMS/Email, Workers AI (Llama 3.3), motor legal fail-closed (12 reglas), scoring Sherman v2, dashboard de 1 botón y cron a las 6 AM CDMX.
+* **Sprint 1 — Grok Bot (Agéntico)**: Autonomía agéntica, clasificación en tiempo real (`/bot/classify`), calibración continua (`/scoring/calibrate`) y reporte diario.
+* **Sprint 2 — Módulo Contable (Alegra MCP)**: Asientos contables automáticos vinculados al ledger legal, transporte MCP HTTP/SSE y cron a las 23:59 CDMX con almacenamiento en Cloudflare R2.
+* **Sprint 4 — Tenant Isolation y Rate Limiter**: Aislamiento estricto multi-tenant con `tenant_id` en todas las tablas de negocio, índices compuestos y rate limiter atómico distribuido en Durable Objects (`RateLimiterDO`).
+* **Sprint 5 — Identidad Nativa en D1**: Eliminación de dependencias externas de autenticación SaaS; PBKDF2-SHA256 en Worker, sesiones hasheadas en D1, cookie segura `ark_session` y RBAC en 3 niveles (`owner`, `admin`, `member`).
 
-- [x] Worker Hono + D1/KV/Queue/DO
-- [x] Canales WhatsApp/SMS/Email
-- [x] Workers AI redacción/respuestas + fallback
-- [x] Motor legal fail-closed (12 reglas)
-- [x] Scoring Sherman v2
-- [x] Dashboard 1 botón
-- [x] Cron 6 AM + ingesta CSV
+### Sprint 6 — Operación Humana, Copilot y Conciliación de Pagos
+* **Workspace del Operador (`OperatorDrawer.tsx`)**: Diagnóstico Ejecutivo IA de casos escalados, Softphone con guion obligatorio CONDUSEF e interceptor legal humano en respuestas.
+* **Copilot IA Flotante (`CopilotWidget.tsx`)**: Asistente conversacional con acceso al estado de D1 y generación de respuestas pre-blindadas.
+* **Conciliación de Pagos en 3 Tiers (`src/services/pagos.ts`)**: Tier 1 Conekta (SPEI/OXXO), Tier 2 Cobre (SPEI corporativo) y Tier 3 extracto bancario CSV.
+* **Consola Self-Serve del Despacho (`TenantSettingsModal.tsx`)**: Edición en UI de Razón Social, REDECO, ventana NOM-184 y copiado de webhooks.
 
-### Sprint 1 — Grok Bot (agéntico)
+### Sprint 7 — Telnyx v2, Seguridad Ed25519 y Reportes
+* **WhatsApp vía Telnyx v2**: Migración a la API v2 de Telnyx con verificación de firma criptográfica Ed25519 (`telnyx-signature-ed25519`) contra ataques de replay y suplantación.
+* **Gobierno RBAC e Invitaciones de Equipo**: Enrutado independiente de canales por despacho (`tenant_channels`) e invitaciones por correo con enlaces de activación de 7 días.
+* **Reporte Ejecutivo Diario**: Consolidado diario de cartera, métricas de cobranza, CONDUSEF y contabilidad vía Resend.
 
-- [x] Auth por scope del bot (`GROK_BOT_TOKEN` → rol de servicio `service_agent`:
-      `agent:read`, `agent:decide`, `agent:dispatch`, `agent:audit`). Ya no existe
-      `isAgent`: la validación de tokens vive en `src/auth/guards.ts`
-- [x] Modo supervisado / autónomo (`AGENT_MODE`)
-- [x] Endpoints state, decide, dispatch, audit
-- [x] Escalamiento por monto (`AGENT_AUTO_THRESHOLD_CENTS`) y casos molesto
-- [x] Auditoría de decisiones vía `events`
-- [x] Webhook clasificación en tiempo real por Grok (`POST /api/v1/bot/classify`)
-- [x] Ajuste continuo de prompts/scoring por resultados (`POST /api/v1/scoring/calibrate`)
-- [x] Reporte diario automatizado (`GET/POST /api/v1/reports/daily`)
+### Sprint 8 — Excelencia Operativa, Diagnóstico de Canales y Mascota 3D
+* **Buscador omnicanal en vivo, ordenamiento y paginación real** en la tabla de casos.
+* **Diagnóstico interactivo de canales**: Botón "Probar canal" con handshake en vivo y medición de latencia en milisegundos.
+* **Semáforo NOM-184 de 3 etapas y Gauge Sherman v2**: Bloqueo preventivo de softphone y envíos al alcanzar 3 contactos en 24h.
+* **Mascota 3D Spline Interactiva ("Ark")**: Esculpida en Spline, cargada de forma lazy-loaded con animación idle y dictado de voz nativo Web Speech API.
 
-### Sprint 2 — Módulo contable (Alegra MCP) — **código listo, pendiente de producción**
+### Sprint 9 — Protocolo A2A (Agent-to-Agent Collections)
+* **Handshake con Secreto Financiero**: Protección de adeudos bajo Reglas 4.1 y 4.2 CONDUSEF con autenticación por PIN/RFC y enmascaramiento de identidad.
+* **Motor Algorítmico de Quitas Anti-Jailbreak**: Negociación matemática determinista inmune a prompt injections.
+* **Servidor MCP JSON-RPC 2.0 (`/api/v1/a2a/mcp`)**: Herramientas nativas (`arkangel_a2a_auth`, `arkangel_a2a_get_terms`, `arkangel_a2a_submit_offer`, `arkangel_a2a_get_agreement`) para interacción autónoma entre agentes de IA.
 
-- [x] Migración 003: `alegra_sync`, `legal_accounting_map` (seed), `alegra_journal_lines`,
-      `ledger_checkpoint`, `contract_cfdi` (FK + `PRAGMA foreign_keys = ON`)
-- [x] `buildAccountingPayload()`: JOIN D1, cadena de hashes del ledger, ventana del
-      día hábil CDMX, validación Zod, idempotency key con salt
-- [x] `alegraClient`: MCP por HTTP (JSON-RPC 2.0) con SSE, cache de sesión en KV y
-      mapa de errores retry/fail
-- [x] `sendToAlegra()`: idempotencia, cache 24 h del catálogo de cuentas, envío en
-      dos fases, warning accionable `alegra_account_fallback`
-- [x] `reconciliacion.ts`: reintenta cortes a medio camino **sin duplicar asientos**
-- [x] Cron 23:59 CDMX (`59 5 * * *`) → R2 → Alegra; fail-closed si el ledger no verifica
-- [x] `GET /api/v1/contabilidad/resumen` (JSON de R2, o el último corte publicado)
-- [x] Tests: 3 asientos con cuentas correctas, idempotencia, ledger roto, ingreso no
-      reconocido, SSE, fallback de cuenta, reconciliación y transporte MCP real
-- [ ] **Producción**: secrets (`ALEGRA_MCP_URL`, `ALEGRA_MCP_TOKEN`,
-      `ALEGRA_IDEMPOTENCY_SALT`), bucket R2 `arkangel-contabilidad`, migración 003
-      en remoto
-- [ ] **Validar** el catálogo real de cuentas de Alegra contra `legal_accounting_map`
-      (las cuentas del FR son sugerencias)
-- [ ] **Ensayo end-to-end** contra un Alegra de pruebas
+### Sprint 10 — Telefonía Telnyx Voice AI Assistants (Superación del Spike DIY)
+* **Telefonía PSTN con AMD**: Marcación directa a números móviles y fijos de México (+52) con Answering Machine Detection premium y colgado automático ante buzón de voz.
+* **Integración Nativa Telnyx Voice AI Assistants**: Transición formal del spike experimental artesanal a Voice AI Assistants nativo de Telnyx (< 800 ms de latencia conversacional frente a los 3.9 s del DIY).
+* **Softphone Humano y Transferencia en Caliente (`call.bridge`)**: Transferencia de la llamada entre Voice AI y supervisores humanos sin desconectar la línea.
 
-### Sprint 4 — Tenant Isolation, Distributed Rate Limiter, Observabilidad (2026-10-21)
+### Sprint 11 — Portal de Autoservicio del Deudor & 1-Click SPEI Checkout
+* **Portal Público `/pay/:id`**: Acceso seguro sin credenciales, datos enmascarados, desglose transparente de saldo con quita condonada y CLABE SPEI con detección automática de banco.
+* **Cartas Convenio y Finiquito**: Generación de documentos formales con sello criptográfico SHA-256 conforme al Art. 112 Bis LFPC.
 
-- [x] **Multi-tenant Fase 4 (tenant_id en tablas de negocio)**: Migración `0006_tenant_isolation.sql` añade `tenant_id` a 17 tablas (`cases`, `clients`, `debts`, `messages`, `promises`, `events`, `contracts`, `legal_audit`, `intakes`, `alegra_sync`, `alegra_journal_lines`, `contract_cfdi`, `ledger_checkpoint`, `tenant_accounting_map`, `tenant_channels`, `tenant_users`, `platform_users`) con índices compuestos `(tenant_id, ...)`. Todos los servicios (`casos`, `clientes`, `deudas`, `mensajes`, `promesas`, `contratos`, `legalAudit`, `eventos`, `metricas`, `ingesta`) actualizados a `TenantContext`. Contabilidad, crons, rutas y orquestación propagan el contexto. _(Las dos últimas tablas de esa lista, `tenant_users` y `platform_users`, quedaron después sustituidas por `tenant_memberships` y `users.platform_role` en el Sprint 5.)_
-- [x] **Rate Limiter distribuido (Durable Object)**: `RateLimiterDO` (nuevo `src/durable/rate-limiter.ts`) reemplaza KV check-then-act con contador atómico por `tenantId:channel` persistido en DO storage. Binding `RATE_LIMITER` en `wrangler.jsonc` + migración `v2`. `acquireRateSlot` en consumidor lanza `DeferredError` con `retryAfter` correcto.
-- [x] **Observabilidad (structured logging + OpenTelemetry traces)**: Logger extendido con `TraceContext` (W3C traceparent), `generateTraceId/spanId`, `extract/injectTraceContext`, `traceMiddleware` en Hono. Traza propagada en `fetch` → `queue` → `scheduled`. Tracer spans en `processCase` (por canal), `dispararHoy` (por caso encolado), crons (por tenant). Queue messages incluyen `traceId`/`spanId`. Logs JSON con `traceId`/`spanId` para correlación completa.
+### Sprint 12 — Constancia de Notificación Digital NOM-151-SCFI-2016
+* **Motor Criptográfico NOM-151**: Huella determinista SHA-256 de mensajes de datos, cadena original estandarizada y estampillado de tiempo UTC/CDMX.
+* **Cotejo Judicial Público**: Endpoints `/api/v1/nom151/:folio` y `/api/v1/nom151/:folio/document` para validación pericial de autenticidad e impresión de actas notariales.
 
-### Sprint 5 — Identidad nativa en D1 (fin del proveedor externo) (2026-10-21)
+### Sprint 13 — Conector ATEB Servicios PSC, Custodia WORM y Cuaderno Judicial/Fiscal
+* **Conector Dual-Engine ATEB PSC**: Modo A (Cumplimiento Pleno Oficial acreditado por la Secretaría de Economía con RFC 3161 TSA y ASN.1 DER) y Modo B (Evidencia Interna Preparada para Migración con resguardo inmutable y failover automático).
+* **Capa de Custodia WORM (Write Once, Read Many)**: Bitácora inmutable encadenada (`worm_audit_log`) que garantiza retención obligatoria de 10 años conforme al Art. 49 del Código de Comercio.
+* **Cuaderno Procesal Judicial & Carpeta SAT**: Expediente integral para Juicios Ejecutivos Mercantiles y Orales Mercantiles (Art. 1298-A CCom), con cálculo de intereses moratorios al 6% anual (Art. 362 CCom) y materialidad probatoria ante el SAT (Arts. 29-A y 69-B CFF, y 27 Fracc. XV LISR).
+* **Sincronización en 1-Clic y KPIs de Voz en Dashboard**: Botón de aprovisionamiento de Asistente de Voz Telnyx en la UI y tarjetas KPI de Minutos de Voz, Llamadas AI y Promesas en Audio en la pantalla principal.
 
-La identidad ya no depende de un SaaS: la contraseña se verifica con PBKDF2
-dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
+---
 
-- [x] **Migración `0007_native_auth.sql`**: `users`, `tenant_memberships`,
-      `auth_sessions`, `auth_tokens` y `auth_rate_limits` (mismo esquema que
-      Ark Ledger, para que el `seed-owner.ts` sirva a los dos proyectos).
-- [x] **Migración `0008_drop_clerk.sql`**: fuera `tenants.clerk_org_id`,
-      `tenant_users` y `platform_users`. Los admins de plataforma pasan a ser
-      `users.platform_role = 'super_admin'`.
-- [x] **`src/auth/native.ts`**: PBKDF2 (SHA-256, 100 000 iteraciones, sal de 16
-      bytes), `createSession`/`validateSession`/`revokeSession`, tokens de un
-      solo uso, rate limiting por correo e IP, traducción del rol
-      (`ROLE_POR_MEMBRESIA`: owner→owner, admin→operator, member→viewer).
-- [x] **`src/auth/middleware.ts`**: `authenticateRequest` (resuelve la sesión
-      una vez por petición y la adjunta al contexto) y `requireTenantMembership`
-      (403 si el despacho pedido no es del usuario). Aplicados a `/api/v1/*`.
-- [x] **`src/routes/autenticacion.ts`**: register · login · logout · session ·
-      request-password-reset · reset-password.
-- [x] **`src/auth/guards.ts`**: la rama de la sesión nativa sustituye a la de
-      Clerk; una sesión válida **no** cae al token de máquina. Motivos de
-      rechazo: `unauthorized` · `sin_membresia` · `tenant_forbidden`.
-- [x] **Frontend**: `AuthContext.tsx` (bootstrap silencioso, sesión
-      persistente, selector de despacho) y `AuthGate.tsx` (login ⇄ registro).
-      `api.ts` manda `credentials: 'include'`; no queda ni un token en JS.
-- [x] **`scripts/seed-owner.ts`**: alta del primer usuario (correo, contraseña,
-      `tenant_id`, rol). Idempotente: si el correo ya existe, cambia la
-      contraseña y actualiza la membresía.
-- [x] **Limpieza**: fuera `@clerk/backend` y `@clerk/react`, las variables
-      `CLERK_*`, `VITE_CLERK_PUBLISHABLE_KEY`, `tenants.clerk_org_id` y el
-      `Tenant.clerk_org_id` del tipo. Cero referencias a Clerk en el código.
-- [x] **Producción**: migraciones 0007/0008 aplicadas en D1 remoto, usuario
-      owner dado de alta, worker y SPA redesplegados, flujo verificado
-      (login → sesión → cambio de despacho → logout).
-- [x] **Typecheck limpio** (partía de 136 errores) y **suite en verde** (partía
-      de 25 tests rojos). Al cerrar los huecos aparecieron tres defectos
-      preexistentes que también quedaron corregidos: `inbound.ts` y `agent.ts`
-      pasaban `env` donde los servicios esperan `ctx: TenantContext` (aislamiento
-      de tenant roto en el camino de entrada), `api.ts` usaba un `ctx` que no
-      existía, y `SQL_LEER_LINEAS` ataba 3 parámetros contra 2 placeholders
-      (un reintento de corte en Alegra devolvía el journal id de **otro**
-      asiento y se saltaba de enviarlo).
+## 6. Estado de verificación y calidad del código
 
-### Bloques A/B/C + Tareas 0-2 — Cierre con CI real y spike de voz (2026-10-21)
+| Verificación | Herramienta / Comando | Resultado actual |
+| :--- | :--- | :--- |
+| **Suite completa de pruebas** | `npm test` (23 archivos) | **23 suites / 358 tests aprobados (100% verde)** |
+| **Linter de código** | `npm run lint` (`--max-warnings 0`) | **0 errores, 0 warnings** |
+| **Compilación frontend** | `npm run build:frontend` (Vite) | **1638 módulos transformados, bundle limpio** |
+| **Compilación del Worker** | `npm run build:worker` (Wrangler dry-run) | **Todos los bindings D1/KV/Queue/DO/R2/AI validados** |
+| **Integración Continua** | `.github/workflows/ci.yml` en GitHub Actions | **Runs en `main` y pull requests en verde** |
+| **Ambiente de Producción** | `curl -s https://arkangel.arksystems.site/api/v1/health` | **`{"ok": true, "service": "arkangel-cobranza", "env": "production"}`** |
 
-- [x] **Bloque A · config por tenant (Fase 6)**: migración `0009`, índices
-      compuestos por tenant, `assertTenantListoParaOperar()` fail-closed (sin
-      razón social ni CONDUSEF el tenant en modo `db` no opera),
-      `scripts/seed-tenant-config.ts` y 9 tests de config por tenant.
-- [x] **Bloque C · cambio de contraseña**: `changePassword()` con política
-      explícita — la contraseña nueva **debe ser distinta** de la actual (400)
-      y una sesión revocada no puede cambiar la contraseña (401). El `status`
-      viaja en el resultado en vez de deducirse del texto del mensaje.
-- [x] **Tarea 0 · cuadre del conteo**: la suite de `changePassword` quedó con
-      7 tests nuevos. Total: 207 + 7 = 232 (+ 7 del spike de voz = **239**).
-- [x] **Tarea 2 · spike de voz (Bloque D)**: implementado y en CI (**PR #2 mergeado**,
-      run 39688865320 verde). Código completo: `CallSessionDO`, pipeline STT→LLM→TTS con barge-in,
-      signaling tras `SPIKE_VOZ_ENABLED`, cliente `spike/index.html`, arnés `scripts/spike-voz.ts` (20 llamadas),
-      migración `0010_spike_calls.sql` con `tenant_id`. **EJECUTADO** (2026-10-22): 20 llamadas reales
-      con el guion hablado de 3 turnos. La ruta de voz es **Workers AI** (`@cf/deepgram/nova-3` para STT
-      y `@cf/deepgram/aura-2-es` para TTS, por WebSocket): misma casa (Deepgram), **sin cuenta nueva**;
-      el cambio se hizo con confirmación explícita, no en silencio. El arnés es `npm run spike:voz`.
-      p50/p95 medidos y veredicto en `docs/spike-voz.md`.
-- [x] **Mini-spike latencia (2026-10-22)**: aplicadas 3 palancas al pipeline de voz:
-  1. **Streaming LLM** (`runAIStream` + `redactMessageVozStream` en `src/ai/agent.ts`) — emite chunks conforme llegan.
-  2. **Modelo chico** (`@cf/meta/llama-3.1-8b-instruct` via `DEFAULT_VOZ_MODEL` / `SPIKE_VOZ_MODEL`) — objetivo < 800 ms p95.
-  3. **Prompt voz acortado** (`SYSTEM_REDACT_VOZ` en `src/ai/prompts.ts`) — ≤ 1 frase, ≤ 20 palabras, identificación de bot obligatoria.
-     Pipeline `voice.ts` reescrito para lanzar TTS al primer fin de frase. **`npm run verify` verde (239 tests)**.
-     **Bloqueante de medición**: la cuenta gratuita de Workers AI (10 000 neuronas/día) agotó antes de completar las 10 llamadas de prueba. **Requiere plan de pago** (cuesta centavos/día) para repetir el arnés y obtener p50/p95 reales.
+---
 
-### Sprint 6 — Operación Humana Asistida por IA, Conciliación de Pagos y Self-Serve UI (2026-10-22)
+## 7. Mapa de instructivos y documentación operativa (`docs/`)
 
-- [x] **Workspace de Casos Delegados a Humano + Softphone Auditado (`OperatorDrawer.tsx`)**:
-  - Bandeja segmentada en `App.tsx`: `Todos`, `Delegados a Humano` (badge rojo), `Promesas / Pagados`.
-  - **Diagnóstico Ejecutivo IA estilo Payments by Wix** (`ai_diagnostic` en `GET /api/v1/cases/:id/workspace`): el empleado no lee hilos largos; ve de inmediato qué hizo la IA, por qué escaló el caso, el nivel de urgencia (`alta`/`media`/`baja`) y la acción recomendada.
-  - **Notas Internas Manuales** (`POST /api/v1/cases/:id/notes`): espacio limpio para anotar contexto adicional que la IA no vio.
-  - **Softphone Auditado** (`POST /api/v1/cases/:id/call`): exige confirmar el guion obligatorio CONDUSEF (Regla 1.1) antes de abrir audio y registra duración + acuerdo al colgar.
-  - **Interceptor Legal Humano** (`POST /api/v1/cases/:id/reply`): cada mensaje escrito por un humano pasa por `evaluarCumplimiento()`; si incluye amenazas, lenguaje prohibido o CLABE apócrifa, devuelve HTTP 422 y bloquea el envío.
-- [x] **Copilot IA Flotante para Operadores (`src/ai/copilot.ts` + `CopilotWidget.tsx`)**:
-  - Sustituye los manuales en PDF por un asistente conversacional conectado en vivo a D1, al estado legal del despacho y al caso activo abierto en pantalla.
-  - Genera borradores pre-blindados con la Razón Social, REDECO, saldo exacto y CLABE de 18 dígitos del contrato.
-- [x] **Panel "Estado del Sistema" 100% Dinámico (`GET /api/v1/system/status`)**:
-  - Mide latencia real de D1 (`ms`) y clientes registrados, estado de Workers AI, casos activos en cola, estado del Motor Legal (`12 reglas · 48 cond.`), estado en vivo de la ventana NOM-184 (`ABIERTA`/`CERRADA`) y barra de RPM de WhatsApp consultada al Durable Object `RateLimiterDO`. Refresco automático cada 15s.
-- [x] **Motor Canónico de Conciliación de Pagos (`src/services/pagos.ts`) — 3 Tiers**:
-  - Cruza pagos por **CLABE de 18 dígitos** (`contracts.clabe`), teléfono E.164, `case_id` o `client_id`.
-  - Al conciliar un pago: liquida o descuenta `debts`, pasa `cases.status = 'paid'`, cumple `promises`, inserta notificación en el timeline del caso para que ningún agente llame por error a quien ya pagó, y envía agradecimiento automático por WhatsApp si la ventana NOM-184 está abierta.
-  - **Tier 1 (PyME / Mid-Market México — Recomendado)**: **Conekta** (`src/channels/conekta.ts` + `POST /webhooks/conekta`) con verificación RSA-SHA256 (`Digest`) y creación de órdenes SPEI con CLABE dinámica (`createConektaSpeiOrder`).
-  - **Tier 2 (Enterprise / Corporativo)**: **Cobre** (`src/channels/cobre.ts` + `POST /webhooks/cobre`) con autenticación `POST /v1/auth` y verificación HMAC-SHA256 (`event-signature`).
-  - **Tier 3 (Bancos Legacy BBVA / Banorte / Santander / STP)**: Carga de CSV de estados de cuenta bancarios directo desde el dashboard (`POST /api/v1/payments/reconcile`).
-- [x] **Panel Self-Serve de Configuración del Despacho (`TenantSettingsModal.tsx` + `GET/PUT /api/v1/tenant/settings`)**:
-  - Permite al `owner` o `compliance` editar desde la UI la **Razón Social**, **Folio REDECO**, **Dominios de pago permitidos**, **Ventana horaria NOM-184**, **Máximo de contactos/24h**, **RPM de WhatsApp**, **Modo del Agente IA** y **Modo Dry Run**.
-  - Al guardar Razón Social y REDECO, conmuta `tenants.config_mode = 'db'` y actualiza `contracts` del despacho automáticamente.
-  - Incluye copiado en 1 clic de las URLs de Webhooks (`Conekta`, `Cobre`, `WhatsApp`).
-- [x] **Datos Sintéticos de Demostración en Producción**:
-  - `scripts/seed-demo-data.sql` y botón **"Descargar CSV de prueba"** en el dashboard (`docs/demo-deudores.csv`). Auto-creación de contratos con CLABE de 18 dígitos durante la ingesta CSV (`src/services/ingesta.ts`).
+La carpeta [`docs/instructivos/`](file:///c:/Users/PAV/Desktop/e-commerce/arkangel/docs/instructivos/INDEX.md) contiene los manuales de procedimientos y auditoría organizados por nivel de usuario:
 
-### Sprint 7 — Canales Multi-Tenant Telnyx v2, Seguridad Webhooks, RBAC y Automatización de Reportes (2026-10-23)
+1. **[`01-administrador-dueno.md`](file:///c:/Users/PAV/Desktop/e-commerce/arkangel/docs/instructivos/01-administrador-dueno.md)**: Configuración legal de despacho, sincronización de Telnyx Voice AI, gobierno de canales y monitoreo de KPIs ejecutivos.
+2. **[`02-abogado-litigante-compliance.md`](file:///c:/Users/PAV/Desktop/e-commerce/arkangel/docs/instructivos/02-abogado-litigante-compliance.md)**: Cuaderno Procesal Judicial (Art. 1298-A CCom), liquidación de intereses (6% Art. 362 CCom), verificación de bitácora WORM a 10 años (Art. 49 CCom) y constancias NOM-151 con ATEB PSC.
+3. **[`03-operador-gestor-cobranza.md`](file:///c:/Users/PAV/Desktop/e-commerce/arkangel/docs/instructivos/03-operador-gestor-cobranza.md)**: Operación de Softphone PSTN con guion CONDUSEF, Diagnóstico Ejecutivo IA, Semáforo NOM-184, Copilot y generación de enlaces 1-Click SPEI.
+4. **[`04-contador-auditor-fiscal.md`](file:///c:/Users/PAV/Desktop/e-commerce/arkangel/docs/instructivos/04-contador-auditor-fiscal.md)**: Carpeta de Materialidad Fiscal SAT (Arts. 29-A y 69-B CFF), deducibilidad de cuentas incobrables (Art. 27 Fracc. XV LISR), conciliación bancaria y asientos contables en Alegra.
+5. **[`05-portal-deudor-autoservicio.md`](file:///c:/Users/PAV/Desktop/e-commerce/arkangel/docs/instructivos/05-portal-deudor-autoservicio.md)**: Guía del titular deudor: acceso seguro sin password, cálculo de quitas, riel 1-Click SPEI y obtención de Carta Finiquito con sello SHA-256.
+6. **[`06-auditoria-calidad-anexo-tecnico-comercial.md`](file:///c:/Users/PAV/Desktop/e-commerce/arkangel/docs/instructivos/06-auditoria-calidad-anexo-tecnico-comercial.md)**: Anexo técnico para debida diligencia de despachos de cobranza, bancos e instituciones financieras auditadas por CNBV/CONDUSEF.
 
-- [x] **Migración WhatsApp a Telnyx API v2 + Validación Criptográfica Ed25519 (`src/channels/telnyx.ts`, `src/channels/whatsapp.ts`)**:
-  - Sustitución de Cloud API directa por Telnyx WhatsApp v2 API (`/v2/messages`).
-  - Verificación criptográfica fail-closed con firma Ed25519 (`telnyx-signature-ed25519` + `telnyx-timestamp`) contra replay attacks y suplantación de identidad en `POST /webhooks/whatsapp` y `POST /webhooks/telnyx`.
-  - Fallback y coexistencia con validación HMAC-SHA256 de Meta (`X-Hub-Signature-256` con `WHATSAPP_APP_SECRET`).
-- [x] **Enrutado Self-Serve de Canales por Despacho (`tenant_channels`)**:
-  - Endpoints `GET /api/v1/tenant/channels` y `PUT /api/v1/tenant/channels` protegidos por roles.
-  - Permite configurar y activar de forma independiente canales por tenant (`whatsapp`, `sms`, `email`).
-- [x] **Gobierno de Accesos UI Role-Based (RBAC Gating)**:
-  - Distinción estricta de capacidades entre `owner` (Manager), `admin` (Operador/Agente) y `member` (Auditor/Viewer).
-  - Ocultamiento y protección en UI de configuraciones críticas del despacho y disparo de cartera según membresía.
-- [x] **Invitaciones Self-Serve de Equipo**:
-  - `POST /api/v1/tenant/members/invite` con envío por correo (Resend) y token seguro con caducidad de 7 días.
-  - Lista de miembros y revocación segura protegiendo siempre al último `owner` (`DELETE /api/v1/tenant/members/:userId`).
-- [x] **Corte Contable en Vivo y Ledger Checkpoint en UI (`AccountingReportModal.tsx`)**:
-  - Parámetro `?live=1` en `GET /api/v1/contabilidad/resumen` para proyectar el asiento contable actual en tiempo real.
-  - Verificación visual de integridad de la cadena de bloques del ledger.
-  - Reconocimiento automático de ingresos contables vía `promise_made` en `recordPromise()`.
-- [x] **Grok Bot: Clasificación y Calibración Continua**:
-  - `POST /api/v1/bot/classify` para clasificar intenciones de clientes en tiempo real y transicionar casos a promesa o escalamiento humano.
-  - `POST /api/v1/scoring/calibrate` para ajuste fino continuo de umbrales del modelo Sherman v2.
-  - Vinculación SAT CFDI timbrado al contrato vía `PUT /api/v1/cases/:id/cfdi`.
-- [x] **Reporte Ejecutivo Diario Automatizado (`GET/POST /api/v1/reports/daily`)**:
-  - Consolidado diario de cartera, métricas de cobranza, cumplimiento CONDUSEF y resumen contable con envío programado a directores.
+---
 
-### Sprint 8 — Excelencia Operativa, Diagnóstico Interactivo de Canales y Semáforo NOM-184 / Sherman v2 (2026-10-24)
+## 8. Frontera activa, pendientes y hoja de ruta
 
-- [x] **Quick Win 1: Buscador en Vivo, Ordenamiento y Paginación Real (`frontend/src/App.tsx`)**:
-  - **Buscador omnicanal en vivo**: filtrado instantáneo por nombre de cliente, teléfono E.164 o ID de caso sin recargar la página.
-  - **Ordenamiento multidireccional**: cabeceras interactivas en la tabla de casos (`Cliente`, `Deuda`, `Estado`) con indicadores visuales de dirección (ascendente/descendente).
-  - **Paginación real del lado del cliente**: controles de navegación anterior/siguiente, contador de registros visibles/totales y selector de tamaño de página (`10`, `15`, `25`, `50` casos).
-  - **Exportación contextual**: el botón de descarga CSV respeta la pestaña activa y los filtros aplicados en pantalla.
-- [x] **Quick Win 2: Diagnóstico Interactivo y Handshake de Canales (`src/channels/diagnostics.ts`, `TenantSettingsModal.tsx`)**:
-  - Motor de diagnóstico unitario `testChannelConnectivity` con validación estricta de credenciales y handshake en vivo:
-    - `telnyx` (SMS): prueba de API Key contra `/v2/balance` o ping de autenticación con timeout fail-closed.
-    - `whatsapp` (Telnyx API v2): verificación de `TELNYX_API_KEY` y número emisor E.164.
-    - `resend` (Email): verificación de API Key con validación de dominios y remitente RFC 5322.
-  - Endpoint `POST /api/v1/tenant/channels/test` (protegido con scope `legal:read`).
-  - Botón interactivo **"Probar canal"** en `TenantSettingsModal.tsx` con spinner de carga, estado en vivo (verde éxito / rojo error) y telemetría de latencia en milisegundos (`XX ms`).
-- [x] **Quick Win 3: Semáforo NOM-184 de 3 Etapas y Gauge Visual Sherman v2 (`frontend/src/OperatorDrawer.tsx`)**:
-  - **Gauge visual Sherman v2**: barra de progreso reactiva con gradiente de color según score de propensión al pago (0-100: Verde >70 alta, Amarillo 40-70 media, Rojo <40 baja) y cálculo dinámico de tasa de éxito estimada.
-  - **Semáforo NOM-184 estricto de 3 etapas**: indicador visual de contactos diarios (`X / 3 contactos hoy`):
-    - Etapa 1 (0-1 contactos): verde ("Permitido").
-    - Etapa 2 (2 contactos): amarillo ("Último contacto permitido").
-    - Etapa 3 (≥3 contactos): rojo ("Tope legal diario alcanzado").
-  - **Blindaje fail-closed proactivo**: al alcanzar 3 contactos en las últimas 24 horas, la interfaz deshabilita proactivamente el Softphone auditado y el redactor de mensajes, impidiendo multas y violaciones a la normativa CONDUSEF / NOM-184 antes de que ocurran.
-- [x] **Mascota 3D Spline Interactiva + Dictado por Voz en Copiloto (`frontend/src/CopilotWidget.tsx`)**:
-  - **Mascota 3D "Ark" en Spline**: Diseñada y esculpida directamente en el lienzo del usuario con cabeza esférica de acabado perla, visera de cristal oscuro con ojos cian neón (`#00f0ff`) emisivos, nódulos laterales de auriculares, núcleo reactor y anillo de propulsión jet inferior.
-  - **Animación y Render Live**: Animación idle de flotación y respiración vertical armónica integrada, exportada a CDN de Spline (`https://prod.spline.design/IaZypc0K4Rnb07vW/scene.splinecode`).
-  - **Integración React Lazy-Loaded**: Componente `@splinetool/react-spline` cargado de forma diferida (`lazy()`) con fallback elegante de carga e imagen de respaldo (`frontend/public/ark-mascot.jpg`) para mantener el bundle inicial liviano.
-  - **Dictado por Voz Omnicanal**: Web Speech API nativa (`es-MX`) activable tocando directamente la mascota en el header ("Toca a Ark y háblale") o pulsando el botón de micrófono en el composer de texto, con feedback visual de escucha en tiempo real.
-  - **Launcher Rediseñado**: Botón flotante circular con avatar de Ark, halo de brillo cian reactivo al hover y badge de estado conectado al Worker.
+### Resuelto y Superado (Sin deuda en estos componentes)
+* **Spike de Voz Artesanal (Workers AI / Cloudflare Realtime)**: Formalmente cerrado como antecedente superado; sustituido en producción por **Telnyx Voice AI Assistants**, marcación PSTN mexicana (+52), Answering Machine Detection (AMD) y latencia ultrabaja (< 800 ms).
+* **Desfase de Cron de Cobranza**: Alineado a las 12:00 UTC = 6:00 AM hora del centro de México (CDMX) en `wrangler.jsonc`.
+* **Identidad y Autenticación**: 100% nativa con PBKDF2 en Cloudflare D1; cero dependencias de Clerk o SaaS de identidad.
+* **Integración Continua**: Pipeline activo en `.github/workflows/ci.yml`.
 
-### Sprint 9 — Protocolo A2A (Agent-to-Agent Collections & Programmatic Negotiation) (2026-10-25)
-
-- [x] **Detección y Handshake de Identidad A2A (`src/services/a2a.ts`, `POST /api/v1/a2a/auth`)**:
-  - Blindaje fail-closed estricto de secreto financiero conforme a **Reglas CONDUSEF 4.1 y 4.2**: ningún agente externo accede a cifras de deuda sin autenticar la titularidad mediante PIN de 4 dígitos o últimos 4 caracteres del RFC con homoclave (o CURP).
-  - Enmascaramiento preventivo de datos personales (`maskName`: ej. `C***** S*** H***`) para preservar privacidad en reportes de agentes.
-- [x] **Motor Algorítmico de Quitas Anti-Jailbreak (`evaluateA2AOffer`)**:
-  - Evaluación matemática 100% determinista en TypeScript/D1 inmune a prompt injections (ofertas de $1 peso o peticiones fuera de rango rechazadas automáticamente).
-  - Umbrales configurables por despacho en D1 (`a2a_max_discount_pct`, `a2a_max_installments`, `a2a_min_down_payment_pct`).
-  - Generación automática de contraoferta estructurada cuando la propuesta del agente del deudor se ubica por debajo del piso legal autorizado.
-- [x] **Formalización de Convenios y Rieles SPEI (`a2a_agreements`, `contracts.clabe`)**:
-  - Creación de convenio con folio `agr_xxx`, expiración a 48h y vinculación a la CLABE bancaria de 18 dígitos del contrato.
-  - Generación de URL de confirmación humana en 1 clic (`/pay/:agreementId`) para el agente personal que requiere autorización del titular.
-  - Registro sincronizado en `promises` (`status = 'open'`, `confidence = 0.95`, `source = a2a:agent_id`) reconociendo la promesa de pago para telemetría y módulo contable Alegra.
-- [x] **Servidor MCP Nativo JSON-RPC 2.0 (`POST /api/v1/a2a/mcp`)**:
-  - Soporte completo para clientes de IA (Claude Desktop, OpenAI Custom GPTs, bots corporativos) mediante Model Context Protocol.
-  - Métodos `tools/list` y `tools/call` implementando 4 herramientas nativas:
-    - `arkangel_a2a_auth`: verificación de identidad y factor de autenticación.
-    - `arkangel_a2a_get_terms`: consulta de adeudo, porcentaje de quita máxima y ofertas base.
-    - `arkangel_a2a_submit_offer`: postulación de oferta y emisión de convenio con CLABE o contraoferta.
-    - `arkangel_a2a_get_agreement`: consulta de estado y CLABE de convenio existente.
-- [x] **Migración `0011_a2a_protocol.sql`**:
-  - Columnas `rfc` y `auth_pin` en `clients`.
-  - Columnas de políticas A2A en `tenants` (`a2a_enabled`, `a2a_max_discount_pct`, `a2a_max_installments`, `a2a_min_down_payment_pct`).
-  - Tabla `a2a_agreements` con índices compuestos por `(tenant_id, case_id)`.
-- [x] **Cobertura de Pruebas**: 18 tests nuevos en `tests/a2aProtocol.test.ts` y `tests/a2aRoute.test.ts` (Total: **310/310 tests verdes**).
-
-### Sprint 10 — Telefonía Telnyx Voice v2 & Voice AI Assistants (2026-10-25)
-
-- [x] **Integración Nativa de Telnyx Voice AI Assistants (`src/channels/telnyxVoice.ts`)**:
-  - **Aprovisionamiento del Asistente Legal (`createOrUpdateTelnyxAssistant`, `POST /api/v1/telnyx/assistant/sync`)**: Creación programática en Telnyx de agentes de voz autónomos inyectando las 12 reglas del motor legal, CONDUSEF, políticas anti-amenazas y guiones asertivos.
-  - **Arranque en Caliente (`startAIAssistant`)**: Integración con `POST /v2/calls/{call_control_id}/actions/ai_assistant_start` para transferir la llamada directamente al asistente conversacional.
-  - **Webhooks de Conversación en Tiempo Real**: Procesamiento de `call.conversation.created`, `call.conversation.ended` (con extracción de transcripción y detección automática de promesas de pago) y `call.conversation_insights` (análisis de sentimiento e intención).
-- [x] **Telefonía Saliente PSTN con AMD (`dialCall`)**:
-  - Marcación telefónica a móviles y fijos de deudores usando Call Control v2 con cabeceras de contexto (`X-Case-ID`, `X-Tenant-ID`, `X-Mode`).
-  - Detección de Contestadora Automática (**AMD Premium**): si detecta máquina/buzón, corta la llamada de inmediato (`hangupCall`), protegiendo costos y evitando sanciones.
-  - Trazabilidad y grabación dual (`startRecording`) con tono legal y sellado de URL en el expediente.
-- [x] **Softphone Humano y Transferencia en Vivo (`frontend/src/OperatorDrawer.tsx`)**:
-  - Selector de línea: **Telnyx PSTN (Humano)**, **Telnyx Voice AI (Autónomo)** o **Línea Directa**.
-  - Captura de audio de micrófono real del navegador (`navigator.mediaDevices.getUserMedia`) con mute/unmute a nivel de pista física.
-  - Formulario de transferencia en caliente (Call Bridging) hacia extensiones o teléfonos de supervisores (`POST /api/v1/cases/:id/call/transfer`).
-  - Emisión de credenciales SIP/WebRTC (`GET /api/v1/telnyx/webrtc-token`).
-- [x] **Cumplimiento Legal y Opt-Out Inmediato (`src/channels/telnyx.ts`, `src/orquestacion/inbound.ts`)**:
-  - Detección de palabras clave de baja en SMS entrantes (`STOP`, `UNSUBSCRIBE`, `BAJA`, `ALTO`, `NO MOLESTAR`) activando de inmediato `do_not_disturb = 1` (Art. 18 Bis LFPC / REUS).
-- [x] **Cobertura de Pruebas**: 16 tests nuevos en `tests/telnyxVoice.test.ts` (Total: **326/326 tests verdes**).
-
-### Sprint 11 — Portal de Autoservicio del Deudor & 1-Click SPEI Checkout (2026-10-25)
-
-- [x] **Portal Público de Autoservicio (`src/routes/portal.ts`, `src/services/debtorPortal.ts`, `frontend/src/DebtorPortal.tsx`)**:
-  - Enrutamiento público bypass (`/pay/:id` o `/portal/:id` o `?pay=:id`), sin requerir sesión ni cookie operativa `ark_session`.
-  - **Blindaje CONDUSEF / REDECO y Secrecía Financiera**: Datos del titular (nombre, teléfono, correo) estrictamente enmascarados bajo el estándar financiero de privacidad ante consultas de terceros.
-  - **Desglose Financiero con Quita Condonada**: Adeudo original, descuento autorizado por el despacho (% y MXN) y saldo único de liquidación con fecha límite de vigencia.
-  - **1-Click SPEI Checkout**: CLABE de 18 dígitos con espaciado agrupado de fácil lectura, botón de copiado con feedback visual instantáneo, y resolución automática del Banco Receptor (STP 646, BBVA 012, Banamex 002, Banorte 072, Nu 638, etc.).
-  - **Reporte de Transferencia SPEI Realizada**: Formulario emergente para registro de clave de rastreo bancario, banco emisor y correo de notificación; genera promesa con confianza 0.99 y evento de auditoría en la base de datos.
-  - **Emisión Digital de Carta Convenio y Carta Finiquito (Art. 112 Bis LFPC)**: Documento formal con cláusulas de liberación crediticia, actualización ante Buró y Círculo de Crédito en máximo 5 días hábiles, sello digital SHA-256 y modo imprimible.
-- [x] **Sincronización Bidireccional con Conciliación SPEI (`src/services/pagos.ts`)**:
-  - Al liquidarse la cuenta vía webhook de Cobre o Conekta SPEI, el convenio pasa automáticamente a `fulfilled` y el portal muestra la felicitación con descarga de Carta Finiquito.
-- [x] **Integración con la Consola de Operadores (`frontend/src/OperatorDrawer.tsx`)**:
-  - Botón "Ver Portal SPEI ↗" para previsualización inmediata de la ficha del deudor.
-  - Botón "Insertar Enlace 1-Click SPEI" para incluir la URL directa del portal en respuestas de WhatsApp y SMS.
-- [x] **Cobertura de Pruebas**: 14 tests nuevos en `tests/debtorPortal.test.ts` (Total: **21 suites / 340/340 tests verdes**).
-
-### Sprint 12 — Constancia de Notificación Digital NOM-151-SCFI-2016 (2026-10-25)
-
-- [x] **Motor Criptográfico y Modelo Legal (`src/services/nom151.ts`, `migrations/0012_nom151_evidence.sql`)**:
-  - **Norma Oficial Mexicana NOM-151-SCFI-2016**: Conservación de mensajes de datos y digitalización de documentos con prueba plena legal (Código de Comercio Artículos 89 a 114).
-  - **Huella Digital Determinista (SHA-256 Digest)** del contenido íntegro del mensaje de datos (FIPS PUB 180-4 / Web Crypto API).
-  - **Cadena Original Estandarizada**: `||NOM151|1.0|FOLIO|TIMESTAMP_UTC|RAZON_SOCIAL|CONDUSEF_REGISTRO|CLIENTE_ID|TIPO|CANAL|PROVIDER_ID|SHA256_MENSAJE||`.
-  - **Sello Digital y Estampillado de Tiempo**: Generación de sello criptográfico y estampilla de tiempo exacta sincronizada en UTC y hora local del centro de México (CDMX).
-  - **Detección Automática de Alteraciones (Tamper-Proof)**: Cualquier modificación al texto notificado invalida instantáneamente la comprobación matemática del hash.
-- [x] **Rutas y Cotejo Judicial Público (`src/routes/nom151.ts`)**:
-  - `GET /api/v1/nom151/:folio`: Endpoint público para validación de autenticidad en tiempo real por jueces mercantiles, peritos o deudores.
-  - `GET /api/v1/nom151/:folio/document`: Renderizado de documento legal notarial con fundamentos del Código de Comercio y REDECO/CONDUSEF.
-  - `GET /api/v1/nom151/cases/:caseId`: Listado de constancias vinculadas al expediente.
-  - `POST /api/v1/nom151/cases/:caseId/issue`: Emisión manual o automática de constancias de notificación.
-- [x] **Integración con la Consola del Operador y Portal (`frontend/src/Nom151Modal.tsx`, `frontend/src/OperatorDrawer.tsx`)**:
-  - **Sección en Expediente**: Panel de "Constancias Digitales NOM-151" con listado de folios, hashes y enlaces directos para ver el acta legal.
-  - **Certificación en 1-Click**: Botón "+ Certificar Notificación" y casilla en el compositor para sellar automáticamente con NOM-151 cada aviso saliente de WhatsApp, SMS o Email.
-  - **Acta Notarial Imprimible (`Nom151Modal.tsx`)**: Modal con soporte de impresión y exportación a PDF para aportación como prueba documental en Juicios Ejecutivos Mercantiles.
-  - **Soporte en Portal de Autoservicio (`DebtorPortal.tsx`) y URL Directa (`/verify/nom151/:folio`)**: Cotejo instantáneo sin requerir inicio de sesión.
-- [x] **Cobertura de Pruebas**: 12 tests nuevos en `tests/nom151.test.ts` (Total: **22 suites / 352/352 tests verdes**).
-
-### Sprint 13 — Conector ATEB Servicios PSC, Capa de Custodia WORM y Cuaderno Judicial/Fiscal (2026-10-25)
-
-- [x] **Conector WebService ATEB Servicios PSC (`src/services/atebPscClient.ts`, `migrations/0013_ateb_psc_integration.sql`)**:
-  - Arquitectura **Dual-Engine** para despachos jurídicos:
-    - **Modo A (Cumplimiento Pleno Oficial)**: Conexión directa a ATEB Servicios PSC (acreditado por la Secretaría de Economía de México) con estampas de tiempo RFC 3161 TSA y constancias NOM-151-SCFI-2016 en formato oficial ASN.1 DER / PKCS#7.
-    - **Modo B (Evidencia Interna Preparada para Migración)**: Motor nativo Arkangel con resguardo de hashes inmutables, preparado para timbrado en lote en ATEB en cuanto el despacho active sus credenciales.
-  - Failover inteligente y resiliente: Si ATEB está en mantenimiento temporal o sin saldo de timbres, Arkangel conmuta a Modo B y encola la constancia para timbrado sin interrumpir las gestiones de cobranza.
-  - Configuración self-serve por tenant en D1 (`tenant_psc_settings`) con enmascaramiento de API keys (`GET /api/v1/nom151/psc/settings` y `POST /api/v1/nom151/psc/settings`).
-- [x] **Capa Transversal de Custodia y Auditoría Inmutable (WORM) (`src/services/custodyWorm.ts`, `worm_audit_log`)**:
-  - Cumplimiento estricto del **Artículo 49 del Código de Comercio**: retención obligatoria mínima de **10 años** para mensajes de datos mercantiles y registros contables.
-  - Arquitectura WORM (*Write Once, Read Many*) con ledger criptográfico encadenado (`prev_hash` -> `entry_hash` con SHA-256) a prueba de manipulaciones o borrados.
-  - Endpoint de verificación matemática de integridad de la cadena (`GET /api/v1/nom151/cases/:caseId/worm-chain`).
-- [x] **Cuaderno Procesal Judicial & Carpeta de Materialidad Fiscal SAT (`src/services/judicialDocket.ts`)**:
-  - **Prueba Plena Mercantil (Código de Comercio Art. 1298-A)**: Cuaderno de pruebas listo para Juicios Orales Mercantiles (Arts. 1390 Bis a 1390 Bis 50) y Ejecutivos Mercantiles, integrando carátula procesal, capítulo de hechos y ofrecimiento de pruebas informáticas.
-  - **Liquidación Automática de Saldo e Intereses Moratorios**: Desglose de capital insoluto, cómputo de días de mora e intereses moratorios calculados a la tasa legal del 6% anual (Art. 362 CCom) o convenida.
-  - **Blindaje de Materialidad Fiscal SAT**: Sustento documental y operativo de fecha cierta que desvirtúa la presunción de operaciones inexistentes o simuladas (**Arts. 29-A y 69-B del CFF**) y acredita las gestiones formales de cobro para deducibilidad de cuentas incobrables (**Art. 27 Fracc. XV de la LISR**).
-  - **Vista Imprimible Oficial (`GET /api/v1/nom151/cases/:caseId/docket/printable`)**: HTML estructurado con estilos CSS para impresión y PDF con sello hash maestro y firmas periciales.
-- [x] **Consola del Operador (`frontend/src/OperatorDrawer.tsx`, `frontend/src/JudicialDocketModal.tsx`)**:
-  - Botón prominente **"⚖️ Cuaderno Judicial & SAT"** en la sección de constancias NOM-151 del expediente.
-  - Modal interactivo con previsualización del cuaderno foliado, estado de la cadena WORM, insignias de cumplimiento oficial ATEB PSC y botón de exportación a PDF.
-- [x] **Cobertura de Pruebas**: 6 tests nuevos en `tests/atebPscAndDocket.test.ts` (Total: **23 suites / 358/358 tests verdes**).
-
-## Verificación realizada
-
-| Qué                             | Cómo                                                                                              | Resultado                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Suite unitaria                  | `npm test` (20 archivos)                                                                          | **326/326**                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Estilo y tipos                  | `npm run lint` · `npm run typecheck`                                                              | limpios                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Build del worker                | `npm run build:worker`                                                                            | limpio                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Migraciones                     | `wrangler d1 migrations apply --local` (BD nueva)                                                 | 8 migraciones OK; esquema igual al que lee el código                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| Foreign keys                    | insert con `tenant_id` inexistente                                                                | `SQLITE_CONSTRAINT_FOREIGNKEY`                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| Backfill multi-tenant           | `SELECT` sobre `tenants` y `tenant_accounting_map`                                                | 1 tenant, 12 reglas contables copiadas                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Identidad por tenant            | test de dos tenants con razón social distinta                                                     | cada uno firma con la suya; sin herencia de la plataforma                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Resolución de tenant            | test con `tenants` inexistente                                                                    | sin tenant explícito → tenant de respaldo (`t_arkangel`); con tenant explícito → 404, no hereda la config                                                                                                                                                                                                                                                                                                                                                                       |
-| Enrutado del inbound            | test de routing id por canal                                                                      | WhatsApp/SMS/email se atribuyen al tenant de su `provider_account_id`                                                                                                                                                                                                                                                                                                                                                                                                           |
-| Dedupe en la transición         | test de `reserveOnceConLegado`                                                                    | una reserva legacy viva bloquea la nueva: no se reinicia la ventana                                                                                                                                                                                                                                                                                                                                                                                                             |
-| SQL contable                    | queries reales contra D1 local                                                                    | ingreso reconoce sólo `delivered`/`read`; `sent` excluido                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Transporte MCP                  | servidor HTTP real (`tests/alegraMcp.test.ts`)                                                    | handshake, SSE, cache de sesión, mapeo de errores                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| Auth por sesión (nativa)        | test de `tests/authNative.test.ts` (D1 de mentira, sin red)                                       | cookie válida → principal del usuario con su membresía; cabecera `X-Tenant-Id` de otro despacho → 403 `tenant_forbidden`; usuario sin membresías → 401 `sin_membresia`; sesión válida no cae al token de máquina                                                                                                                                                                                                                                                                |
-| Scopes por ruta                 | test de la guardia en cada router                                                                 | sin credencial → 401 `unauthorized`; con credencial pero scope insuficiente → 403 `forbidden` + `scope`; un `viewer` lee casos pero no despacha                                                                                                                                                                                                                                                                                                                                 |
-| **Aislamiento multi-tenant**    | test de dos tenants accediendo a `/cases/:id` del otro                                            | 403 `tenant_mismatch` en lectura por id; cada tenant ve solo sus datos                                                                                                                                                                                                                                                                                                                                                                                                          |
-| **Rate limiter DO**             | test de burst concurrente 100 req/tenant+canal                                                    | ≤ `rateLimitRpm` por minuto, sin race conditions                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| **Trace propagation**           | request → queue consumer → scheduled cron                                                         | mismo `traceId` en logs de toda la cadena; `spanId` único por operación                                                                                                                                                                                                                                                                                                                                                                                                         |
-| **Hash de contraseña**          | test de `src/auth/native.ts`                                                                      | PBKDF2 con 100 000 iteraciones y sal de 16 bytes; la misma contraseña sale con distinta sal; un hash mal formado no verifica                                                                                                                                                                                                                                                                                                                                                    |
-| **Sesión nativa**               | test de `tests/authNative.test.ts` (D1 de mentira)                                                | en D1 sólo se guarda el SHA-256 del token; cookie inválida o sesión revocada no dan sesión                                                                                                                                                                                                                                                                                                                                                                                      |
-| **Ciclo de vida en producción** | `curl` contra el worker desplegado                                                                | login 200 + `Set-Cookie`; `session` 200; logout 200 y la cookie deja de servir; sin cookie → 401; despacho ajeno → 403                                                                                                                                                                                                                                                                                                                                                          |
-| **CI en GitHub Actions**        | 4 runs reales (`push` y `pull_request` a `main`)                                                  | PR #1 (run 39684812269, 38 s), push a `main` (39685011657, 33 s), PR #2 (39688865320, 33 s), push a `main` (39689054239, 31 s): los cuatro verdes                                                                                                                                                                                                                                                                                                                               |
-| **Spike de voz**                | 25 tests de `tests/spikeVoz.test.ts` + **20 llamadas reales** (`npm run spike:voz`)               | percentiles (nearest rank), DO (estado, métricas, barge-in, cierre), credenciales de voz y pipeline con dobles; y la corrida real: **16/20 llamadas con turnos medidos (32 turnos)** — `round_trip_ms` p50 2525 ms / **p95 3914 ms** (criterio < 1500 ms → **NO-GO por latencia**), `stt_final_ms` p50 1680 ms, `tts_first_chunk_ms` p50 799 ms. El LLM sin streaming se come el round-trip. Las 4 llamadas restantes chocaron con el tope de 10 000 neuronas/día de Workers AI |
-| **Mini-spike latencia**         | `npm run verify` (239 tests) + código listo; arnés ejecutado pero **truncado por cuota gratuita** | 3 palancas aplicadas (streaming LLM, modelo 8B, prompt voz ≤20 palabras). **Falta: activar plan de pago Workers AI** y repetir `SPIKE_LLAMADAS=20 npm run spike:voz` para p50/p95 reales y veredicto definitivo.                                                                                                                                                                                                                                                                |
-
-## Deuda técnica y riesgos abiertos
-
-### Multi-tenant (pendiente por fase)
-
-- **Fase 4 completada**: `tenant_id` en todas las tablas de negocio + propagación de `ctx` a servicios + prefijo en R2/DO. **Se puede dar de alta un segundo cliente.**
-- **Fase 5 completada**: webhooks resuelven tenant por `provider_account_id` y `POST /webhooks/whatsapp` valida firma HMAC-SHA256 (`X-Hub-Signature-256` contra `WHATSAPP_APP_SECRET`, fail-closed).
-- **Fase 6 completada**: contabilidad por tenant (`tenant_accounting_map` editable en UI vía `GET/PUT /api/v1/tenant/accounting-map` con auto-seed de 12 reglas, idempotency key y cadena de hashes del ledger por tenant).
-
-### Identidad (nativa, sin proveedor externo)
-
-- **La identidad ya no depende de nadie.** Contraseña con PBKDF2 (SHA-256, 100 000 iteraciones) verificada dentro del Worker; la sesión es un token aleatorio que D1 guarda **hasheado** (`auth_sessions.token_hash`) y que en el navegador viaja sólo en la cookie `ark_session` (`HttpOnly`, `SameSite=Lax`, 30 días).
-- **Ya hay usuario owner en el entorno remoto** (`substrateholdingsai@gmail.com`, con membresía `owner` en `t_arkangel` y `admin` en `t_ark_systems`). Para dar de alta a otro: `npm run seed:owner:remote -- --email ... --password ... --tenant t_xxx --role owner`. Sin usuarios, el panel devuelve 401 y sólo funcionan los tokens de máquina.
-- **El rol lo concede la membresía, no la cabecera.** `tenant_memberships` es la fuente de verdad (`owner` → `owner`, `admin` → `operator`, `member` → `viewer`; tabla `ROLE_POR_MEMBRESIA` en `src/auth/native.ts`). `X-Tenant-Id` sólo _selecciona_ entre las membresías del usuario: pedir un despacho ajeno es 403 `tenant_forbidden`.
-- **Registro público cerrado** (2026-10-22): `POST /api/auth/register` → 403. Altas sólo con `seed-owner`.
-- **Restablecer contraseña por correo** (2026-10-22): `src/auth/email.ts` envía por Resend desde `AUTH_FROM_EMAIL` (`no-reply@auth.arksystems.site`, subdominio `auth.arksystems.site` verificado) con enlace a `APP_URL` (`https://arkangel.arksystems.site/?auth=restablecer&token=…`). El envío corre en `waitUntil` (misma 202 exista o no la cuenta), el hash se calcula antes de consumir el token y el reset marca el correo como verificado. Pantallas "¿Olvidaste tu contraseña?" y "Nueva contraseña" en `AuthGate.tsx`. Secret `RESEND_API_KEY` cargado.
-- **Invitaciones de equipo Self-Serve** (2026-10-23): `GET/POST/DELETE /api/v1/tenant/members` y Sección 4 en `TenantSettingsModal.tsx` permiten al `owner` invitar operadores (`admin`) o auditores (`member`) con correo Resend y enlace de activación de 7 días.
-- **Pendiente auth**: rotar la API key de Resend.
-- **El cambio de contraseña ya está en el panel** (`POST /api/auth/change-password`): valida la actual, aplica la política de la nueva, revoca todas las sesiones y limpia la cookie. La nueva debe ser **distinta** de la actual (400) y una sesión revocada no puede cambiar la contraseña (401).
-- **La allowlist de dominios y la ventana horaria del módulo contable** siguen viniendo de `env.TZ` (Fase 6).
-- **Un tenant en `config_mode='platform_env'` hereda la config del Worker.** Hoy sólo lo usa el tenant heredado. Para pasarlo a `db` hay que cargar su fila (razón social y CONDUSEF incluidos) y ejecutar: `UPDATE tenants SET config_mode='db' WHERE id='t_arkangel';` Sin razón social, el motor legal bloquea todos sus mensajes (regla 1.1, fail-closed) y el worker lo avisa por log.
-- **La migración 0004 debe aplicarse ANTES de desplegar el worker.** Si la tabla `tenants` no existe, el worker cae al tenant de respaldo con la config del entorno (sin regresión), pero el multi-tenant no queda habilitado. El respaldo usa el id `t_arkangel`, el mismo que crea el backfill, para que el namespace de claves de KV no cambie al aplicar la migración.
-
-### Preexistentes
-
-- **El contrato MCP con Alegra es una suposición**: nombres de tool (`alegra.list_accounts`, `alegra.create_journal_entry`, `alegra.list_journal_entries`), forma de los argumentos (`partidas` debe/haber) y formatos de respuesta **nunca se han validado contra el servidor real**. El ajuste está aislado en `src/contabilidad/alegraClient.ts`.
-- **Cuentas contables sin validar** contra el catálogo real de Alegra. El runtime cae a `5101-004` con warning accionable, pero el mapa hay que corregirlo.
-- **Desfase de huso horario entre crons**: `"0 6 * * *"` dispara a las 06:00 UTC = **00:00 CDMX**, no a las 6 AM (los triggers de Cloudflare son UTC). El cron contable sí está anclado a CDMX (05:59 UTC). Conviene alinear el de cobranza.
-- **Publicación contable T+1**: el corte publicado a las 23:59 CDMX es el día hábil anterior (decisión del code review). Confirmar con el contador.
-- **`iva_acreditable_estimado`** es un cálculo provisional sobre gastos de Arkangel; hay que sustituirlo por el IVA acreditable real cuando exista el módulo de CFDI de proveedores.
-- **`promise_made` conectado** (2026-10-23): `recordPromise()` en `src/services/promesas.ts` promueve automáticamente el último mensaje saliente del caso (`sent`/`delivered`/`read`) a `status = 'promise_made'`, reconociendo el ingreso en `buildAccountingPayload()`.
-- **Sin CI**: no hay `.github/workflows`. `npm run verify` corre format, lint, typecheck, test y build, pero sólo en local. → **Resuelto**: `.github/workflows/ci.yml` está en `main` y corre en GitHub Actions (PR #1, run verde).
-- **Spike de voz: requiere plan de pago Workers AI** para medir latencia real. La cuenta gratuita (10 000 neuronas/día) no permite completar 20 llamadas. Sin plan de pago, el veredicto definitivo de latencia (GO / GO CONDICIONADO / NO-GO) no puede emitirse.
-
-## Próximos (por riesgo)
-
-1. **[x] Cambio de contraseña en el panel** — implementado en `POST /api/auth/change-password` (valida la actual, aplica política de la nueva, revoca todas las sesiones y limpia la cookie).
-2. **[x] Cargar la fila de `t_arkangel` y Panel Self-Serve de Configuración** — implementado en `GET/PUT /api/v1/tenant/settings` + `TenantSettingsModal.tsx`; `t_arkangel` sembrado en remoto con `config_mode='db'`.
-3. **[x] Operación Humana + Copilot IA + Conciliación de Pagos (Conekta / Cobre / CSV)** — desplegado en `https://arkangel.arksystems.site`.
-4. **Activar plan de pago Workers AI** y repetir `SPIKE_LLAMADAS=20 npm run spike:voz` — bloquea la medición de latencia real (cuota gratuita 10 k neuronas/día agotada).
-5. **[x] Fase 5** — firma HMAC-SHA256 de Meta (`X-Hub-Signature-256`) en `POST /webhooks/whatsapp` + enrutado por tenant.
-6. **[x] Fase 6 + Reporte Ejecutivo Diario** — mapa de cuentas por tenant editable en UI (`AccountingReportModal.tsx`), corte contable en vivo (`?live=1`) y reporte diario automatizado (`GET/POST /api/v1/reports/daily`).
-7. **Ensayo end-to-end** con un Alegra de pruebas + cerrar el contrato MCP.
-8. **Secretos + bucket R2 + primera corrida real** (las migraciones 003/004/005/006/007/008/009/010 ya están en remoto).
-9. **[x] Alinear el cron de cobranza** con el huso CDMX — `wrangler.jsonc` pasó de `"0 6 * * *"` (06:00 UTC = 00:00 CDMX) a `"0 12 * * *"` (12:00 UTC = 6 AM CDT).
-10. **[x] CI en GitHub Actions** — `.github/workflows/ci.yml` corre `npm run verify` (format, lint, typecheck, test, build) en `push` y `PR` a `main`.
-11. **[x] Ejecutar el spike de voz** — **hecho** (2026-10-22): 20 llamadas con `npm run spike:voz`, p50/p95 medidos. Veredicto **NO-GO por latencia** (round-trip p95 3914 ms vs 1500 ms), a causa del LLM sin streaming; el ajuste es `agent.ts` con streaming. Detalle en `docs/spike-voz.md`.
+### Frontera Activa (Prioridades siguientes)
+1. **Validación en Vivo de Credenciales de Producción ATEB PSC (Modo A)**:
+   * Los despachos operan actualmente en Modo B (evidencia interna y resguardo criptográfico WORM pleno).
+   * Al tramitar el despacho sus credenciales ante ATEB Servicios PSC (proveedor acreditado por la Secretaría de Economía), cargar la llave de producción en `POST /api/v1/nom151/psc/settings` para conmutar a timbrado oficial TSA RFC 3161 y constancias ASN.1 DER sin cambios de código.
+2. **Validación de Catálogo Real contra Alegra**:
+   * El cliente Alegra MCP JSON-RPC 2.0 está implementado y probado en arnés unitario.
+   * Pendiente ejecutar un ensayo end-to-end contra una instancia de pruebas de Alegra para verificar que los identificadores de cuentas del plan contable coincidan con el mapeo por despacho.
+3. **Campañas Masivas de Telefonía Saliente Voice AI**:
+   * Orquestación de lotes de llamadas telefónicas salientes respetando el límite concurrente de llamadas del trunk Telnyx y el horario legal NOM-184 (8:00 AM a 10:00 PM L-V).
