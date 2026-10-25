@@ -367,6 +367,16 @@ export interface TenantMember {
   createdAt: number;
 }
 
+export interface TestChannelResult {
+  ok: boolean;
+  channel: 'whatsapp' | 'sms' | 'email';
+  latency_ms: number;
+  provider: string;
+  status: 'connected' | 'error';
+  details?: string;
+  error?: string;
+}
+
 export interface TenantChannelConfig {
   channel: 'whatsapp' | 'sms' | 'email';
   status: 'active' | 'inactive';
@@ -777,5 +787,17 @@ export const api = {
     }>('/api/v1/tenant/channels', {
       method: 'PUT',
       body: JSON.stringify({ channels }),
+    }),
+
+  testChannel: (params: {
+    channel: 'whatsapp' | 'sms' | 'email';
+    provider_account_id?: string;
+    template_name?: string;
+    from_number?: string;
+    from_address?: string;
+  }) =>
+    request<TestChannelResult>('/api/v1/tenant/channels/test', {
+      method: 'POST',
+      body: JSON.stringify(params),
     }),
 };

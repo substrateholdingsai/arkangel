@@ -2,15 +2,22 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   BookOpen,
   Briefcase,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Download,
   Loader2,
   LogOut,
   Scale,
+  Search,
   Settings,
+  X,
 } from 'lucide-react';
 import {
   Alert,
@@ -85,6 +92,11 @@ export default function App() {
   const [reconcileNotice, setReconcileNotice] = useState<string | null>(null);
   const [disparando, setDisparando] = useState(false);
   const [bandeja, setBandeja] = useState<'all' | 'human' | 'resolved'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<'nombre' | 'monto' | 'estado' | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(15);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountingOpen, setAccountingOpen] = useState(false);
@@ -201,6 +213,7 @@ export default function App() {
   };
 
   const exportar = () => {
+    const listToExport = casosOrdenados.length > 0 ? casosOrdenados : cases;
     const header = [
       'Cliente',
       'Telefono',
@@ -210,7 +223,7 @@ export default function App() {
       'Ultimo canal',
       'Proxima accion',
     ];
-    const rows = cases.map((c) => [
+    const rows = listToExport.map((c) => [
       c.nombre,
       c.telefono ?? '',
       c.monto,
@@ -319,10 +332,42 @@ export default function App() {
     }
   };
 
+  const toggleSort = (field: 'nombre' | 'monto' | 'estado') => {
+    if (sortBy === field) {
+      if (sortDir === 'asc') {
+        setSortDir('desc');
+      } else {
+        setSortBy(null);
+      }
+    } else {
+      setSortBy(field);
+      setSortDir(field === 'monto' ? 'desc' : 'asc');
+    }
+    setCurrentPage(1);
+  };
+
   const columnas: Columna<CaseRow>[] = [
     {
       key: 'cliente',
-      header: 'Cliente / CURP',
+      header: (
+        <button
+          type="button"
+          onClick={() => toggleSort('nombre')}
+          className="inline-flex items-center gap-1.5 font-semibold text-slate-700 hover:text-slate-900 transition-colors"
+          title="Ordenar por nombre de cliente"
+        >
+          <span>Cliente / CURP</span>
+          {sortBy === 'nombre' ? (
+            sortDir === 'asc' ? (
+              <ArrowUp className="w-3.5 h-3.5 text-emerald-600" />
+            ) : (
+              <ArrowDown className="w-3.5 h-3.5 text-emerald-600" />
+            )
+          ) : (
+            <ArrowUpDown className="w-3 h-3 text-slate-400 hover:text-slate-600" />
+          )}
+        </button>
+      ),
       render: (row) => (
         <div>
           <div className="font-medium text-slate-900">{row.nombre}</div>
@@ -332,7 +377,27 @@ export default function App() {
     },
     {
       key: 'deuda',
-      header: 'Deuda',
+      header: (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => toggleSort('monto')}
+            className="inline-flex items-center gap-1.5 font-semibold text-slate-700 hover:text-slate-900 transition-colors"
+            title="Ordenar por monto de deuda"
+          >
+            <span>Deuda</span>
+            {sortBy === 'monto' ? (
+              sortDir === 'asc' ? (
+                <ArrowUp className="w-3.5 h-3.5 text-emerald-600" />
+              ) : (
+                <ArrowDown className="w-3.5 h-3.5 text-emerald-600" />
+              )
+            ) : (
+              <ArrowUpDown className="w-3 h-3 text-slate-400 hover:text-slate-600" />
+            )}
+          </button>
+        </div>
+      ),
       className: 'text-right',
       render: (row) => <span className="data-value font-medium text-slate-900">{row.monto}</span>,
     },
@@ -343,7 +408,25 @@ export default function App() {
     },
     {
       key: 'estado',
-      header: 'Estado / Intención',
+      header: (
+        <button
+          type="button"
+          onClick={() => toggleSort('estado')}
+          className="inline-flex items-center gap-1.5 font-semibold text-slate-700 hover:text-slate-900 transition-colors"
+          title="Ordenar por estado"
+        >
+          <span>Estado / Intención</span>
+          {sortBy === 'estado' ? (
+            sortDir === 'asc' ? (
+              <ArrowUp className="w-3.5 h-3.5 text-emerald-600" />
+            ) : (
+              <ArrowDown className="w-3.5 h-3.5 text-emerald-600" />
+            )
+          ) : (
+            <ArrowUpDown className="w-3 h-3 text-slate-400 hover:text-slate-600" />
+          )}
+        </button>
+      ),
       render: (row) => (
         <div>
           <StatusBadge status={row.estado_label} />
@@ -377,13 +460,58 @@ export default function App() {
     },
   ];
 
-  const casosFiltrados = cases.filter((c) => {
+  const casosDeBandeja = cases.filter((c) => {
     if (bandeja === 'human') return c.estado === 'human';
     if (bandeja === 'resolved') return c.estado === 'promised' || c.estado === 'paid';
     return true;
   });
   const countHuman = cases.filter((c) => c.estado === 'human').length;
   const countResolved = cases.filter((c) => c.estado === 'promised' || c.estado === 'paid').length;
+
+  const queryNormalizada = searchQuery.trim().toLowerCase();
+  const casosFiltrados = casosDeBandeja.filter((c) => {
+    if (!queryNormalizada) return true;
+    const nombre = (c.nombre ?? '').toLowerCase();
+    const tel = (c.telefono ?? '').toLowerCase();
+    const email = (c.email ?? '').toLowerCase();
+    const id = (c.id ?? '').toLowerCase();
+    const clientId = (c.client_id ?? '').toLowerCase();
+    const estado = (c.estado_label ?? '').toLowerCase();
+    const intencion = (
+      c.intencion ? (INTENCION_LABEL[c.intencion] ?? c.intencion) : ''
+    ).toLowerCase();
+    return (
+      nombre.includes(queryNormalizada) ||
+      tel.includes(queryNormalizada) ||
+      email.includes(queryNormalizada) ||
+      id.includes(queryNormalizada) ||
+      clientId.includes(queryNormalizada) ||
+      estado.includes(queryNormalizada) ||
+      intencion.includes(queryNormalizada)
+    );
+  });
+
+  const casosOrdenados = [...casosFiltrados].sort((a, b) => {
+    if (!sortBy) return 0;
+    const factor = sortDir === 'asc' ? 1 : -1;
+    if (sortBy === 'monto') {
+      return (a.monto_cents - b.monto_cents) * factor;
+    }
+    if (sortBy === 'nombre') {
+      return a.nombre.localeCompare(b.nombre, 'es-MX') * factor;
+    }
+    if (sortBy === 'estado') {
+      return a.estado_label.localeCompare(b.estado_label, 'es-MX') * factor;
+    }
+    return 0;
+  });
+
+  const totalCasosFiltrados = casosOrdenados.length;
+  const totalPages = Math.max(1, Math.ceil(totalCasosFiltrados / pageSize));
+  const safePage = Math.min(Math.max(1, currentPage), totalPages);
+  const startIndex = (safePage - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, totalCasosFiltrados);
+  const casosPaginados = casosOrdenados.slice(startIndex, endIndex);
 
   const porEstado = metrics?.por_estado ?? {};
   const enCola = porEstado.ready ?? 0;
@@ -782,67 +910,160 @@ export default function App() {
                     </>
                   }
                 />
-                <div className="px-6 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setBandeja('all')}
-                    className={`px-3 py-1 rounded-md text-xs font-semibold border transition-colors ${
-                      bandeja === 'all'
-                        ? 'bg-slate-900 text-white border-slate-900'
-                        : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'
-                    }`}
-                  >
-                    Todos ({cases.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBandeja('human')}
-                    className={`px-3 py-1 rounded-md text-xs font-semibold border transition-colors flex items-center gap-1.5 ${
-                      bandeja === 'human'
-                        ? 'bg-red-600 text-white border-red-600'
-                        : 'bg-white text-red-700 border-red-200 hover:bg-red-50'
-                    }`}
-                  >
-                    <span>Delegados a Humano</span>
-                    <span className="data-mono px-1.5 py-0.2 rounded bg-red-100 text-red-800 text-[11px]">
-                      {countHuman}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBandeja('resolved')}
-                    className={`px-3 py-1 rounded-md text-xs font-semibold border transition-colors ${
-                      bandeja === 'resolved'
-                        ? 'bg-emerald-600 text-white border-emerald-600'
-                        : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'
-                    }`}
-                  >
-                    Promesas / Pagados ({countResolved})
-                  </button>
+                <div className="px-6 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBandeja('all');
+                        setCurrentPage(1);
+                      }}
+                      className={`px-3 py-1 rounded-md text-xs font-semibold border transition-colors ${
+                        bandeja === 'all'
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      Todos ({cases.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBandeja('human');
+                        setCurrentPage(1);
+                      }}
+                      className={`px-3 py-1 rounded-md text-xs font-semibold border transition-colors flex items-center gap-1.5 ${
+                        bandeja === 'human'
+                          ? 'bg-red-600 text-white border-red-600'
+                          : 'bg-white text-red-700 border-red-200 hover:bg-red-50'
+                      }`}
+                    >
+                      <span>Delegados a Humano</span>
+                      <span className="data-mono px-1.5 py-0.2 rounded bg-red-100 text-red-800 text-[11px]">
+                        {countHuman}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBandeja('resolved');
+                        setCurrentPage(1);
+                      }}
+                      className={`px-3 py-1 rounded-md text-xs font-semibold border transition-colors ${
+                        bandeja === 'resolved'
+                          ? 'bg-emerald-600 text-white border-emerald-600'
+                          : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      Promesas / Pagados ({countResolved})
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1 sm:w-64">
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => {
+                          setSearchQuery(e.target.value);
+                          setCurrentPage(1);
+                        }}
+                        placeholder="Buscar deudor, teléfono o ID…"
+                        className="w-full rounded-md border border-slate-300 bg-white pl-8 pr-7 py-1 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500"
+                      />
+                      {searchQuery ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSearchQuery('');
+                            setCurrentPage(1);
+                          }}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                          title="Limpiar búsqueda"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      ) : null}
+                    </div>
+
+                    <select
+                      value={pageSize}
+                      onChange={(e) => {
+                        setPageSize(Number(e.target.value));
+                        setCurrentPage(1);
+                      }}
+                      className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500"
+                      title="Casos por página"
+                    >
+                      <option value={10}>10 / pág</option>
+                      <option value={15}>15 / pág</option>
+                      <option value={25}>25 / pág</option>
+                      <option value={50}>50 / pág</option>
+                    </select>
+                  </div>
                 </div>
                 <DataTable
                   columns={columnas}
-                  rows={casosFiltrados}
+                  rows={casosPaginados}
                   empty={
-                    bandeja === 'human'
-                      ? 'Sin casos delegados al humano en este momento.'
-                      : 'Sin casos: sube el CSV de las 6:00 AM o espera la ingesta del CRM.'
+                    searchQuery ? (
+                      <div className="py-4 text-center">
+                        <p className="text-slate-600 font-medium">
+                          No se encontraron casos que coincidan con &ldquo;{searchQuery}&rdquo;.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSearchQuery('');
+                            setCurrentPage(1);
+                          }}
+                          className="mt-2 text-xs font-semibold text-emerald-700 hover:underline"
+                        >
+                          Limpiar filtro de búsqueda
+                        </button>
+                      </div>
+                    ) : bandeja === 'human' ? (
+                      'Sin casos delegados al humano en este momento.'
+                    ) : bandeja === 'resolved' ? (
+                      'Sin promesas o casos pagados registrados hoy.'
+                    ) : (
+                      'Sin casos: sube el CSV de las 6:00 AM o espera la ingesta del CRM.'
+                    )
                   }
                   rowClassName={(row) => (row.estado === 'human' ? 'bg-red-50/40' : '')}
                 />
-                <div className="px-6 py-3 border-t border-slate-200 bg-slate-50 flex justify-between items-center text-xs text-slate-500">
+                <div className="px-6 py-3 border-t border-slate-200 bg-slate-50 flex flex-col sm:flex-row justify-between items-center gap-2 text-xs text-slate-500">
                   <span>
-                    Mostrando {casosFiltrados.length} de {cases.length} casos
+                    {totalCasosFiltrados === 0
+                      ? '0 casos'
+                      : `Mostrando ${startIndex + 1}–${endIndex} de ${totalCasosFiltrados} caso(s)${
+                          totalCasosFiltrados !== cases.length
+                            ? ` (filtrados de ${cases.length})`
+                            : ''
+                        }`}
                   </span>
-                  <div className="flex gap-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[11px] text-slate-600 mr-1">
+                      Pág. {safePage} de {totalPages}
+                    </span>
                     <button
-                      className="px-2 py-1 border border-slate-300 rounded bg-white disabled:opacity-50"
-                      disabled
+                      type="button"
+                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                      disabled={safePage <= 1}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 border border-slate-300 rounded-md bg-white hover:bg-slate-50 disabled:opacity-40 disabled:hover:bg-white text-xs font-medium text-slate-700 transition-colors"
                     >
+                      <ChevronLeft className="w-3.5 h-3.5" />
                       Anterior
                     </button>
-                    <button className="px-2 py-1 border border-slate-300 rounded bg-white hover:bg-slate-50">
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                      disabled={safePage >= totalPages}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 border border-slate-300 rounded-md bg-white hover:bg-slate-50 disabled:opacity-40 disabled:hover:bg-white text-xs font-medium text-slate-700 transition-colors"
+                    >
                       Siguiente
+                      <ChevronRight className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>

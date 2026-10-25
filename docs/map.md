@@ -1,7 +1,7 @@
 # ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · **17 suites / 280 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.
-> Última actualización: 2026-10-23 (Sprint 7: Firma HMAC-SHA256 de Meta en `POST /webhooks/whatsapp`, promoción automática de `promise_made`, Invitaciones Self-Serve de Equipo, Corte Contable en Vivo + Verificador de Ledger en UI, Catálogo Contable Editable por Tenant Fase 6, Reporte Ejecutivo Diario Automatizado, Canales por Despacho Self-Serve `tenant_channels`, Role-Based UI Gating `Manager`/`Agente`/`Auditor`, Grok Bot Clasificación y Calibración en Tiempo Real, y Vinculación CFDI SAT `contract_cfdi`).
+> **Estado**: `main` · **17 suites / 292 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.
+> Última actualización: 2026-10-24 (Sprint 8: Buscador en Vivo, Ordenamiento y Paginación Real en Dashboard, Diagnóstico Interactivo de Canales `POST /tenant/channels/test`, Semáforo NOM-184 Fail-Closed + Sherman v2 en Drawer, y Mascota 3D Spline con Dictado por Voz en CopilotWidget).
 
 ## Vista general
 
@@ -25,7 +25,7 @@ src/
 ├── orquestacion/            disparador, consumidor (cola), inbound, voice
 ├── legal/                   motor, reglas (catálogo), config, sanitizador, tipos
 ├── ai/                      agent (redactMessage + streaming), classify, copilot (asistente operador), prompts
-├── channels/                whatsapp, telnyx, resend, conekta (SPEI/OXXO), cobre (SPEI B2B), types
+├── channels/                whatsapp, telnyx, resend, conekta (SPEI/OXXO), cobre (SPEI B2B), types, diagnostics
 ├── cron/                    manana · contabilidadDaily · reconciliacion
 ├── contabilidad/            buildPayload · sendToAlegra · alegraClient · schemas
 ├── tenancy/                 types · config (resolución) · context · repository · channels · keys ·
@@ -38,10 +38,10 @@ src/
 ├── lib/                     crypto, csv, http, idempotencia, logger, medidas, money, phone, score
 └── types/                   env, cobranza
 frontend/                    React + Vite (dashboard) + AuthProvider/AuthGate
-│                            ├── App.tsx (KPIs, Dropzone, Casos, Telemetría Viva, Motor Legal)
-│                            ├── OperatorDrawer.tsx (Diagnóstico IA estilo Wix, Softphone, Notas, Conciliación)
-│                            ├── CopilotWidget.tsx (Chat IA flotante con contexto del Worker en vivo)
-│                            ├── TenantSettingsModal.tsx (Configuración legal/operativa self-serve + Webhooks)
+│                            ├── App.tsx (KPIs, Dropzone, Casos con Buscador/Sort/Paginación, Telemetría Viva, Motor Legal)
+│                            ├── OperatorDrawer.tsx (Diagnóstico IA, Semáforo NOM-184, Sherman v2, Softphone, Notas, Conciliación)
+│                            ├── CopilotWidget.tsx (Mascota 3D Spline, Web Speech API, Chat IA con Worker en vivo)
+│                            ├── TenantSettingsModal.tsx (Configuración legal/operativa self-serve, Test Canales + Webhooks)
 │                            └── auth/: AuthContext · AuthGate
 design-system/               Meridian Core v1.0: tokens + componentes reutilizables
 migrations/                  0001_init · 0002_legal · 0003_alegra_sync · 0004_tenants ·
@@ -49,7 +49,7 @@ migrations/                  0001_init · 0002_legal · 0003_alegra_sync · 0004
 │                             0008_drop_clerk · 0009_tenant_config · 0010_spike_calls
 scripts/                     seed.sql, seed-demo-data.sql, seed-owner.ts, forge_arkangel_watermark.py
 docs/                        arquitectura.md · map.md · runbook-cobranza.md · demo-deudores.csv · ARKANGEL-MERIDIAN.md
-tests/                       17 archivos (270 tests: unit + auth nativa + operador + copilot + pagos Conekta/Cobre + MCP)
+tests/                       17 archivos (292 tests: unit + auth nativa + operador + copilot + pagos Conekta/Cobre + MCP + canales/diagnóstico + semáforo NOM-184)
 ```
 
 ## Endpoints
@@ -57,54 +57,55 @@ tests/                       17 archivos (270 tests: unit + auth nativa + operad
 Auth = sesión nativa (cookie `ark_session`) o token de máquina.
 Cada ruta exige **su** scope: sin credencial → 401, con credencial pero sin scope → 403.
 
-| Método   | Ruta                                      | Scope                                             | Descripción                                                                              |
-| -------- | ----------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| POST     | `/api/auth/register`                      | —                                                 | **Cerrado** (403 `registro_cerrado`): el panel es por invitación; altas con `seed-owner` |
-| POST     | `/api/auth/login`                         | público                                           | Verifica la contraseña (PBKDF2) y emite la cookie `ark_session`                          |
-| POST     | `/api/auth/logout`                        | sesión                                            | Revoca la sesión en D1 y borra la cookie                                                 |
-| GET      | `/api/auth/session`                       | público                                           | Usuario y despachos, si la cookie es válida                                              |
-| POST     | `/api/auth/request-password-reset`        | público                                           | Envía el enlace de restablecimiento (siempre 202)                                        |
-| POST     | `/api/auth/reset-password`                | público                                           | Consume el enlace y fija la nueva contraseña                                             |
-| GET      | `/api/v1/health`                          | público                                           | Liveness del worker                                                                      |
-| POST     | `/api/v1/ingest/csv`                      | `ingest:write`                                    | Ingesta del CSV (multipart o JSON)                                                       |
-| GET      | `/api/v1/cases/today`                     | `cases:read`                                      | Casos del día + vista previa                                                             |
-| GET      | `/api/v1/metrics/today`                   | `metrics:read`                                    | Métricas del día                                                                         |
-| POST     | `/api/v1/disparar`                        | `cases:dispatch`                                  | Encola los casos listos (botón verde)                                                    |
-| GET      | `/api/v1/cases/:id`                       | `cases:read`                                      | Detalle de un caso                                                                       |
-| GET      | `/api/v1/cases/:id/workspace`             | `cases:read`                                      | Workspace del operador: caso, cliente, contrato, deudas, mensajes y **Diagnóstico IA**   |
-| POST     | `/api/v1/cases/:id/reply`                 | `messages:send`                                   | Respuesta humana auditada por las 12 reglas del Motor Legal (422 si viola)               |
-| POST     | `/api/v1/cases/:id/resolve`               | `cases:resolve`                                   | Resolución humana (`promise`, `paid`, `dnd`, `return_to_ai`)                             |
-| POST     | `/api/v1/cases/:id/call`                  | `messages:send`                                   | Softphone auditado: inicio con guion CONDUSEF (`start`) y bitácora de cierre (`complete`) |
-| POST     | `/api/v1/cases/:id/notes`                 | `cases:resolve`                                   | Notas internas manuales del operador sobre la ficha del caso                             |
-| PUT      | `/api/v1/cases/:id/cfdi`                  | `cases:write`                                     | Vincula UUID de CFDI timbrado (SAT) al contrato (`contract_cfdi` → `cfdi_relacionado`)   |
-| POST     | `/api/v1/payments/reconcile`              | `cases:resolve`                                   | Conciliación de pagos individual (JSON) o masiva (CSV bancario BBVA/Banorte/STP)         |
-| GET      | `/api/v1/system/status`                   | `metrics:read`                                    | Telemetría en vivo: D1 latencia/clientes, Workers AI, Cola, Motor Legal, Ventana y RPM   |
-| POST     | `/api/v1/copilot/chat`                    | `cases:read`                                      | Copilot IA para operadores con acceso en vivo al estado del Worker y caso activo         |
-| GET      | `/api/v1/tenant/settings`                 | `legal:read`                                      | Configuración legal/operativa del despacho + URLs de webhooks                            |
-| PUT      | `/api/v1/tenant/settings`                 | `legal:config`                                    | Guardado self-serve de Razón Social, REDECO, dominios, ventana NOM-184 y modo IA         |
-| GET      | `/api/v1/tenant/channels`                 | `legal:read`                                      | Canales activos e inactivos del despacho (`whatsapp`, `sms`, `email`) + enrutado         |
-| PUT      | `/api/v1/tenant/channels`                 | `legal:config`                                    | Configuración self-serve de canales activos y credenciales de enrutado por el Manager    |
-| GET      | `/api/v1/tenant/members`                  | `legal:read`                                      | Lista de miembros del despacho (`owner`, `admin`/operador, `member`/viewer)              |
-| POST     | `/api/v1/tenant/members/invite`           | `legal:config`                                    | Invitación self-serve de miembros por correo (Resend + enlace de activación de 7 días)   |
-| DELETE   | `/api/v1/tenant/members/:userId`          | `legal:config`                                    | Revocación de acceso de un miembro (con protección del último `owner`)                   |
-| GET      | `/api/v1/clients/:id`                     | `clients:read`                                    | Cliente + deudas pendientes                                                              |
-| GET      | `/api/v1/clients/:id/conversation`        | `messages:read`                                   | Historial de mensajes                                                                    |
-| GET      | `/api/v1/legal/catalogo`                  | `legal:read`                                      | 12 reglas con ley, artículo y castigo                                                    |
-| GET      | `/api/v1/legal/hoy`                       | `legal:read`                                      | Resumen de cumplimiento + auditoría                                                      |
-| GET      | `/api/v1/contabilidad/resumen`            | `accounting:read`                                 | Corte contable (JSON de R2 o cálculo en vivo con `?live=1`)                              |
-| GET      | `/api/v1/tenant/accounting-map`           | `accounting:read`                                 | Catálogo de cuentas contables Alegra por regla legal del despacho (auto-seed 12 reglas)  |
-| PUT      | `/api/v1/tenant/accounting-map`           | `legal:config`                                    | Edición self-serve de cuentas Débito/Crédito y tipo de póliza por despacho (Fase 6)      |
-| GET      | `/api/v1/reports/daily`                   | `metrics:read`                                    | Reporte Ejecutivo Diario consolidado (Cobranza + Cumplimiento CONDUSEF + Contabilidad)   |
-| POST     | `/api/v1/reports/daily/send`              | `metrics:read`                                    | Envío por correo (Resend) del Reporte Ejecutivo Diario a propietarios/contadores         |
-| GET      | `/api/v1/state`                           | `agent:read`                                      | Estado del bot (modo, cola, pendientes)                                                  |
-| POST     | `/api/v1/decide` · `/dispatch` · `/audit` | `agent:decide` · `agent:dispatch` · `agent:audit` | Decisión, envío y auditoría de acciones                                                  |
-| POST     | `/api/v1/bot/classify` · `/classify`      | `agent:decide`                                    | Clasificación en tiempo real por Grok Bot + transición automática de promesa/humano      |
-| POST     | `/api/v1/scoring/calibrate` · `/calibrate`| `agent:decide`                                    | Calibración continua de scoring Sherman v2 y umbrales autónomos según conversión real    |
-| GET/POST | `/webhooks/whatsapp`                      | firma de Meta                                     | Verificación del challenge + mensajes y estados                                          |
-| POST     | `/webhooks/telnyx`                        | firma Ed25519                                     | SMS entrante y estados                                                                   |
-| POST     | `/webhooks/resend`                        | —                                                 | Email entrante                                                                           |
-| POST     | `/webhooks/conekta`                       | RSA-SHA256 `Digest`                               | Conciliación automática SPEI / OXXO Pay (Conekta v2.2 — PyMEs/Mid-Market México)         |
-| POST     | `/webhooks/cobre`                         | HMAC-SHA256 `event-signature`                     | Conciliación automática SPEI corporativo (Cobre B2B — Enterprise)                        |
+| Método   | Ruta                                       | Scope                                             | Descripción                                                                               |
+| -------- | ------------------------------------------ | ------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| POST     | `/api/auth/register`                       | —                                                 | **Cerrado** (403 `registro_cerrado`): el panel es por invitación; altas con `seed-owner`  |
+| POST     | `/api/auth/login`                          | público                                           | Verifica la contraseña (PBKDF2) y emite la cookie `ark_session`                           |
+| POST     | `/api/auth/logout`                         | sesión                                            | Revoca la sesión en D1 y borra la cookie                                                  |
+| GET      | `/api/auth/session`                        | público                                           | Usuario y despachos, si la cookie es válida                                               |
+| POST     | `/api/auth/request-password-reset`         | público                                           | Envía el enlace de restablecimiento (siempre 202)                                         |
+| POST     | `/api/auth/reset-password`                 | público                                           | Consume el enlace y fija la nueva contraseña                                              |
+| GET      | `/api/v1/health`                           | público                                           | Liveness del worker                                                                       |
+| POST     | `/api/v1/ingest/csv`                       | `ingest:write`                                    | Ingesta del CSV (multipart o JSON)                                                        |
+| GET      | `/api/v1/cases/today`                      | `cases:read`                                      | Casos del día + vista previa                                                              |
+| GET      | `/api/v1/metrics/today`                    | `metrics:read`                                    | Métricas del día                                                                          |
+| POST     | `/api/v1/disparar`                         | `cases:dispatch`                                  | Encola los casos listos (botón verde)                                                     |
+| GET      | `/api/v1/cases/:id`                        | `cases:read`                                      | Detalle de un caso                                                                        |
+| GET      | `/api/v1/cases/:id/workspace`              | `cases:read`                                      | Workspace del operador: caso, cliente, contrato, deudas, mensajes y **Diagnóstico IA**    |
+| POST     | `/api/v1/cases/:id/reply`                  | `messages:send`                                   | Respuesta humana auditada por las 12 reglas del Motor Legal (422 si viola)                |
+| POST     | `/api/v1/cases/:id/resolve`                | `cases:resolve`                                   | Resolución humana (`promise`, `paid`, `dnd`, `return_to_ai`)                              |
+| POST     | `/api/v1/cases/:id/call`                   | `messages:send`                                   | Softphone auditado: inicio con guion CONDUSEF (`start`) y bitácora de cierre (`complete`) |
+| POST     | `/api/v1/cases/:id/notes`                  | `cases:resolve`                                   | Notas internas manuales del operador sobre la ficha del caso                              |
+| PUT      | `/api/v1/cases/:id/cfdi`                   | `cases:write`                                     | Vincula UUID de CFDI timbrado (SAT) al contrato (`contract_cfdi` → `cfdi_relacionado`)    |
+| POST     | `/api/v1/payments/reconcile`               | `cases:resolve`                                   | Conciliación de pagos individual (JSON) o masiva (CSV bancario BBVA/Banorte/STP)          |
+| GET      | `/api/v1/system/status`                    | `metrics:read`                                    | Telemetría en vivo: D1 latencia/clientes, Workers AI, Cola, Motor Legal, Ventana y RPM    |
+| POST     | `/api/v1/copilot/chat`                     | `cases:read`                                      | Copilot IA para operadores con acceso en vivo al estado del Worker y caso activo          |
+| GET      | `/api/v1/tenant/settings`                  | `legal:read`                                      | Configuración legal/operativa del despacho + URLs de webhooks                             |
+| PUT      | `/api/v1/tenant/settings`                  | `legal:config`                                    | Guardado self-serve de Razón Social, REDECO, dominios, ventana NOM-184 y modo IA          |
+| GET      | `/api/v1/tenant/channels`                  | `legal:read`                                      | Canales activos e inactivos del despacho (`whatsapp`, `sms`, `email`) + enrutado          |
+| PUT      | `/api/v1/tenant/channels`                  | `legal:config`                                    | Configuración self-serve de canales activos y credenciales de enrutado por el Manager     |
+| POST     | `/api/v1/tenant/channels/test`             | `legal:read`                                      | Test interactivo de handshake y credenciales de canal (Telnyx / WhatsApp / Resend)        |
+| GET      | `/api/v1/tenant/members`                   | `legal:read`                                      | Lista de miembros del despacho (`owner`, `admin`/operador, `member`/viewer)               |
+| POST     | `/api/v1/tenant/members/invite`            | `legal:config`                                    | Invitación self-serve de miembros por correo (Resend + enlace de activación de 7 días)    |
+| DELETE   | `/api/v1/tenant/members/:userId`           | `legal:config`                                    | Revocación de acceso de un miembro (con protección del último `owner`)                    |
+| GET      | `/api/v1/clients/:id`                      | `clients:read`                                    | Cliente + deudas pendientes                                                               |
+| GET      | `/api/v1/clients/:id/conversation`         | `messages:read`                                   | Historial de mensajes                                                                     |
+| GET      | `/api/v1/legal/catalogo`                   | `legal:read`                                      | 12 reglas con ley, artículo y castigo                                                     |
+| GET      | `/api/v1/legal/hoy`                        | `legal:read`                                      | Resumen de cumplimiento + auditoría                                                       |
+| GET      | `/api/v1/contabilidad/resumen`             | `accounting:read`                                 | Corte contable (JSON de R2 o cálculo en vivo con `?live=1`)                               |
+| GET      | `/api/v1/tenant/accounting-map`            | `accounting:read`                                 | Catálogo de cuentas contables Alegra por regla legal del despacho (auto-seed 12 reglas)   |
+| PUT      | `/api/v1/tenant/accounting-map`            | `legal:config`                                    | Edición self-serve de cuentas Débito/Crédito y tipo de póliza por despacho (Fase 6)       |
+| GET      | `/api/v1/reports/daily`                    | `metrics:read`                                    | Reporte Ejecutivo Diario consolidado (Cobranza + Cumplimiento CONDUSEF + Contabilidad)    |
+| POST     | `/api/v1/reports/daily/send`               | `metrics:read`                                    | Envío por correo (Resend) del Reporte Ejecutivo Diario a propietarios/contadores          |
+| GET      | `/api/v1/state`                            | `agent:read`                                      | Estado del bot (modo, cola, pendientes)                                                   |
+| POST     | `/api/v1/decide` · `/dispatch` · `/audit`  | `agent:decide` · `agent:dispatch` · `agent:audit` | Decisión, envío y auditoría de acciones                                                   |
+| POST     | `/api/v1/bot/classify` · `/classify`       | `agent:decide`                                    | Clasificación en tiempo real por Grok Bot + transición automática de promesa/humano       |
+| POST     | `/api/v1/scoring/calibrate` · `/calibrate` | `agent:decide`                                    | Calibración continua de scoring Sherman v2 y umbrales autónomos según conversión real     |
+| GET/POST | `/webhooks/whatsapp`                       | firma de Meta                                     | Verificación del challenge + mensajes y estados                                           |
+| POST     | `/webhooks/telnyx`                         | firma Ed25519                                     | SMS entrante y estados                                                                    |
+| POST     | `/webhooks/resend`                         | —                                                 | Email entrante                                                                            |
+| POST     | `/webhooks/conekta`                        | RSA-SHA256 `Digest`                               | Conciliación automática SPEI / OXXO Pay (Conekta v2.2 — PyMEs/Mid-Market México)          |
+| POST     | `/webhooks/cobre`                          | HMAC-SHA256 `event-signature`                     | Conciliación automática SPEI corporativo (Cobre B2B — Enterprise)                         |
 
 Tokens de máquina: `ADMIN_TOKEN` (plataforma, break-glass), `INTAKE_TOKEN`
 (`service_ingest`) y `GROK_BOT_TOKEN` (`service_agent`). Los de servicio quedan
@@ -287,11 +288,65 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
 - [x] **Datos Sintéticos de Demostración en Producción**:
   - `scripts/seed-demo-data.sql` y botón **"Descargar CSV de prueba"** en el dashboard (`docs/demo-deudores.csv`). Auto-creación de contratos con CLABE de 18 dígitos durante la ingesta CSV (`src/services/ingesta.ts`).
 
+### Sprint 7 — Canales Multi-Tenant Telnyx v2, Seguridad Webhooks, RBAC y Automatización de Reportes (2026-10-23)
+
+- [x] **Migración WhatsApp a Telnyx API v2 + Validación Criptográfica Ed25519 (`src/channels/telnyx.ts`, `src/channels/whatsapp.ts`)**:
+  - Sustitución de Cloud API directa por Telnyx WhatsApp v2 API (`/v2/messages`).
+  - Verificación criptográfica fail-closed con firma Ed25519 (`telnyx-signature-ed25519` + `telnyx-timestamp`) contra replay attacks y suplantación de identidad en `POST /webhooks/whatsapp` y `POST /webhooks/telnyx`.
+  - Fallback y coexistencia con validación HMAC-SHA256 de Meta (`X-Hub-Signature-256` con `WHATSAPP_APP_SECRET`).
+- [x] **Enrutado Self-Serve de Canales por Despacho (`tenant_channels`)**:
+  - Endpoints `GET /api/v1/tenant/channels` y `PUT /api/v1/tenant/channels` protegidos por roles.
+  - Permite configurar y activar de forma independiente canales por tenant (`whatsapp`, `sms`, `email`).
+- [x] **Gobierno de Accesos UI Role-Based (RBAC Gating)**:
+  - Distinción estricta de capacidades entre `owner` (Manager), `admin` (Operador/Agente) y `member` (Auditor/Viewer).
+  - Ocultamiento y protección en UI de configuraciones críticas del despacho y disparo de cartera según membresía.
+- [x] **Invitaciones Self-Serve de Equipo**:
+  - `POST /api/v1/tenant/members/invite` con envío por correo (Resend) y token seguro con caducidad de 7 días.
+  - Lista de miembros y revocación segura protegiendo siempre al último `owner` (`DELETE /api/v1/tenant/members/:userId`).
+- [x] **Corte Contable en Vivo y Ledger Checkpoint en UI (`AccountingReportModal.tsx`)**:
+  - Parámetro `?live=1` en `GET /api/v1/contabilidad/resumen` para proyectar el asiento contable actual en tiempo real.
+  - Verificación visual de integridad de la cadena de bloques del ledger.
+  - Reconocimiento automático de ingresos contables vía `promise_made` en `recordPromise()`.
+- [x] **Grok Bot: Clasificación y Calibración Continua**:
+  - `POST /api/v1/bot/classify` para clasificar intenciones de clientes en tiempo real y transicionar casos a promesa o escalamiento humano.
+  - `POST /api/v1/scoring/calibrate` para ajuste fino continuo de umbrales del modelo Sherman v2.
+  - Vinculación SAT CFDI timbrado al contrato vía `PUT /api/v1/cases/:id/cfdi`.
+- [x] **Reporte Ejecutivo Diario Automatizado (`GET/POST /api/v1/reports/daily`)**:
+  - Consolidado diario de cartera, métricas de cobranza, cumplimiento CONDUSEF y resumen contable con envío programado a directores.
+
+### Sprint 8 — Excelencia Operativa, Diagnóstico Interactivo de Canales y Semáforo NOM-184 / Sherman v2 (2026-10-24)
+
+- [x] **Quick Win 1: Buscador en Vivo, Ordenamiento y Paginación Real (`frontend/src/App.tsx`)**:
+  - **Buscador omnicanal en vivo**: filtrado instantáneo por nombre de cliente, teléfono E.164 o ID de caso sin recargar la página.
+  - **Ordenamiento multidireccional**: cabeceras interactivas en la tabla de casos (`Cliente`, `Deuda`, `Estado`) con indicadores visuales de dirección (ascendente/descendente).
+  - **Paginación real del lado del cliente**: controles de navegación anterior/siguiente, contador de registros visibles/totales y selector de tamaño de página (`10`, `15`, `25`, `50` casos).
+  - **Exportación contextual**: el botón de descarga CSV respeta la pestaña activa y los filtros aplicados en pantalla.
+- [x] **Quick Win 2: Diagnóstico Interactivo y Handshake de Canales (`src/channels/diagnostics.ts`, `TenantSettingsModal.tsx`)**:
+  - Motor de diagnóstico unitario `testChannelConnectivity` con validación estricta de credenciales y handshake en vivo:
+    - `telnyx` (SMS): prueba de API Key contra `/v2/balance` o ping de autenticación con timeout fail-closed.
+    - `whatsapp` (Telnyx API v2): verificación de `TELNYX_API_KEY` y número emisor E.164.
+    - `resend` (Email): verificación de API Key con validación de dominios y remitente RFC 5322.
+  - Endpoint `POST /api/v1/tenant/channels/test` (protegido con scope `legal:read`).
+  - Botón interactivo **"Probar canal"** en `TenantSettingsModal.tsx` con spinner de carga, estado en vivo (verde éxito / rojo error) y telemetría de latencia en milisegundos (`XX ms`).
+- [x] **Quick Win 3: Semáforo NOM-184 de 3 Etapas y Gauge Visual Sherman v2 (`frontend/src/OperatorDrawer.tsx`)**:
+  - **Gauge visual Sherman v2**: barra de progreso reactiva con gradiente de color según score de propensión al pago (0-100: Verde >70 alta, Amarillo 40-70 media, Rojo <40 baja) y cálculo dinámico de tasa de éxito estimada.
+  - **Semáforo NOM-184 estricto de 3 etapas**: indicador visual de contactos diarios (`X / 3 contactos hoy`):
+    - Etapa 1 (0-1 contactos): verde ("Permitido").
+    - Etapa 2 (2 contactos): amarillo ("Último contacto permitido").
+    - Etapa 3 (≥3 contactos): rojo ("Tope legal diario alcanzado").
+  - **Blindaje fail-closed proactivo**: al alcanzar 3 contactos en las últimas 24 horas, la interfaz deshabilita proactivamente el Softphone auditado y el redactor de mensajes, impidiendo multas y violaciones a la normativa CONDUSEF / NOM-184 antes de que ocurran.
+- [x] **Mascota 3D Spline Interactiva + Dictado por Voz en Copiloto (`frontend/src/CopilotWidget.tsx`)**:
+  - **Mascota 3D "Ark" en Spline**: Diseñada y esculpida directamente en el lienzo del usuario con cabeza esférica de acabado perla, visera de cristal oscuro con ojos cian neón (`#00f0ff`) emisivos, nódulos laterales de auriculares, núcleo reactor y anillo de propulsión jet inferior.
+  - **Animación y Render Live**: Animación idle de flotación y respiración vertical armónica integrada, exportada a CDN de Spline (`https://prod.spline.design/IaZypc0K4Rnb07vW/scene.splinecode`).
+  - **Integración React Lazy-Loaded**: Componente `@splinetool/react-spline` cargado de forma diferida (`lazy()`) con fallback elegante de carga e imagen de respaldo (`frontend/public/ark-mascot.jpg`) para mantener el bundle inicial liviano.
+  - **Dictado por Voz Omnicanal**: Web Speech API nativa (`es-MX`) activable tocando directamente la mascota en el header ("Toca a Ark y háblale") o pulsando el botón de micrófono en el composer de texto, con feedback visual de escucha en tiempo real.
+  - **Launcher Rediseñado**: Botón flotante circular con avatar de Ark, halo de brillo cian reactivo al hover y badge de estado conectado al Worker.
+
 ## Verificación realizada
 
 | Qué                             | Cómo                                                                                              | Resultado                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Suite unitaria                  | `npm test` (17 archivos)                                                                          | **270/270**                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Suite unitaria                  | `npm test` (17 archivos)                                                                          | **292/292**                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Estilo y tipos                  | `npm run lint` · `npm run typecheck`                                                              | limpios                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Build del worker                | `npm run build:worker`                                                                            | limpio                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Migraciones                     | `wrangler d1 migrations apply --local` (BD nueva)                                                 | 8 migraciones OK; esquema igual al que lee el código                                                                                                                                                                                                                                                                                                                                                                                                                            |

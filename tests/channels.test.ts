@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parseResendPayload } from '../src/channels/resend';
 import { parseTelnyxPayload } from '../src/channels/telnyx';
 import {
@@ -6,6 +6,7 @@ import {
   sendWhatsApp,
   verifyWhatsAppSignature,
 } from '../src/channels/whatsapp';
+import { testChannelConnectivity } from '../src/channels/diagnostics';
 import { isDryRun } from '../src/channels/types';
 import { webhooks } from '../src/routes/webhooks';
 import type { Env } from '../src/types/env';
@@ -400,5 +401,109 @@ describe('freno de ensayo (DRY_RUN)', () => {
   it('el flag del tenant sólo puede activarlo', () => {
     expect(isDryRun(env('false'), true)).toBe(true);
     expect(isDryRun(env('false'), false)).toBe(false);
+  });
+});
+
+describe('testChannelConnectivity (diagnóstico de canales)', () => {
+  it('falla fail-closed si faltan credenciales en el entorno', async () => {
+    const emptyEnv = {} as Env;
+    const resWa = await testChannelConnectivity(emptyEnv, { channel: 'whatsapp' });
+    expect(resWa.ok).toBe(false);
+    expect(resWa.error).toContain('TELNYX_API_KEY');
+
+    const resSms = await testChannelConnectivity(emptyEnv, { channel: 'sms' });
+    expect(resSms.ok).toBe(false);
+    expect(resSms.error).toContain('TELNYX_API_KEY');
+
+    const resEmail = await testChannelConnectivity(emptyEnv, { channel: 'email' });
+    expect(resEmail.ok).toBe(false);
+    expect(resEmail.error).toContain('RESEND_API_KEY');
+  });
+
+  it('valida formato de número E.164 para WhatsApp', async () => {
+    const envWithKey = { TELNYX_API_KEY: 'KEY_TEST' } as Env;
+    const resInvalid = await testChannelConnectivity(envWithKey, {
+      channel: 'whatsapp',
+      provider_account_id: '5512345678', // sin +
+    });
+    expect(resInvalid.ok).toBe(false);
+    expect(resInvalid.error).toContain('E.164');
+  });
+
+  it('en modo DRY_RUN valida exitosamente sin llamadas de red', async () => {
+    const dryEnv = {
+      DRY_RUN: 'true',
+      TELNYX_API_KEY: 'KEY_TEST',
+      RESEND_API_KEY: 're_12345',
+    } as Env;
+
+    const resWa = await testChannelConnectivity(dryEnv, {
+      channel: 'whatsapp',
+      provider_account_id: '+525512345678',
+    });
+    expect(resWa.ok).toBe(true);
+    expect(resWa.details).toContain('Dry-Run');
+
+    const resSms = await testChannelConnectivity(dryEnv, {
+      channel: 'sms',
+      provider_account_id: 'prof_123',
+    });
+    expect(resSms.ok).toBe(true);
+
+    const resEmail = await testChannelConnectivity(dryEnv, {
+      channel: 'email',
+      from_address: 'avisos@despacho.mx',
+    });
+    expect(resEmail.ok).toBe(true);
+  });
+
+  it('detecta credenciales rechazadas (HTTP 401) por el proveedor', async () => {
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+    } as Response);
+
+    try {
+      const realEnv = {
+        DRY_RUN: 'false',
+        TELNYX_API_KEY: 'KEY_INVALIDA',
+      } as Env;
+
+      const res = await testChannelConnectivity(realEnv, {
+        channel: 'whatsapp',
+        provider_account_id: '+525512345678',
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error).toContain('401');
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it('reporta éxito y latencia cuando el handshake responde 200', async () => {
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+    } as Response);
+
+    try {
+      const realEnv = {
+        DRY_RUN: 'false',
+        RESEND_API_KEY: 're_valid_key',
+      } as Env;
+
+      const res = await testChannelConnectivity(realEnv, {
+        channel: 'email',
+        from_address: 'avisos@despacho.mx',
+      });
+      expect(res.ok).toBe(true);
+      expect(res.status).toBe('connected');
+      expect(res.details).toContain('exito');
+    } finally {
+      globalThis.fetch = origFetch;
+    }
   });
 });

@@ -4,6 +4,7 @@ import {
   Bot,
   CheckCircle2,
   Clock,
+  Gauge,
   Mic,
   MicOff,
   PhoneCall,
@@ -281,6 +282,55 @@ export function OperatorDrawer({
 
   const enabledChannels = ws?.legal.enabled_channels ?? ['whatsapp', 'sms', 'email'];
 
+  const score = ws?.case.score ?? 50;
+  const scoreTone =
+    score >= 70
+      ? {
+          bar: 'bg-emerald-500',
+          text: 'text-emerald-700',
+          pill: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+          label: 'Alta Propensión',
+          hint: 'Prioridad alta · Resolución ágil',
+        }
+      : score >= 40
+        ? {
+            bar: 'bg-amber-500',
+            text: 'text-amber-700',
+            pill: 'bg-amber-100 text-amber-800 border-amber-200',
+            label: 'Media Propensión',
+            hint: 'Proponer facilidades de pago',
+          }
+        : {
+            bar: 'bg-rose-500',
+            text: 'text-rose-700',
+            pill: 'bg-rose-100 text-rose-800 border-rose-200',
+            label: 'Baja Propensión',
+            hint: 'Alto riesgo · Proceder con cautela',
+          };
+
+  const contactosHoy = ws?.contactos_24h ?? 0;
+  const maxContactos = ws?.legal.max_contactos_24h ?? 3;
+  const limiteAlcanzado = contactosHoy >= maxContactos;
+  const limiteCercano = contactosHoy === maxContactos - 1 && !limiteAlcanzado;
+
+  const semaforoTone = limiteAlcanzado
+    ? {
+        pill: 'bg-rose-100 text-rose-800 border-rose-200',
+        label: 'BLOQUEADO',
+        desc: 'Límite diario NOM-184 alcanzado (3/3)',
+      }
+    : limiteCercano
+      ? {
+          pill: 'bg-amber-100 text-amber-800 border-amber-200',
+          label: 'ÚLTIMO INTENTO',
+          desc: '1 contacto restante antes de bloqueo legal',
+        }
+      : {
+          pill: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+          label: 'DISPONIBLE',
+          desc: `${maxContactos - contactosHoy} de ${maxContactos} contactos disponibles`,
+        };
+
   const simularSpeiGateway = async (provider: 'cobre' | 'conekta') => {
     if (!ws) return;
     setSimulatingSpei(true);
@@ -483,45 +533,121 @@ export function OperatorDrawer({
                 </div>
               ) : null}
 
-              {/* 1. Ficha Financiera y Legal (Ley de las Cifras §3.1) */}
+              {/* 1. Ficha Financiera, Scoring Sherman v2 y Semáforo NOM-184 */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="bg-white p-3.5 rounded-lg border border-slate-200">
-                  <div className="text-[11px] font-medium text-slate-500 uppercase">
-                    Saldo Exigible
+                {/* Saldo Exigible y CLABE */}
+                <div className="bg-white p-3.5 rounded-lg border border-slate-200 flex flex-col justify-between">
+                  <div>
+                    <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                      Saldo Exigible
+                    </div>
+                    <div className="text-xl font-bold text-slate-900 data-mono mt-0.5">
+                      {formatMXN(ws.case.amount_cents)}
+                    </div>
                   </div>
-                  <div className="text-lg font-bold text-slate-900 data-mono mt-0.5">
-                    {formatMXN(ws.case.amount_cents)}
-                  </div>
-                  <div className="text-[11px] text-slate-500 data-mono mt-1">
-                    Score Sherman: {ws.case.score} ({ws.case.score_band})
-                  </div>
-                </div>
-
-                <div className="bg-white p-3.5 rounded-lg border border-slate-200">
-                  <div className="text-[11px] font-medium text-slate-500 uppercase">
-                    Contacto / CURP
-                  </div>
-                  <div className="text-xs font-medium text-slate-900 data-mono mt-1 truncate">
-                    {ws.client?.phone || ws.case.phone || 'Sin teléfono'}
-                  </div>
-                  <div className="text-xs text-slate-500 truncate">
-                    {ws.client?.email || ws.case.email || 'Sin correo'}
-                  </div>
-                  <div className="text-[11px] text-slate-400 data-mono mt-0.5 truncate">
-                    CURP: {ws.client?.curp || 'N/D'}
+                  <div className="pt-2 mt-2 border-t border-slate-100 text-[11px] text-slate-500 data-mono truncate">
+                    CLABE:{' '}
+                    <span className="font-semibold text-slate-700">
+                      {ws.contract?.clabe || 'Sin contrato'}
+                    </span>
                   </div>
                 </div>
 
-                <div className="bg-white p-3.5 rounded-lg border border-slate-200">
-                  <div className="text-[11px] font-medium text-slate-500 uppercase flex items-center justify-between">
-                    <span>Límite Legal 24h</span>
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                {/* Score Sherman v2 (Propensión IA) */}
+                <div className="bg-white p-3.5 rounded-lg border border-slate-200 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                        <Gauge className="w-3.5 h-3.5 text-slate-400" />
+                        Sherman v2
+                      </span>
+                      <span
+                        className={`rounded px-1.5 py-0.2 text-[10px] font-semibold border ${scoreTone.pill}`}
+                      >
+                        {scoreTone.label}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline gap-1 mt-0.5">
+                      <span className="text-xl font-bold text-slate-900 data-mono">{score}</span>
+                      <span className="text-xs text-slate-400 font-mono">/ 100</span>
+                    </div>
                   </div>
-                  <div className="text-lg font-bold text-slate-900 data-mono mt-0.5">
-                    {ws.contactos_24h} / {ws.legal.max_contactos_24h}
+                  <div className="pt-2 mt-2 border-t border-slate-100 space-y-1">
+                    <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${scoreTone.bar}`}
+                        style={{ width: `${Math.min(100, Math.max(0, score))}%` }}
+                      />
+                    </div>
+                    <div className="text-[10px] text-slate-500 truncate">{scoreTone.hint}</div>
                   </div>
-                  <div className="text-[11px] text-slate-500 data-mono mt-1 truncate">
-                    CLABE: {ws.contract?.clabe || 'Sin contrato'}
+                </div>
+
+                {/* Semáforo NOM-184 (Contactos en 24h) */}
+                <div
+                  className={`p-3.5 rounded-lg border flex flex-col justify-between transition-colors ${
+                    limiteAlcanzado
+                      ? 'bg-rose-50/50 border-rose-200'
+                      : limiteCercano
+                        ? 'bg-amber-50/40 border-amber-200'
+                        : 'bg-white border-slate-200'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                        <Clock className="w-3.5 h-3.5 text-slate-400" />
+                        NOM-184 (24h)
+                      </span>
+                      <span
+                        className={`rounded px-1.5 py-0.2 text-[10px] font-semibold border ${semaforoTone.pill}`}
+                      >
+                        {semaforoTone.label}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline gap-1.5 mt-0.5">
+                      <span
+                        className={`text-xl font-bold data-mono ${
+                          limiteAlcanzado
+                            ? 'text-rose-700'
+                            : limiteCercano
+                              ? 'text-amber-700'
+                              : 'text-slate-900'
+                        }`}
+                      >
+                        {contactosHoy} / {maxContactos}
+                      </span>
+                      <span className="text-[11px] text-slate-500">contactos hoy</span>
+                    </div>
+                  </div>
+                  <div className="pt-2 mt-2 border-t border-slate-100 space-y-1">
+                    <div className="flex items-center gap-1.5">
+                      {Array.from({ length: maxContactos }).map((_, i) => (
+                        <div
+                          key={i}
+                          className={`h-1.5 flex-1 rounded-full transition-colors ${
+                            i < contactosHoy
+                              ? limiteAlcanzado
+                                ? 'bg-rose-500'
+                                : limiteCercano
+                                  ? 'bg-amber-500'
+                                  : 'bg-emerald-500'
+                              : 'bg-slate-200'
+                          }`}
+                        />
+                      ))}
+                    </div>
+                    <div
+                      className={`text-[10px] truncate font-medium ${
+                        limiteAlcanzado
+                          ? 'text-rose-700'
+                          : limiteCercano
+                            ? 'text-amber-800'
+                            : 'text-slate-500'
+                      }`}
+                    >
+                      {semaforoTone.desc}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -576,6 +702,25 @@ export function OperatorDrawer({
                 ) : null}
               </div>
 
+              {/* Alerta de Límite NOM-184 si se alcanzaron los 3 contactos */}
+              {limiteAlcanzado ? (
+                <div className="rounded-xl border border-rose-300 bg-rose-50 p-3.5 text-xs text-rose-950 flex items-start gap-2.5 shadow-sm">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <div className="font-bold text-rose-900">
+                      Límite Diario NOM-184 Alcanzado ({contactosHoy}/{maxContactos} contactos en
+                      24h)
+                    </div>
+                    <p className="mt-0.5 text-rose-800 leading-relaxed text-[11px]">
+                      Este deudor ya completó los {maxContactos} contactos permitidos en 24 horas
+                      por la NOM-184 y la Regla 8.1 CONDUSEF. El Softphone y el envío de mensajes
+                      están bloqueados preventivamente para proteger al despacho de sanciones
+                      regulatorias.
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+
               {/* 2. Softphone Integrado (WebRTC + Auditoría Legal) */}
               <div className="bg-slate-900 text-slate-100 rounded-xl p-4 border border-slate-800">
                 <div className="flex items-center justify-between gap-3">
@@ -599,13 +744,27 @@ export function OperatorDrawer({
 
                   {!callActive ? (
                     <Button
-                      variant="accent"
+                      variant={limiteAlcanzado ? 'secondary' : 'accent'}
                       size="sm"
                       icon={PhoneCall}
-                      disabled={!canOperate || callingBusy || Boolean(ws.client?.do_not_disturb)}
+                      disabled={
+                        !canOperate ||
+                        callingBusy ||
+                        Boolean(ws.client?.do_not_disturb) ||
+                        limiteAlcanzado
+                      }
                       onClick={() => void iniciarLlamada()}
+                      title={
+                        limiteAlcanzado
+                          ? 'Bloqueado: se alcanzó el límite diario de 3 contactos en 24h (NOM-184)'
+                          : undefined
+                      }
                     >
-                      {callingBusy ? 'Verificando…' : 'Llamar ahora'}
+                      {callingBusy
+                        ? 'Verificando…'
+                        : limiteAlcanzado
+                          ? 'Límite alcanzado'
+                          : 'Llamar ahora'}
                     </Button>
                   ) : (
                     <div className="flex items-center gap-2">
@@ -892,18 +1051,29 @@ export function OperatorDrawer({
                     required
                   />
 
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] text-slate-500">
-                      Si el texto infringe alguna de las 12 reglas CONDUSEF, el envío se bloqueará.
+                      {limiteAlcanzado
+                        ? '⚠️ Límite NOM-184 alcanzado (3/3): no se pueden enviar más mensajes hoy.'
+                        : 'Si el texto infringe alguna de las 12 reglas CONDUSEF, el envío se bloqueará.'}
                     </span>
                     <Button
                       type="submit"
-                      variant="accent"
+                      variant={limiteAlcanzado ? 'secondary' : 'accent'}
                       size="sm"
                       icon={Send}
-                      disabled={sending || !replyText.trim()}
+                      disabled={sending || !replyText.trim() || limiteAlcanzado}
+                      title={
+                        limiteAlcanzado
+                          ? 'Bloqueado: se alcanzó el límite diario de 3 contactos en 24h (NOM-184)'
+                          : undefined
+                      }
                     >
-                      {sending ? 'Validando y enviando…' : 'Validar y Enviar'}
+                      {sending
+                        ? 'Validando y enviando…'
+                        : limiteAlcanzado
+                          ? 'Límite alcanzado'
+                          : 'Validar y Enviar'}
                     </Button>
                   </div>
                 </form>

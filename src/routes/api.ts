@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { askCopilot, type CopilotHistoryItem } from '../ai/copilot';
-import { adapters } from '../channels';
+import { adapters, testChannelConnectivity } from '../channels';
 import { parseCobreWebhook } from '../channels/cobre';
 import { parseConektaWebhook } from '../channels/conekta';
 import { formatMXN, formatMXNShort } from '../lib/money';
@@ -1641,4 +1641,37 @@ api.put('/tenant/channels', async (c) => {
     channels,
     enabled_channels: channels.filter((ch) => ch.status === 'active').map((ch) => ch.channel),
   });
+});
+
+api.post('/tenant/channels/test', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'legal:read');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+  const denegado = exigeTenant(guardia.principal, ctx.tenantId);
+  if (denegado) return denegado;
+
+  const body = (await c.req.json().catch(() => ({}))) as {
+    channel?: string;
+    provider_account_id?: string;
+    template_name?: string;
+    from_number?: string;
+    from_address?: string;
+  };
+
+  const channel = body.channel;
+  if (channel !== 'whatsapp' && channel !== 'sms' && channel !== 'email') {
+    return c.json({ ok: false, error: 'Canal inválido. Debe ser whatsapp, sms o email.' }, 400);
+  }
+
+  const testResult = await testChannelConnectivity(ctx.env, {
+    channel,
+    provider_account_id: body.provider_account_id,
+    template_name: body.template_name,
+    from_number: body.from_number,
+    from_address: body.from_address,
+  });
+
+  return c.json(testResult, 200);
 });

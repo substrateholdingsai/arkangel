@@ -817,6 +817,27 @@ describe('Drawer del Operador y Softphone (/api/v1/cases/:id/*)', () => {
     expect(smsReply.status).toBe(422);
     const smsBody = (await smsReply.json()) as { regla: string };
     expect(smsBody.regla).toBe('canal_inactivo');
+
+    // POST /api/v1/tenant/channels/test prueba el canal con feedback estructurado
+    const testChRes = await app.request(
+      '/api/v1/tenant/channels/test',
+      {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({
+          channel: 'whatsapp',
+          provider_account_id: '+525512345678',
+        }),
+      },
+      env
+    );
+    expect(testChRes.status).toBe(200);
+    const testChBody = (await testChRes.json()) as {
+      ok: boolean;
+      channel: string;
+      status: string;
+    };
+    expect(testChBody.channel).toBe('whatsapp');
   });
 
   it('PUT /cases/:id/cfdi valida y vincula el UUID fiscal SAT al contrato del caso', async () => {

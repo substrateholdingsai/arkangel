@@ -14,6 +14,7 @@ export const adapters: Record<ChannelName, ChannelAdapter> = {
 };
 
 export * from './types';
+export * from './diagnostics';
 export { whatsappAdapter, telnyxAdapter, resendAdapter };
 
 /**

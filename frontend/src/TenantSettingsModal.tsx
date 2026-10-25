@@ -1,7 +1,11 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import {
+  Activity,
+  AlertCircle,
   Check,
+  CheckCircle2,
   Copy,
+  Loader2,
   Save,
   Scale,
   Settings,
@@ -21,6 +25,7 @@ import {
   type TenantMember,
   type TenantSettings,
   type TenantWebhooks,
+  type TestChannelResult,
 } from './api';
 
 interface TenantSettingsModalProps {
@@ -82,6 +87,8 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
     },
   ]);
   const [members, setMembers] = useState<TenantMember[]>([]);
+  const [testingChannel, setTestingChannel] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, TestChannelResult>>({});
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
   const [inviteRole, setInviteRole] = useState<MembershipRole>('admin');
@@ -164,6 +171,34 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
     setChannels((prev) =>
       prev.map((ch) => (ch.channel === channelName ? { ...ch, ...patch } : ch))
     );
+  };
+
+  const handleTestChannel = async (ch: TenantChannelConfig) => {
+    setTestingChannel(ch.channel);
+    try {
+      const res = await api.testChannel({
+        channel: ch.channel,
+        provider_account_id: ch.provider_account_id,
+        template_name: ch.template_name,
+        from_number: ch.from_number,
+        from_address: ch.from_address,
+      });
+      setTestResults((prev) => ({ ...prev, [ch.channel]: res }));
+    } catch (err) {
+      setTestResults((prev) => ({
+        ...prev,
+        [ch.channel]: {
+          ok: false,
+          channel: ch.channel,
+          latency_ms: 0,
+          provider: 'unknown',
+          status: 'error',
+          error: err instanceof Error ? err.message : 'Error al conectar con el servidor',
+        },
+      }));
+    } finally {
+      setTestingChannel(null);
+    }
   };
 
   const copiarUrl = async (key: string, url: string) => {
@@ -531,6 +566,8 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
                               extraPlaceholder: 'Ej. Cobranza <avisos@despacho.mx>',
                             };
 
+                    const testResult = testResults[ch.channel];
+
                     return (
                       <div
                         key={ch.channel}
@@ -556,15 +593,36 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
                               {meta.title}
                             </span>
                           </label>
-                          <span
-                            className={`rounded px-2 py-0.5 text-[10px] font-mono font-semibold uppercase ${
-                              isActive
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-slate-200 text-slate-600'
-                            }`}
-                          >
-                            {isActive ? 'HABILITADO' : 'APAGADO'}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={!isActive || testingChannel === ch.channel}
+                              onClick={() => void handleTestChannel(ch)}
+                              className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50 hover:text-emerald-700 disabled:opacity-40 disabled:hover:bg-white disabled:hover:text-slate-700 transition-colors shadow-2xs"
+                              title="Probar handshake y credenciales de este canal"
+                            >
+                              {testingChannel === ch.channel ? (
+                                <>
+                                  <Loader2 className="h-3 w-3 animate-spin text-emerald-600" />
+                                  <span>Probando…</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Activity className="h-3 w-3 text-emerald-600" />
+                                  <span>Probar canal</span>
+                                </>
+                              )}
+                            </button>
+                            <span
+                              className={`rounded px-2 py-0.5 text-[10px] font-mono font-semibold uppercase ${
+                                isActive
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-slate-200 text-slate-600'
+                              }`}
+                            >
+                              {isActive ? 'HABILITADO' : 'APAGADO'}
+                            </span>
+                          </div>
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -603,6 +661,35 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
                             />
                           </div>
                         </div>
+
+                        {testResult ? (
+                          <div
+                            className={`mt-3 rounded-md p-2.5 text-xs flex items-start gap-2 border transition-all ${
+                              testResult.ok
+                                ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                                : 'bg-red-50 border-red-200 text-red-950'
+                            }`}
+                          >
+                            {testResult.ok ? (
+                              <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
+                            ) : (
+                              <AlertCircle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold flex items-center justify-between gap-2">
+                                <span>{testResult.ok ? 'Canal verificado' : 'Fallo en canal'}</span>
+                                {testResult.latency_ms > 0 ? (
+                                  <span className="font-mono text-[10px] text-slate-500">
+                                    {testResult.latency_ms}ms
+                                  </span>
+                                ) : null}
+                              </div>
+                              <p className="text-[11px] mt-0.5 opacity-90 leading-relaxed">
+                                {testResult.ok ? testResult.details : testResult.error}
+                              </p>
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
                     );
                   })}
