@@ -178,11 +178,18 @@ nom151.get('/:folio', async (c) => {
       );
     }
 
+    // Protección de secreto bancario y financiero: el endpoint público expone
+    // la prueba matemática de integridad, pero resguarda el texto original de terceros
+    const publicCertificate = {
+      ...verification.certificate,
+      messageContent: '[CONFIDENCIAL — VERIFICABLE MEDIANTE DIGEST SHA-256]',
+    };
+
     return c.json({
       success: true,
       valid: verification.valid,
       folio: verification.folio,
-      certificate: verification.certificate,
+      certificate: publicCertificate,
       verificationDetails: verification.verificationDetails,
     });
   } catch (error: any) {

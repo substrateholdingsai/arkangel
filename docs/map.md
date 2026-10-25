@@ -1,6 +1,6 @@
 # ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · **23 suites / 358 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.  
+> **Estado**: `main` · **23 suites / 358 tests verdes** (incluye arnés de regresión de voz `tests/spikeVoz.test.ts`, 25 tests) · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.  
 > Última actualización: **2026-10-25** (Sprint 13: Conector ATEB Servicios PSC — Acreditado Secretaría de Economía, Custodia Criptográfica WORM 10 años Art. 49 CCom, Cuaderno Procesal Judicial Art. 1298-A CCom y Materialidad Fiscal SAT Arts. 29-A / 69-B CFF y 27 Fracc. XV LISR + Cierre formal de Spike de Voz con Telnyx Voice AI Assistants en producción).
 
 ---
@@ -11,14 +11,14 @@ Arkangel es una plataforma de cobranza agéntica, omnicanal y de certeza procesa
 * **Almacenamiento y Eventos**: Cloudflare D1 (SQLite distribuido) + KV (caché distribuida) + Queues (despacho asíncrono) + Durable Objects (rate limiter por tenant/canal y gestión de estados de llamadas) + R2 (almacenamiento de cortes y evidencias).
 * **Inteligencia Artificial Dual**:
   * Workers AI (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`) para redacción asistida, clasificación de intenciones y Copilot del operador.
-  * **Telnyx Voice AI Assistants**: Telefonía saliente PSTN a números móviles y fijos de México (+52), latencia conversacional ultrabaja (< 800 ms), Answering Machine Detection (AMD hardware), grabación estéreo dual-channel y puenteo en caliente a humanos (`call.bridge`).
+  * **Telnyx Voice AI Assistants**: Telefonía saliente PSTN a números móviles y fijos de México (+52), cota y objetivo de diseño < 800 ms de latencia conversacional (medición formal en producción en curso), Answering Machine Detection (AMD hardware), grabación estéreo dual-channel (apagada por defecto / opt-in) y puenteo en caliente a humanos (`call.bridge`).
 * **Protocolo A2A (Agent-to-Agent Collections)**: Servidor MCP JSON-RPC 2.0 (`/api/v1/a2a/mcp`) y endpoints REST para negociación autónoma programática entre agentes deudores de IA y el despacho, con verificación estricta de secreto financiero (Reglas CONDUSEF 4.1 y 4.2) y quitas algorítmicas deterministas.
 * **Portal de Autoservicio del Deudor**: Riel público `/pay/:id` con desglose de quita, **1-Click SPEI Checkout** (resolución automática de banco receptor STP/BBVA/Banamex/etc.) y emisión digital de Carta Convenio y Carta Finiquito con sello SHA-256 (Art. 112 Bis LFPC).
 * **Certeza Jurídica & Prueba Plena (NOM-151 + ATEB PSC)**:
   * Motor de Constancias Digitales NOM-151-SCFI-2016 con hash determinista SHA-256 de mensajes de datos.
   * **Conector Dual-Engine ATEB PSC**: Modo A (Cumplimiento Pleno Oficial con estampillas RFC 3161 TSA y constancias ASN.1 DER del PSC acreditado por la Secretaría de Economía) y Modo B (Evidencia Interna Preparada para Migración con failover resiliente).
-  * **Custodia WORM (Write Once, Read Many)**: Bitácora inmutable encadenada con retención mínima obligatoria de 10 años conforme al Art. 49 del Código de Comercio.
-  * **Cuaderno Procesal Judicial & Carpeta SAT**: Expediente foliado descargable e imprimible para Juicios Ejecutivos y Orales Mercantiles (Art. 1298-A CCom) con cálculo de intereses moratorios al 6% anual (Art. 362 CCom) y materialidad fiscal probatoria ante el SAT (Arts. 29-A y 69-B CFF, y deducción de incobrables Art. 27 Fracc. XV LISR).
+  * **Custodia WORM interna (bitácora encadenada `worm_audit_log`, retención 10 años Art. 49 CCom)** como evidencia preparada para migración; la constancia NOM-151 plena se obtiene al conmutar a Modo A con ATEB PSC (ver §8, Frontera Activa #1).
+  * **Cuaderno Procesal Judicial & Carpeta SAT**: Expediente foliado descargable e imprimible para Juicios Ejecutivos y Orales Mercantiles (Art. 1298-A CCom) con liquidación de saldo e intereses moratorios calculados al 6% anual (Art. 362 CCom) y materialidad fiscal probatoria ante el SAT (Arts. 29-A y 69-B CFF, y deducción de incobrables Art. 27 Fracc. XV LISR). El expediente distingue expresamente mediante distintivos visuales los folios timbrados en Modo A (Oficial ATEB PSC) de los generados en Modo B (Evidencia Interna Presuntiva).
 * **Motor Legal Fail-Closed**: Auditoría estricta de 12 reglas / 48 conductas prohibidas (CONDUSEF / REDECO / NOM-184 / LFPC / Código Penal Federal).
 * **Scoring Sherman v2**: Algoritmo de propensión de pago y priorización de cartera con calibración continua.
 * **Módulo Contable (Alegra MCP)**: Reconciliación contable en dos fases, idempotencia criptográfica y publicación diaria en R2 y Alegra.
@@ -101,7 +101,7 @@ design-system/               Meridian Core: componentes accesibles reutilizables
 migrations/                  0001 a 0013 (init, legal, alegra, tenants, native auth, tenant config, a2a, nom151, ateb_psc_integration)
 scripts/                     seed.sql, seed-demo-data.sql, seed-owner.ts, forge_arkangel_watermark.py
 docs/                        Documentación técnica de arquitectura, spike de voz, contrato Alegra MCP, instructivos por rol (INDEX + 01 al 06)
-tests/                       23 suites unitarias y de integración (358 tests aprobados al 100%)
+tests/                       23 suites unitarias y de integración (358 tests aprobados al 100%, incluye tests/spikeVoz.test.ts con 25 tests como arnés de regresión)
 ```
 
 ---
@@ -139,12 +139,12 @@ tests/                       23 suites unitarias y de integración (358 tests ap
 | GET | `/api/v1/telnyx/webrtc-token` | `messages:send` | Generación de credenciales SIP/WebRTC para llamadas directas desde el navegador del operador |
 | POST | `/api/v1/telnyx/assistant/sync` | `legal:config` | **Sincronización en 1 clic**: Aprovisiona o actualiza el Asistente de Voz Telnyx con reglas del tenant |
 | **NOM-151, ATEB PSC & Cuaderno Judicial** | | | |
-| GET | `/api/v1/nom151/:folio` | público | Validación matemática pública del hash y constancia NOM-151 para jueces, deudores y peritos |
+| GET | `/api/v1/nom151/:folio` | público | **Cotejo público judicial**: Validación matemática del hash SHA-256, sello y proveedor PSC (no-enumerable: timestamp base-36 + sufijo aleatorio de 6 caracteres; resguardo de secreto bancario: retiene texto en plano) |
 | GET | `/api/v1/nom151/:folio/document` | público | Acta notarial formal de la constancia digital NOM-151 en formato imprimible |
 | GET | `/api/v1/nom151/cases/:caseId` | `cases:read` | Listado de constancias NOM-151 emitidas para un expediente |
 | POST | `/api/v1/nom151/cases/:caseId/issue` | `messages:send` | Emisión y sellado de constancia NOM-151 (Modo A ATEB PSC o Modo B presuntivo) |
-| GET | `/api/v1/nom151/cases/:caseId/worm-chain` | `cases:read` | Verificación criptográfica de integridad de la bitácora WORM encadenada (10 años Art. 49 CCom) |
-| GET | `/api/v1/nom151/cases/:caseId/docket/printable` | `cases:read` | **Cuaderno Procesal Judicial & Carpeta SAT**: Vista imprimible oficial con liquidación de intereses (6%) |
+| GET | `/api/v1/nom151/cases/:caseId/worm-chain` | `cases:read` | Verificación criptográfica de integridad de la bitácora WORM encadenada (Art. 49 CCom) |
+| GET | `/api/v1/nom151/cases/:caseId/docket/printable` | `cases:read` | **Cuaderno Procesal Judicial & Carpeta SAT**: Vista imprimible oficial con liquidación de intereses (6%) y badges Modo A / B |
 | GET | `/api/v1/nom151/psc/settings` | `legal:config` | Consulta de credenciales del Conector ATEB PSC del despacho (enmascaradas) |
 | POST | `/api/v1/nom151/psc/settings` | `legal:config` | Configuración self-serve de credenciales ATEB PSC (Modo A Pleno vs Modo B) |
 | **Portal de Autoservicio del Deudor** | | | |
@@ -215,19 +215,24 @@ tests/                       23 suites unitarias y de integración (358 tests ap
 | `intakes` | 0001, 0006 | Registro de archivos CSV ingeridos con totales de filas y metadatos |
 | `a2a_agreements` | 0011 | Convenios pactados programáticamente entre agentes de IA bajo el protocolo A2A |
 | `nom151_certificates` | 0012, 0013 | Constancias NOM-151 emitidas: folios, hashes deterministas SHA-256, sellos, proveedor PSC y nivel de cumplimiento |
-| `worm_audit_log` | 0013 | **Bitácora WORM inmutable encadenada** (`prev_hash` -> `entry_hash`) para retención de 10 años conforme a Art. 49 CCom |
+| `worm_audit_log` | 0013 | **Bitácora WORM inmutable encadenada** (`prev_hash` -> `entry_hash`) para retención de 10 años (Art. 49 CCom; ver §1) |
 | `tenant_psc_settings` | 0013 | Credenciales de Conector ATEB PSC por despacho (Modo A oficial vs Modo B presuntivo) |
 
 ---
 
 ## 5. Bitácora cronológica de sprints
 
-### Sprints 0 al 5 — Fundaciones del Sistema y Aislamiento Nativo
+### Sprints 0 al 2 — Fundaciones del Sistema y Módulo Contable
 * **Sprint 0 — Base**: Worker Hono + D1/KV/Queue/DO, canales WhatsApp/SMS/Email, Workers AI (Llama 3.3), motor legal fail-closed (12 reglas), scoring Sherman v2, dashboard de 1 botón y cron a las 6 AM CDMX.
 * **Sprint 1 — Grok Bot (Agéntico)**: Autonomía agéntica, clasificación en tiempo real (`/bot/classify`), calibración continua (`/scoring/calibrate`) y reporte diario.
 * **Sprint 2 — Módulo Contable (Alegra MCP)**: Asientos contables automáticos vinculados al ledger legal, transporte MCP HTTP/SSE y cron a las 23:59 CDMX con almacenamiento en Cloudflare R2.
+
+### Sprint 3 y 4 — Aislamiento Multi-Tenant y Rate Limiter Distribuido
+* **Sprint 3**: Fusionado con Sprint 4 en la arquitectura final de aislamiento distribuido.
 * **Sprint 4 — Tenant Isolation y Rate Limiter**: Aislamiento estricto multi-tenant con `tenant_id` en todas las tablas de negocio, índices compuestos y rate limiter atómico distribuido en Durable Objects (`RateLimiterDO`).
-* **Sprint 5 — Identidad Nativa en D1**: Eliminación de dependencias externas de autenticación SaaS; PBKDF2-SHA256 en Worker, sesiones hasheadas en D1, cookie segura `ark_session` y RBAC en 3 niveles (`owner`, `admin`, `member`).
+
+### Sprint 5 — Identidad Nativa en D1
+* Eliminación de dependencias externas de autenticación SaaS; PBKDF2-SHA256 en Worker, sesiones hasheadas en D1, cookie segura `ark_session` y RBAC en 3 niveles (`owner`, `admin`, `member`).
 
 ### Sprint 6 — Operación Humana, Copilot y Conciliación de Pagos
 * **Workspace del Operador (`OperatorDrawer.tsx`)**: Diagnóstico Ejecutivo IA de casos escalados, Softphone con guion obligatorio CONDUSEF e interceptor legal humano en respuestas.
@@ -253,7 +258,7 @@ tests/                       23 suites unitarias y de integración (358 tests ap
 
 ### Sprint 10 — Telefonía Telnyx Voice AI Assistants (Superación del Spike DIY)
 * **Telefonía PSTN con AMD**: Marcación directa a números móviles y fijos de México (+52) con Answering Machine Detection premium y colgado automático ante buzón de voz.
-* **Integración Nativa Telnyx Voice AI Assistants**: Transición formal del spike experimental artesanal a Voice AI Assistants nativo de Telnyx (< 800 ms de latencia conversacional frente a los 3.9 s del DIY).
+* **Integración Nativa Telnyx Voice AI Assistants**: Transición formal del spike experimental artesanal (Spike D cerrado como NO-GO por latencia 3.9s p95) a Voice AI Assistants nativo de Telnyx (< 800 ms de cota y objetivo de diseño bajo SLA del proveedor; grabación estéreo opt-in).
 * **Softphone Humano y Transferencia en Caliente (`call.bridge`)**: Transferencia de la llamada entre Voice AI y supervisores humanos sin desconectar la línea.
 
 ### Sprint 11 — Portal de Autoservicio del Deudor & 1-Click SPEI Checkout
@@ -266,8 +271,8 @@ tests/                       23 suites unitarias y de integración (358 tests ap
 
 ### Sprint 13 — Conector ATEB Servicios PSC, Custodia WORM y Cuaderno Judicial/Fiscal
 * **Conector Dual-Engine ATEB PSC**: Modo A (Cumplimiento Pleno Oficial acreditado por la Secretaría de Economía con RFC 3161 TSA y ASN.1 DER) y Modo B (Evidencia Interna Preparada para Migración con resguardo inmutable y failover automático).
-* **Capa de Custodia WORM (Write Once, Read Many)**: Bitácora inmutable encadenada (`worm_audit_log`) que garantiza retención obligatoria de 10 años conforme al Art. 49 del Código de Comercio.
-* **Cuaderno Procesal Judicial & Carpeta SAT**: Expediente integral para Juicios Ejecutivos Mercantiles y Orales Mercantiles (Art. 1298-A CCom), con cálculo de intereses moratorios al 6% anual (Art. 362 CCom) y materialidad probatoria ante el SAT (Arts. 29-A y 69-B CFF, y 27 Fracc. XV LISR).
+* **Capa de Custodia WORM (Write Once, Read Many)**: Bitácora inmutable encadenada (`worm_audit_log`) para retención obligatoria de 10 años conforme al Art. 49 CCom (Modo B presuntivo; ver §8 para la ruta a Modo A oficial acreditado ante la Secretaría de Economía).
+* **Cuaderno Procesal Judicial & Carpeta SAT**: Expediente integral para Juicios Ejecutivos Mercantiles y Orales Mercantiles (Art. 1298-A CCom), con cálculo de intereses moratorios al 6% anual (Art. 362 CCom) y materialidad probatoria ante el SAT (Arts. 29-A y 69-B CFF, y 27 Fracc. XV LISR). Distinción explícita por folio en interfaz y reporte impreso: Modo A Oficial ATEB PSC (verde) vs Modo B Presuntivo Arkangel (amarillo).
 * **Sincronización en 1-Clic y KPIs de Voz en Dashboard**: Botón de aprovisionamiento de Asistente de Voz Telnyx en la UI y tarjetas KPI de Minutos de Voz, Llamadas AI y Promesas en Audio en la pantalla principal.
 
 ---
@@ -276,7 +281,8 @@ tests/                       23 suites unitarias y de integración (358 tests ap
 
 | Verificación | Herramienta / Comando | Resultado actual |
 | :--- | :--- | :--- |
-| **Suite completa de pruebas** | `npm test` (23 archivos) | **23 suites / 358 tests aprobados (100% verde)** |
+| **Suite completa de pruebas** | `npm test` (23 archivos) | **23 suites / 358 tests aprobados (100% verde)**; incluye `tests/spikeVoz.test.ts` (25 tests de regresión de percentiles, DO y contratos de voz) |
+| **Latencia Voice AI (Telnyx)** | Telemetría en producción | **< 800 ms objetivo de diseño bajo SLA del proveedor; arnés telemétrico formal de p50/p95 en producción en curso (ver §8)** |
 | **Linter de código** | `npm run lint` (`--max-warnings 0`) | **0 errores, 0 warnings** |
 | **Compilación frontend** | `npm run build:frontend` (Vite) | **1638 módulos transformados, bundle limpio** |
 | **Compilación del Worker** | `npm run build:worker` (Wrangler dry-run) | **Todos los bindings D1/KV/Queue/DO/R2/AI validados** |
@@ -301,17 +307,25 @@ La carpeta [`docs/instructivos/`](file:///c:/Users/PAV/Desktop/e-commerce/arkang
 ## 8. Frontera activa, pendientes y hoja de ruta
 
 ### Resuelto y Superado (Sin deuda en estos componentes)
-* **Spike de Voz Artesanal (Workers AI / Cloudflare Realtime)**: Formalmente cerrado como antecedente superado; sustituido en producción por **Telnyx Voice AI Assistants**, marcación PSTN mexicana (+52), Answering Machine Detection (AMD) y latencia ultrabaja (< 800 ms).
+* **Spike de Voz Artesanal (Workers AI / Cloudflare Realtime)**: Formalmente cerrado como antecedente superado; sustituido en producción por **Telnyx Voice AI Assistants**, marcación PSTN mexicana (+52), Answering Machine Detection (AMD) y latencia conversacional ultrabaja.
 * **Desfase de Cron de Cobranza**: Alineado a las 12:00 UTC = 6:00 AM hora del centro de México (CDMX) en `wrangler.jsonc`.
 * **Identidad y Autenticación**: 100% nativa con PBKDF2 en Cloudflare D1; cero dependencias de Clerk o SaaS de identidad.
 * **Integración Continua**: Pipeline activo en `.github/workflows/ci.yml`.
 
 ### Frontera Activa (Prioridades siguientes)
+
 1. **Validación en Vivo de Credenciales de Producción ATEB PSC (Modo A)**:
    * Los despachos operan actualmente en Modo B (evidencia interna y resguardo criptográfico WORM pleno).
+   * **Advertencia operativa**: Mientras un despacho opere en Modo B, las constancias emitidas se presentan válidamente como evidencia informática complementaria (Arts. 1298-A CCom y 210-A CFPC), pero no como constancia NOM-151 oficial plena. El Cuaderno Procesal (§3, `/docket/printable`) incluye una leyenda y distintivo visual que separa los folios Modo A de los Modo B para evitar objeciones procesales en juicio.
    * Al tramitar el despacho sus credenciales ante ATEB Servicios PSC (proveedor acreditado por la Secretaría de Economía), cargar la llave de producción en `POST /api/v1/nom151/psc/settings` para conmutar a timbrado oficial TSA RFC 3161 y constancias ASN.1 DER sin cambios de código.
+
 2. **Validación de Catálogo Real contra Alegra**:
    * El cliente Alegra MCP JSON-RPC 2.0 está implementado y probado en arnés unitario.
    * Pendiente ejecutar un ensayo end-to-end contra una instancia de pruebas de Alegra para verificar que los identificadores de cuentas del plan contable coincidan con el mapeo por despacho.
+
 3. **Campañas Masivas de Telefonía Saliente Voice AI**:
-   * Orquestación de lotes de llamadas telefónicas salientes respetando el límite concurrente de llamadas del trunk Telnyx y el horario legal NOM-184 (8:00 AM a 10:00 PM L-V).
+   * Orquestación de lotes de llamadas telefónicas salientes respetando el límite de concurrencia del trunk Telnyx (por defecto 10 canales concurrentes por despacho, configurable en `tenant_channels`) y la ventana legal NOM-184 (8:00 AM a 10:00 PM L-V).
+
+4. **Aviso de Grabación y Retención de Audio Voice AI (Gobernanza LFPDPPP)**:
+   * La grabación estéreo dual-channel de Telnyx se mantiene **apagada por defecto (opt-in)**.
+   * Su activación por un despacho requiere: (a) locución obligatoria al descolgar ("Esta llamada está siendo grabada para fines de calidad y cumplimiento legal"), (b) política de retención documentada y verificable en días, (c) si se almacena o procesa audio, consentimiento expreso del titular por tratamiento de dato biométrico/personal (LFPDPPP), y (d) aviso de privacidad que nombre a Telnyx y al almacenamiento en nube como encargados, con base legal para transferencia internacional de datos.
