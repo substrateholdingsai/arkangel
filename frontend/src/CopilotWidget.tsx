@@ -62,6 +62,33 @@ export function CopilotWidget({ activeCaseId, activeCaseName, humanCount }: Copi
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [splineError, setSplineError] = useState(false);
+  const [webGpuChecked, setWebGpuChecked] = useState(false);
+
+  // Verificación proactiva de WebGPU para evitar mensajes nativos de runtime no soportado
+  useEffect(() => {
+    let isMounted = true;
+    const checkGpu = async () => {
+      try {
+        const nav = typeof navigator !== 'undefined' ? (navigator as unknown as { gpu?: { requestAdapter: () => Promise<unknown> } }) : undefined;
+        if (!nav?.gpu) {
+          if (isMounted) setSplineError(true);
+          return;
+        }
+        const adapter = await nav.gpu.requestAdapter();
+        if (!adapter && isMounted) {
+          setSplineError(true);
+        }
+      } catch {
+        if (isMounted) setSplineError(true);
+      } finally {
+        if (isMounted) setWebGpuChecked(true);
+      }
+    };
+    void checkGpu();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const [turns, setTurns] = useState<ChatTurn[]>([
     {
@@ -254,7 +281,7 @@ export function CopilotWidget({ activeCaseId, activeCaseName, humanCount }: Copi
 
             {/* Lienzo Spline 3D interactivo con fallback elegante */}
             <div className="absolute inset-0 z-10 flex items-center justify-center">
-              {!splineError ? (
+              {!splineError && webGpuChecked ? (
                 <Suspense
                   fallback={
                     <div className="flex flex-col items-center justify-center gap-2 text-cyan-400/80">
@@ -275,7 +302,7 @@ export function CopilotWidget({ activeCaseId, activeCaseName, humanCount }: Copi
                 <img
                   src="/ark-mascot.jpg"
                   alt="Ark Mascot Fallback"
-                  className="h-36 w-36 object-contain drop-shadow-[0_0_15px_rgba(0,240,255,0.3)]"
+                  className="h-36 w-36 object-contain drop-shadow-[0_0_15px_rgba(0,240,255,0.3)] animate-in fade-in duration-300"
                 />
               )}
             </div>
