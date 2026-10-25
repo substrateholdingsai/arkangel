@@ -88,6 +88,12 @@ export async function handleInbound(env: Env, inbound: InboundMessage): Promise<
     inbound: inbound.body,
   });
 
+  if (inbound.meta?.is_opt_out) {
+    classification.intent = 'molesto';
+    classification.confidence = 1.0;
+    classification.source = 'heuristic';
+  }
+
   await logEvent(ctx, 'inbound.clasificado', {
     caseId,
     clientId: client.id,

@@ -117,6 +117,16 @@ export function parseTelnyxPayload(payload: unknown): ParsedInbound {
   // 1. Mensajes entrantes
   if (eventType === 'message.received' || (!eventType && textBody && fromNumber)) {
     if (textBody && fromNumber) {
+      const normalizedBody = textBody.trim().toLowerCase();
+      const isOptOut =
+        normalizedBody === 'stop' ||
+        normalizedBody === 'unsubscribe' ||
+        normalizedBody === 'cancel' ||
+        normalizedBody === 'quit' ||
+        normalizedBody === 'baja' ||
+        normalizedBody === 'alto' ||
+        normalizedBody === 'no molestar';
+
       messages.push({
         channel,
         providerId: messageId ?? `telnyx_${Date.now()}`,
@@ -128,6 +138,7 @@ export function parseTelnyxPayload(payload: unknown): ParsedInbound {
           event_type: eventType,
           messaging_profile_id: payloadData.messaging_profile_id,
           phone_number_id: isWhatsApp ? (toNumber ?? fromNumber) : undefined,
+          is_opt_out: isOptOut,
         },
       });
     }

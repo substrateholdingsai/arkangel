@@ -3,6 +3,7 @@ import { askCopilot, type CopilotHistoryItem } from '../ai/copilot';
 import { adapters, testChannelConnectivity } from '../channels';
 import { parseCobreWebhook } from '../channels/cobre';
 import { parseConektaWebhook } from '../channels/conekta';
+import { dialCall, generateWebRTCCredentials, transferCall } from '../channels/telnyxVoice';
 import { formatMXN, formatMXNShort } from '../lib/money';
 import { maskPhone } from '../lib/phone';
 import { isWithinSendWindow, localHour } from '../lib/score';
@@ -756,16 +757,43 @@ api.post('/cases/:id/call', async (c) => {
       );
     }
 
+    const targetPhone = client?.phone ?? item.phone;
+    if (!targetPhone) {
+      return c.json({ ok: false, error: 'El deudor no tiene número telefónico registrado.' }, 400);
+    }
+
+    let callControlId: string | undefined;
+    let dialStatus = 'ready';
+
+    if (payload.dial === true || payload.mode === 'telnyx') {
+      const dialRes = await dialCall(c.env, {
+        to: targetPhone,
+        amd: true,
+        customHeaders: {
+          'X-Case-ID': item.id,
+          'X-Tenant-ID': ctx.tenantId,
+        },
+      });
+      if (dialRes.ok && dialRes.callControlId) {
+        callControlId = dialRes.callControlId;
+        dialStatus = 'dialing';
+      } else {
+        dialStatus = 'mock';
+      }
+    }
+
     await logEvent(ctx, 'operador.llamada_iniciada', {
       caseId: item.id,
       clientId: item.client_id,
-      payload: { actor: guardia.principal.actorId },
+      payload: { actor: guardia.principal.actorId, callControlId, dialStatus },
     });
 
     return c.json({
       ok: true,
-      call_id: `call_${Date.now()}`,
-      phone: client?.phone ?? item.phone,
+      call_id: callControlId ?? `call_${Date.now()}`,
+      call_control_id: callControlId,
+      dial_status: dialStatus,
+      phone: targetPhone,
       guion_obligatorio: guionApertura,
       clabe_autorizada: contract?.clabe ?? null,
     });
@@ -808,6 +836,40 @@ api.post('/cases/:id/call', async (c) => {
   });
 
   return c.json({ ok: true, message: recorded });
+});
+
+api.post('/cases/:id/call/transfer', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'messages:send');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+
+  const bodyJson = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const callControlId = String(bodyJson.call_control_id ?? '');
+  const to = String(bodyJson.to ?? '');
+
+  if (!callControlId || !to) {
+    return c.json({ ok: false, error: 'call_control_id y to son requeridos' }, 400);
+  }
+
+  const res = await transferCall(c.env, callControlId, to);
+  if (res.ok) {
+    await logEvent(ctx, 'operador.llamada_transferida', {
+      caseId: c.req.param('id'),
+      payload: { callControlId, to, actor: guardia.principal.actorId },
+    });
+  }
+  return c.json(res, res.ok ? 200 : 502);
+});
+
+api.get('/telnyx/webrtc-token', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'messages:send');
+  if (!guardia.ok) return guardia.response;
+  const cleanActor = guardia.principal.actorId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 16);
+  const sipUsername = `op_${cleanActor || 'agent'}`;
+  const creds = await generateWebRTCCredentials(c.env, sipUsername);
+  return c.json(creds, creds.ok ? 200 : 500);
 });
 
 api.get('/clients/:id', async (c) => {

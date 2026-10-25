@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   AlertTriangle,
   Bot,
@@ -8,6 +8,7 @@ import {
   Mic,
   MicOff,
   PhoneCall,
+  PhoneForwarded,
   PhoneOff,
   Send,
   ShieldAlert,
@@ -65,6 +66,12 @@ export function OperatorDrawer({
   const [callMuted, setCallMuted] = useState(false);
   const [callSeconds, setCallSeconds] = useState(0);
   const [callScript, setCallScript] = useState<string | null>(null);
+  const [callControlId, setCallControlId] = useState<string | null>(null);
+  const [callDialMode, setCallDialMode] = useState<'telnyx' | 'mock'>('telnyx');
+  const [transferTarget, setTransferTarget] = useState('');
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [transferring, setTransferring] = useState(false);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
   const [callNotes, setCallNotes] = useState('');
   const [callOutcome, setCallOutcome] = useState<'promesa' | 'aclaracion' | 'buzon' | 'contactado'>(
     'contactado'
@@ -197,11 +204,26 @@ export function OperatorDrawer({
     setError(null);
     setNotice(null);
     try {
-      const res = await api.callCase(ws.case.id, { phase: 'start' });
+      if (navigator.mediaDevices?.getUserMedia) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          mediaStreamRef.current = stream;
+        } catch {
+          // Si el operador rechaza o no tiene micro, continúa con la línea
+        }
+      }
+
+      const res = await api.callCase(ws.case.id, {
+        phase: 'start',
+        dial: callDialMode === 'telnyx',
+        mode: callDialMode,
+      });
       setCallScript(res.guion_obligatorio ?? null);
+      setCallControlId(res.call_control_id ?? null);
       setCallSeconds(0);
       setCallMuted(false);
       setCallActive(true);
+      setShowTransfer(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Llamada bloqueada por el Motor Legal');
     } finally {
@@ -209,11 +231,27 @@ export function OperatorDrawer({
     }
   };
 
+  const toggleMute = () => {
+    setCallMuted((prev) => {
+      const next = !prev;
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getAudioTracks().forEach((track) => {
+          track.enabled = !next;
+        });
+      }
+      return next;
+    });
+  };
+
   const finalizarLlamada = async () => {
     if (!ws) return;
     setCallingBusy(true);
     setError(null);
     try {
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+        mediaStreamRef.current = null;
+      }
       await api.callCase(ws.case.id, {
         phase: 'complete',
         duration_seconds: callSeconds,
@@ -221,7 +259,9 @@ export function OperatorDrawer({
         notes: callNotes,
       });
       setCallActive(false);
+      setCallControlId(null);
       setCallNotes('');
+      setShowTransfer(false);
       setNotice(
         `Llamada de ${formatDuration(callSeconds)} sellada en el historial y en auditoría legal.`
       );
@@ -231,6 +271,30 @@ export function OperatorDrawer({
       setError(err instanceof Error ? err.message : 'No se pudo registrar el cierre de llamada');
     } finally {
       setCallingBusy(false);
+    }
+  };
+
+  const transferirLlamada = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!ws || !callControlId || !transferTarget.trim()) return;
+    setTransferring(true);
+    setError(null);
+    try {
+      const res = await api.transferCall(ws.case.id, {
+        call_control_id: callControlId,
+        to: transferTarget.trim(),
+      });
+      if (res.ok) {
+        setNotice(`Llamada transferida a ${transferTarget.trim()} con éxito.`);
+        setShowTransfer(false);
+        setTransferTarget('');
+      } else {
+        setError(res.error ?? 'No se pudo transferir la llamada');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al transferir llamada');
+    } finally {
+      setTransferring(false);
     }
   };
 
@@ -743,37 +807,54 @@ export function OperatorDrawer({
                   </div>
 
                   {!callActive ? (
-                    <Button
-                      variant={limiteAlcanzado ? 'secondary' : 'accent'}
-                      size="sm"
-                      icon={PhoneCall}
-                      disabled={
-                        !canOperate ||
-                        callingBusy ||
-                        Boolean(ws.client?.do_not_disturb) ||
-                        limiteAlcanzado
-                      }
-                      onClick={() => void iniciarLlamada()}
-                      title={
-                        limiteAlcanzado
-                          ? 'Bloqueado: se alcanzó el límite diario de 3 contactos en 24h (NOM-184)'
-                          : undefined
-                      }
-                    >
-                      {callingBusy
-                        ? 'Verificando…'
-                        : limiteAlcanzado
-                          ? 'Límite alcanzado'
-                          : 'Llamar ahora'}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={callDialMode}
+                        onChange={(e) => setCallDialMode(e.target.value as 'telnyx' | 'mock')}
+                        disabled={callingBusy || limiteAlcanzado}
+                        className="rounded bg-slate-800 border border-slate-700 px-2 py-1 text-[11px] text-slate-200"
+                        title="Modo de llamada telefónica"
+                      >
+                        <option value="telnyx">Telnyx PSTN</option>
+                        <option value="mock">Línea Directa</option>
+                      </select>
+                      <Button
+                        variant={limiteAlcanzado ? 'secondary' : 'accent'}
+                        size="sm"
+                        icon={PhoneCall}
+                        disabled={
+                          !canOperate ||
+                          callingBusy ||
+                          Boolean(ws.client?.do_not_disturb) ||
+                          limiteAlcanzado
+                        }
+                        onClick={() => void iniciarLlamada()}
+                        title={
+                          limiteAlcanzado
+                            ? 'Bloqueado: se alcanzó el límite diario de 3 contactos en 24h (NOM-184)'
+                            : undefined
+                        }
+                      >
+                        {callingBusy
+                          ? 'Conectando…'
+                          : limiteAlcanzado
+                            ? 'Límite alcanzado'
+                            : 'Llamar ahora'}
+                      </Button>
+                    </div>
                   ) : (
                     <div className="flex items-center gap-2">
                       <span className="px-2.5 py-1 rounded bg-slate-800 text-emerald-400 text-xs font-semibold data-mono border border-slate-700">
                         ● {formatDuration(callSeconds)}
                       </span>
+                      {callControlId ? (
+                        <span className="hidden sm:inline-block px-1.5 py-0.5 rounded bg-emerald-950/80 text-[10px] font-mono text-emerald-400 border border-emerald-800">
+                          Telnyx PSTN
+                        </span>
+                      ) : null}
                       <button
                         type="button"
-                        onClick={() => setCallMuted((m) => !m)}
+                        onClick={toggleMute}
                         className={`p-2 rounded-md border text-xs ${
                           callMuted
                             ? 'bg-amber-600 border-amber-500 text-white'
@@ -783,6 +864,16 @@ export function OperatorDrawer({
                       >
                         {callMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
                       </button>
+                      {callControlId ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowTransfer((s) => !s)}
+                          className="p-2 rounded-md border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700 text-xs"
+                          title="Transferir llamada a otro agente o supervisor"
+                        >
+                          <PhoneForwarded className="w-4 h-4" />
+                        </button>
+                      ) : null}
                       <Button
                         variant="danger"
                         size="sm"
@@ -806,6 +897,40 @@ export function OperatorDrawer({
                         </div>
                         <p className="leading-relaxed">{callScript}</p>
                       </div>
+                    ) : null}
+
+                    {showTransfer && callControlId ? (
+                      <form
+                        onSubmit={transferirLlamada}
+                        className="bg-slate-950 p-3 rounded-lg border border-slate-700 space-y-2"
+                      >
+                        <div className="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                          <span>Transferir llamada activa (Call Bridging)</span>
+                          <button
+                            type="button"
+                            onClick={() => setShowTransfer(false)}
+                            className="text-slate-400 hover:text-white"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={transferTarget}
+                            onChange={(e) => setTransferTarget(e.target.value)}
+                            placeholder="Número (+52...) o extensión SIP"
+                            className="flex-1 rounded bg-slate-900 border border-slate-700 px-2.5 py-1 text-xs text-white"
+                          />
+                          <button
+                            type="submit"
+                            disabled={transferring || !transferTarget.trim()}
+                            className="rounded bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 text-xs font-medium disabled:opacity-50"
+                          >
+                            {transferring ? 'Transfiriendo…' : 'Transferir'}
+                          </button>
+                        </div>
+                      </form>
                     ) : null}
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">

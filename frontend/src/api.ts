@@ -537,12 +537,14 @@ export const api = {
   callCase: (
     caseId: string,
     input:
-      | { phase: 'start' }
+      | { phase: 'start'; dial?: boolean; mode?: 'telnyx' | 'mock' }
       | { phase: 'complete'; duration_seconds: number; outcome: string; notes: string }
   ) =>
     request<{
       ok: boolean;
       call_id?: string;
+      call_control_id?: string;
+      dial_status?: string;
       phone?: string | null;
       guion_obligatorio?: string;
       clabe_autorizada?: string | null;
@@ -551,6 +553,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
+
+  transferCall: (caseId: string, input: { call_control_id: string; to: string }) =>
+    request<{ ok: boolean; error?: string }>(
+      `/api/v1/cases/${encodeURIComponent(caseId)}/call/transfer`,
+      {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }
+    ),
+
+  getTelnyxWebRTCToken: () =>
+    request<{ ok: boolean; sipUsername?: string; jwt?: string; error?: string }>(
+      '/api/v1/telnyx/webrtc-token'
+    ),
 
   copilotChat: (input: {
     message: string;

@@ -4,6 +4,11 @@ import { parseConektaWebhook, verifyConektaDigest } from '../channels/conekta';
 import { parseResendPayload } from '../channels/resend';
 import { parseTelnyxPayload } from '../channels/telnyx';
 import {
+  isTelnyxVoiceEvent,
+  parseTelnyxVoiceEvent,
+  processTelnyxVoiceEvent,
+} from '../channels/telnyxVoice';
+import {
   parseWhatsAppPayload,
   verifyWhatsAppSignature,
   whatsappChallengeResponse,
@@ -105,9 +110,18 @@ webhooks.post('/telnyx', async (c) => {
     }
   }
 
-  const parsed = parseTelnyxPayload(safeJson(raw));
+  const json = safeJson(raw);
+  if (isTelnyxVoiceEvent(json)) {
+    const voiceEvent = parseTelnyxVoiceEvent(json);
+    if (voiceEvent) {
+      await processTelnyxVoiceEvent(c.env, voiceEvent);
+    }
+    return c.json({ ok: true, type: 'voice' });
+  }
+
+  const parsed = parseTelnyxPayload(json);
   await processParsed(c.env, parsed);
-  return c.json({ ok: true });
+  return c.json({ ok: true, type: 'messaging' });
 });
 
 // ── Resend (email entrante) ────────────────────────────────────────────
