@@ -13,12 +13,14 @@ import {
   Send,
   ShieldAlert,
   ShieldCheck,
+  Scale,
   UserCheck,
   X,
 } from 'lucide-react';
 import { Alert, Button, ChannelBadge, StatusBadge } from '@ds';
 import { api, ApiError, type CaseWorkspace, type Nom151Certificate } from './api';
 import { Nom151Modal } from './Nom151Modal';
+import { JudicialDocketModal } from './JudicialDocketModal';
 
 function formatMXN(cents: number): string {
   return (cents / 100).toLocaleString('es-MX', {
@@ -91,6 +93,7 @@ export function OperatorDrawer({
   // Constancias Digitales NOM-151-SCFI-2016
   const [nomCertificates, setNomCertificates] = useState<Nom151Certificate[]>([]);
   const [selectedNomFolio, setSelectedNomFolio] = useState<string | null>(null);
+  const [showJudicialDocket, setShowJudicialDocket] = useState(false);
   const [certifyWithNom151, setCertifyWithNom151] = useState(true);
   const [issuingManualNom, setIssuingManualNom] = useState(false);
 
@@ -1211,15 +1214,26 @@ export function OperatorDrawer({
                       Constancias Digitales NOM-151 ({nomCertificates.length})
                     </h3>
                   </div>
-                  <button
-                    type="button"
-                    disabled={issuingManualNom}
-                    onClick={() => void certificarNotificacionManual()}
-                    className="rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-800 hover:bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold flex items-center gap-1 transition-colors disabled:opacity-50"
-                    title="Emitir constancia formal con estampado criptográfico SHA-256 según la NOM-151-SCFI-2016"
-                  >
-                    {issuingManualNom ? 'Certificando…' : '+ Certificar Notificación'}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowJudicialDocket(true)}
+                      className="rounded-lg bg-sky-50 border border-sky-300 text-sky-800 hover:bg-sky-100 px-2.5 py-1 text-[11px] font-semibold flex items-center gap-1 transition-colors"
+                      title="Generar Cuaderno Judicial y Carpeta de Materialidad Fiscal SAT"
+                    >
+                      <Scale className="w-3.5 h-3.5 text-sky-700" />
+                      Cuaderno Judicial & SAT
+                    </button>
+                    <button
+                      type="button"
+                      disabled={issuingManualNom}
+                      onClick={() => void certificarNotificacionManual()}
+                      className="rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-800 hover:bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold flex items-center gap-1 transition-colors disabled:opacity-50"
+                      title="Emitir constancia formal con estampado criptográfico SHA-256 según la NOM-151-SCFI-2016"
+                    >
+                      {issuingManualNom ? 'Certificando…' : '+ Certificar Notificación'}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="p-3">
@@ -1243,6 +1257,15 @@ export function OperatorDrawer({
                               <span className="rounded bg-emerald-100 text-emerald-800 text-[10px] font-semibold px-1.5 py-0.2 uppercase">
                                 {cert.tipoNotificacion.replace(/_/g, ' ')}
                               </span>
+                              {cert.pscComplianceLevel === 'modo_a_pleno' ? (
+                                <span className="rounded bg-emerald-600 text-white text-[9px] font-bold px-1.5 py-0.2 uppercase">
+                                  ATEB PSC
+                                </span>
+                              ) : (
+                                <span className="rounded bg-slate-200 text-slate-700 text-[9px] font-medium px-1.5 py-0.2 uppercase">
+                                  Arkangel
+                                </span>
+                              )}
                               <span className="text-[10px] text-slate-400 capitalize">
                                 {cert.channel}
                               </span>
@@ -1383,6 +1406,13 @@ export function OperatorDrawer({
         <Nom151Modal
           folio={selectedNomFolio}
           onClose={() => setSelectedNomFolio(null)}
+        />
+      ) : null}
+
+      {showJudicialDocket && ws ? (
+        <JudicialDocketModal
+          caseId={ws.case.id}
+          onClose={() => setShowJudicialDocket(false)}
         />
       ) : null}
     </div>

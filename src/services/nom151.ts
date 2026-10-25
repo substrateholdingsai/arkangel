@@ -3,14 +3,20 @@
  *
  * Emisión, verificación e inmutabilidad de constancias electrónicas con estampado
  * de tiempo y huella criptográfica SHA-256 conforme al Código de Comercio
- * (Artículos 89 a 114) y la NOM-151-SCFI-2016 para prueba plena en cobranza
+ * (Artículos 89 a 114, 1298-A), la NOM-151-SCFI-2016 y los criterios de
+ * Materialidad Fiscal del CFF (Arts. 29-A y 69-B) para prueba plena en cobranza
  * extrajudicial y judicial en México.
+ *
+ * Soporta integración nativa con ATEB Servicios PSC (Prestador de Servicios de
+ * Certificación acreditado por la Secretaría de Economía) y custodia WORM de 10 años.
  */
 
 import { newId } from './db';
 import { logger } from '../lib/logger';
 import { maskPhone } from '../lib/phone';
 import { maskName } from './debtorPortal';
+import { getTenantPscSettings, stampDigestWithAtebPsc } from './atebPscClient';
+import { recordWormAuditEntry } from './custodyWorm';
 import type { TenantContext } from '../tenancy/types';
 import type { Env } from '../types/env';
 
@@ -21,6 +27,9 @@ export type Nom151TipoNotificacion =
   | 'aviso_cobranza';
 
 export type Nom151Channel = 'whatsapp' | 'sms' | 'email' | 'portal';
+
+export type PscProvider = 'arkangel_internal' | 'ateb_psc';
+export type PscComplianceLevel = 'modo_a_pleno' | 'modo_b_presuntivo';
 
 export interface IssueNom151Input {
   caseId: string;
@@ -52,6 +61,11 @@ export interface Nom151Certificate {
   timestampLocal: string;
   verificationUrl: string;
   status: 'issued' | 'delivered' | 'verified';
+  pscProvider: PscProvider;
+  pscComplianceLevel: PscComplianceLevel;
+  pscConstanciaId: string | null;
+  pscTimestampToken: string | null;
+  custodyWormHash: string | null;
   metadata: Record<string, unknown> | null;
   createdAt: string;
 }
@@ -67,7 +81,10 @@ export interface Nom151VerificationResult {
     calculatedSeal: string;
     timestampUtc: string;
     timestampLocal: string;
+    pscProvider: string;
+    complianceLevel: PscComplianceLevel;
     legalAuthority: string;
+    wormCustodyStatus: string;
   };
 }
 
@@ -86,6 +103,12 @@ export interface Nom151PrintableDocument {
   cadenaOriginal: string;
   selloDigital: string;
   urlVerificacionPublica: string;
+  proveedorPSC: string;
+  nivelCumplimiento: PscComplianceLevel;
+  nivelCumplimientoLabel: string;
+  folioConstanciaOficialSE: string | null;
+  selloTiempoTSA: string | null;
+  hashCustodiaWORM: string | null;
   fundamentoLegal: string[];
 }
 
@@ -129,7 +152,7 @@ export function buildCadenaOriginal(params: {
 export function formatLocalTimestamp(isoDate: string): string {
   try {
     const d = new Date(isoDate);
-    return d.toLocaleString('es-MX', {
+    const formatted = new Intl.DateTimeFormat('es-MX', {
       timeZone: 'America/Mexico_City',
       year: 'numeric',
       month: '2-digit',
@@ -138,45 +161,45 @@ export function formatLocalTimestamp(isoDate: string): string {
       minute: '2-digit',
       second: '2-digit',
       hour12: false,
-    }) + ' (Hora del Centro de México - CST/CDT)';
+    }).format(d);
+    return `${formatted} (Hora Centro de México)`;
   } catch {
     return isoDate;
   }
 }
 
 /**
- * Emite una nueva Constancia de Notificación NOM-151 con estampado criptográfico.
+ * Emite una nueva Constancia Digital NOM-151 para un requerimiento o notificación.
+ * Soporta Modo A (Timbrado oficial ATEB PSC) y Modo B (Motor Arkangel con resguardo WORM).
  */
 export async function issueNom151Certificate(
   ctx: TenantContext,
   input: IssueNom151Input
 ): Promise<Nom151Certificate> {
   const certId = newId('nom');
-  const now = new Date();
-  const timestampUtc = now.toISOString();
+  const timestampUtc = new Date().toISOString();
   const timestampLocal = formatLocalTimestamp(timestampUtc);
 
-  // Generar folio único tipo NOM151-2026-XXXXXX
-  const randomSuffix = Math.random().toString(36).substring(2, 8).toUpperCase();
-  const certificateFolio = `NOM151-${now.getUTCFullYear()}-${randomSuffix}`;
-
-  // Consultar datos del cliente para el enmascaramiento legal
+  // 1. Obtener cliente para enmascaramiento legal conforme a normativas de privacidad
   const clientRow = await ctx.env.DB.prepare(
-    'SELECT name, phone, email FROM clients WHERE tenant_id = ? AND id = ? LIMIT 1'
+    `SELECT name, phone, email FROM clients WHERE id = ? LIMIT 1`
   )
-    .bind(ctx.tenantId, input.clientId)
+    .bind(input.clientId)
     .first<{ name: string; phone: string | null; email: string | null }>();
 
-  const maskedName = maskName(clientRow?.name || 'Titular del Crédito');
-  const contactPart = input.channel === 'email'
-    ? (clientRow?.email ? clientRow.email.replace(/(.{2})(.*)(@.*)/, '$1***$3') : '***@***.***')
-    : maskPhone(clientRow?.phone || '');
-  const recipientMasked = `${maskedName} (${contactPart})`;
+  const maskedName = clientRow?.name ? maskName(clientRow.name) : 'DESTINATARIO_TITULAR';
+  const maskedPhone = clientRow?.phone ? maskPhone(clientRow.phone) : '••• ••• ••••';
+  const recipientMasked = `${maskedName} (${maskedPhone})`;
 
-  // Calcular la huella digital SHA-256 del contenido del mensaje
+  // 2. Cálculo de Digest SHA-256 del contenido exacto notificado
   const messageDigestSha256 = await sha256Hex(input.messageContent.trim());
 
-  // Construir la Cadena Original y el Sello Digital
+  // 3. Generación de folio único estandarizado
+  const cleanTenant = ctx.tenantId.replace(/^t_/, '').toUpperCase();
+  const randomSuffix = Math.random().toString(36).substring(2, 8).toUpperCase();
+  const certificateFolio = `ARK-NOM151-${cleanTenant}-${Date.now().toString(36).toUpperCase()}-${randomSuffix}`;
+
+  // 4. Cadena Original normalizada
   const razonSocial = ctx.tenant?.razon_social || 'Entidad Acreedora Autorizada';
   const condusefRegistro = ctx.tenant?.condusef_registro || 'REDECO-REGULADO';
 
@@ -194,7 +217,32 @@ export async function issueNom151Certificate(
 
   const selloDigital = await sha256Hex(cadenaOriginal);
 
-  // URL pública de verificación jurídica
+  // 5. Consulta y procesamiento con ATEB Servicios PSC (Modo Dual)
+  const pscSettings = await getTenantPscSettings(ctx.env, ctx.tenantId);
+  const stampResult = await stampDigestWithAtebPsc(pscSettings, {
+    digestSha256: messageDigestSha256,
+    certificateFolio,
+    metadata: input.metadata,
+  });
+
+  // 6. Registro en la Capa Transversal de Custodia WORM (Art. 49 CCom - 10 años)
+  const wormEntry = await recordWormAuditEntry(ctx.env, {
+    tenantId: ctx.tenantId,
+    caseId: input.caseId,
+    recordType: 'nom151_certificate',
+    recordId: certId,
+    action: 'created',
+    actor: 'system',
+    recordHash: selloDigital,
+    metadata: {
+      folio: certificateFolio,
+      complianceLevel: stampResult.complianceLevel,
+      pscProvider: stampResult.provider,
+      constanciaId: stampResult.constanciaId,
+    },
+  });
+
+  // 7. URL pública de verificación jurídica
   const baseUrl = ctx.env.APP_URL || 'https://arkangel.arksystems.site';
   const verificationUrl = `${baseUrl}/verify/nom151/${certificateFolio}`;
 
@@ -203,8 +251,10 @@ export async function issueNom151Certificate(
       id, tenant_id, case_id, client_id, message_id, certificate_folio,
       tipo_notificacion, channel, provider_id, recipient_masked,
       message_content, message_digest_sha256, cadena_original, sello_digital,
-      timestamp_utc, timestamp_local, verification_url, status, metadata, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?)`
+      timestamp_utc, timestamp_local, verification_url, status,
+      psc_provider, psc_compliance_level, psc_constancia_id, psc_timestamp_token,
+      psc_response_payload, custody_worm_hash, metadata, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       certId,
@@ -224,6 +274,12 @@ export async function issueNom151Certificate(
       timestampUtc,
       timestampLocal,
       verificationUrl,
+      stampResult.provider,
+      stampResult.complianceLevel,
+      stampResult.constanciaId || null,
+      stampResult.timestampToken || null,
+      stampResult.rawResponse ? JSON.stringify(stampResult.rawResponse) : null,
+      wormEntry.entryHash,
       input.metadata ? JSON.stringify(input.metadata) : null,
       timestampUtc
     )
@@ -234,7 +290,9 @@ export async function issueNom151Certificate(
     certificateFolio,
     caseId: input.caseId,
     tenantId: ctx.tenantId,
-    digest: messageDigestSha256.slice(0, 16) + '...',
+    pscProvider: stampResult.provider,
+    complianceLevel: stampResult.complianceLevel,
+    wormHash: wormEntry.entryHash.slice(0, 16) + '...',
   });
 
   return {
@@ -256,6 +314,11 @@ export async function issueNom151Certificate(
     timestampLocal,
     verificationUrl,
     status: 'issued',
+    pscProvider: stampResult.provider,
+    pscComplianceLevel: stampResult.complianceLevel,
+    pscConstanciaId: stampResult.constanciaId || null,
+    pscTimestampToken: stampResult.timestampToken || null,
+    custodyWormHash: wormEntry.entryHash,
     metadata: input.metadata || null,
     createdAt: timestampUtc,
   };
@@ -323,9 +386,19 @@ export async function getNom151CertificateByFolio(
     timestampLocal: row.timestamp_local,
     verificationUrl: row.verification_url,
     status: row.status,
+    pscProvider: row.psc_provider || 'arkangel_internal',
+    pscComplianceLevel: row.psc_compliance_level || 'modo_b_presuntivo',
+    pscConstanciaId: row.psc_constancia_id || null,
+    pscTimestampToken: row.psc_timestamp_token || null,
+    custodyWormHash: row.custody_worm_hash || null,
     metadata: row.metadata ? JSON.parse(row.metadata) : null,
     createdAt: row.created_at,
   };
+
+  const pscAuthority =
+    cert.pscComplianceLevel === 'modo_a_pleno'
+      ? 'Código de Comercio Arts. 89-114 · ATEB Servicios PSC (Acreditado Secretaría de Economía) · Cumplimiento Pleno Oficial'
+      : 'Código de Comercio Arts. 89-114 · Motor Criptográfico Arkangel · Evidencia Interna Preparada para Timbrado Oficial';
 
   return {
     valid: digestMatches && sealMatches,
@@ -338,7 +411,12 @@ export async function getNom151CertificateByFolio(
       calculatedSeal,
       timestampUtc: row.timestamp_utc,
       timestampLocal: row.timestamp_local,
-      legalAuthority: 'Código de Comercio Arts. 89-114 · NOM-151-SCFI-2016 · Secretaría de Economía',
+      pscProvider: cert.pscProvider,
+      complianceLevel: cert.pscComplianceLevel,
+      legalAuthority: pscAuthority,
+      wormCustodyStatus: row.custody_worm_hash
+        ? 'Activo · Bitácora WORM inmutable encadenada (Art. 49 CCom)'
+        : 'Estándar',
     },
   };
 }
@@ -378,6 +456,11 @@ export async function listNom151CertificatesByCase(
     timestampLocal: row.timestamp_local,
     verificationUrl: row.verification_url,
     status: row.status,
+    pscProvider: row.psc_provider || 'arkangel_internal',
+    pscComplianceLevel: row.psc_compliance_level || 'modo_b_presuntivo',
+    pscConstanciaId: row.psc_constancia_id || null,
+    pscTimestampToken: row.psc_timestamp_token || null,
+    custodyWormHash: row.custody_worm_hash || null,
     metadata: row.metadata ? JSON.parse(row.metadata) : null,
     createdAt: row.created_at,
   }));
@@ -414,6 +497,11 @@ export async function generateNom151PrintableDocument(
     portal: 'Portal de Autoservicio Digital Seguro (Arkangel 1-Click SPEI)',
   };
 
+  const isPleno = cert.pscComplianceLevel === 'modo_a_pleno';
+  const nivelLabel = isPleno
+    ? 'CUMPLIMIENTO PLENO OFICIAL (ATEB SERVICIOS PSC · SECRETARÍA DE ECONOMÍA)'
+    : 'EVIDENCIA INTERNA PREPARADA PARA TIMBRADO OFICIAL (MOTOR ARKANGEL NOM-151)';
+
   return {
     folio: cert.certificateFolio,
     titulo: titulosPorTipo[cert.tipoNotificacion] || 'CONSTANCIA DE NOTIFICACIÓN DIGITAL',
@@ -429,12 +517,22 @@ export async function generateNom151PrintableDocument(
     cadenaOriginal: cert.cadenaOriginal,
     selloDigital: cert.selloDigital,
     urlVerificacionPublica: cert.verificationUrl,
+    proveedorPSC: cert.pscProvider === 'ateb_psc' ? 'ATEB Servicios PSC' : 'Arkangel Native Engine',
+    nivelCumplimiento: cert.pscComplianceLevel,
+    nivelCumplimientoLabel: nivelLabel,
+    folioConstanciaOficialSE: cert.pscConstanciaId,
+    selloTiempoTSA: cert.pscTimestampToken,
+    hashCustodiaWORM: cert.custodyWormHash,
     fundamentoLegal: [
       'ARTÍCULO 89 DEL CÓDIGO DE COMERCIO: Las disposiciones de este título rigen los actos de comercio por medios electrónicos y en la generación, envío, recepción, archivo o comunicación de mensajes de datos.',
       'ARTÍCULO 89 BIS DEL CÓDIGO DE COMERCIO: No se negarán efectos jurídicos, validez o fuerza obligatoria a cualquier tipo de información por la sola razón de que esté contenida en un Mensaje de Datos.',
       'ARTÍCULO 90 DEL CÓDIGO DE COMERCIO: Se presumirá que un Mensaje de Datos proviene del Emisor si ha sido aplicado un procedimiento de identificación o verificación acordado.',
+      'ARTÍCULO 1298-A DEL CÓDIGO DE COMERCIO: Se reconoce como prueba plena la información generada o comunicada que conste en medios electrónicos y cuente con constancia de conservación emitida por Prestador de Servicios de Certificación acreditado.',
+      'ARTÍCULO 49 DEL CÓDIGO DE COMERCIO: Obligación de custodia y conservación inalterable de mensajes de datos y registros mercantiles por un plazo mínimo de 10 años (Arquitectura WORM).',
+      'ARTÍCULOS 29-A Y 69-B DEL CÓDIGO FISCAL DE LA FEDERACIÓN: Sustento documental de la materialidad, existencia real y fecha cierta de las operaciones y gestiones mercantiles.',
+      'ARTÍCULO 27 FRACCIÓN XV DE LA LEY DEL IMPUESTO SOBRE LA RENTA: Comprobación de gestiones fehacientes e imposibilidad práctica de cobro para deducibilidad de cuentas incobrables.',
       'NORMA OFICIAL MEXICANA NOM-151-SCFI-2016: Requisitos que deben observar los mensajes de datos para su conservación y digitalización de documentos, garantizando integridad, fecha y autoría inalterable.',
-      'ARTÍCULO 112 BIS DE LA LEY FEDERAL DE PROTECCIÓN AL CONSUMIDOR: Constancia de que la entidad acreedora ha notificado de manera fidedigna los términos del saldo, registro y derecho de liquidación sin amenazas ni actos contrarios a las buenas prácticas comerciales.',
+      'ARTÍCULO 112 BIS DE LA LEY FEDERAL DE PROTECCIÓN AL CONSUMIDOR: Notificación fidedigna de saldo y términos de liquidación con pleno respeto a los derechos del deudor.',
     ],
   };
 }

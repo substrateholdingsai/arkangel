@@ -878,6 +878,26 @@ export const api = {
         body: JSON.stringify(payload),
       }
     ),
+
+  // Cuaderno Procesal Judicial & Materialidad Fiscal SAT
+  getCaseJudicialDocket: (caseId: string) =>
+    request<{ success: boolean; docket: JudicialDocketData }>(
+      `/api/v1/nom151/cases/${encodeURIComponent(caseId)}/docket`
+    ),
+
+  getPscSettings: () =>
+    request<{ success: boolean; settings: TenantPscSettings }>('/api/v1/nom151/psc/settings'),
+
+  updatePscSettings: (settings: Partial<TenantPscSettings>) =>
+    request<{ success: boolean; settings: TenantPscSettings }>('/api/v1/nom151/psc/settings', {
+      method: 'POST',
+      body: JSON.stringify(settings),
+    }),
+
+  getCaseWormChain: (caseId: string) =>
+    request<{ success: boolean; verification: WormChainVerification }>(
+      `/api/v1/nom151/cases/${encodeURIComponent(caseId)}/worm-chain`
+    ),
 };
 
 export interface DebtorPortalFinancials {
@@ -963,6 +983,11 @@ export interface Nom151Certificate {
   timestampLocal: string;
   verificationUrl: string;
   status: 'issued' | 'delivered' | 'verified';
+  pscProvider?: 'arkangel_internal' | 'ateb_psc';
+  pscComplianceLevel?: 'modo_a_pleno' | 'modo_b_presuntivo';
+  pscConstanciaId?: string | null;
+  pscTimestampToken?: string | null;
+  custodyWormHash?: string | null;
   metadata: Record<string, unknown> | null;
   createdAt: string;
 }
@@ -998,5 +1023,88 @@ export interface Nom151PrintableDocument {
   cadenaOriginal: string;
   selloDigital: string;
   urlVerificacionPublica: string;
+  proveedorPSC?: string;
+  nivelCumplimiento?: 'modo_a_pleno' | 'modo_b_presuntivo';
+  nivelCumplimientoLabel?: string;
+  folioConstanciaOficialSE?: string | null;
+  selloTiempoTSA?: string | null;
+  hashCustodiaWORM?: string | null;
   fundamentoLegal: string[];
+}
+
+export interface TenantPscSettings {
+  tenantId: string;
+  atebEnabled: boolean;
+  atebEnvironment: 'sandbox' | 'production';
+  atebClientId: string | null;
+  atebApiKey: string | null;
+  atebTsaEnabled: boolean;
+  autoStampOutbound: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface JudicialDocketData {
+  folioExpediente: string;
+  fechaEmisionUtc: string;
+  fechaEmisionLocal: string;
+  tribunalCompetente: string;
+  viaProcesal: string;
+  actor: {
+    razonSocial: string;
+    condusefRegistro: string;
+    tenantId: string;
+  };
+  demandado: {
+    nombre: string;
+    telefono: string | null;
+    email: string | null;
+    curp: string | null;
+    clientId: string;
+  };
+  liquidacion: {
+    capitalInsolutoCents: number;
+    capitalInsolutoFormatted: string;
+    diasMora: number;
+    interesMoratorioEstimadoFormatted: string;
+    totalReclamadoFormatted: string;
+    fechaVencimiento: string;
+  };
+  pruebasNom151: Array<{
+    folio: string;
+    tipo: string;
+    canal: string;
+    fecha: string;
+    digest: string;
+    sello: string;
+    cumplimiento: string;
+    proveedor: string;
+    constanciaOficialId: string | null;
+    verificacionUrl: string;
+  }>;
+  gestionesOperativas: Array<{
+    tipo: string;
+    fecha: string;
+    detalle: string;
+    identificadorProveedor: string | null;
+  }>;
+  custodiaWorm: {
+    cadenaValida: boolean;
+    totalEventosAuditados: number;
+    fundamentoRetencion: string;
+    hashExpedienteSha256: string;
+  };
+  sustentoFiscalSat: {
+    materialidadComprobada: boolean;
+    articulosAplicables: string[];
+    resumenMaterialidad: string;
+  };
+}
+
+export interface WormChainVerification {
+  valid: boolean;
+  totalEntries: number;
+  compromisedAtId: string | null;
+  retentionRequirement: string;
+  checkedAt: string;
 }

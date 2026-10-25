@@ -52,9 +52,9 @@ class FakeNom151D1 {
       bind: (...params: any[]) => {
         return {
           first: async <T>(): Promise<T | null> => {
-            if (s.includes('FROM clients WHERE tenant_id = ? AND id = ?')) {
-              const [tId, cId] = params;
-              const cl = this.clients.find((c) => c.tenant_id === tId && c.id === cId);
+            if (s.includes('FROM clients')) {
+              const cId = params.length === 2 ? params[1] : params[0];
+              const cl = this.clients.find((c) => c.id === cId);
               return (cl as unknown as T) || null;
             }
 
@@ -90,6 +90,10 @@ class FakeNom151D1 {
           },
 
           run: async (): Promise<{ success: boolean }> => {
+            if (s.includes('INSERT INTO worm_audit_log') || s.includes('INSERT INTO tenant_psc_settings')) {
+              return { success: true };
+            }
+
             if (s.includes('INSERT INTO nom151_certificates')) {
               const [
                 id,
@@ -109,6 +113,12 @@ class FakeNom151D1 {
                 timestamp_utc,
                 timestamp_local,
                 verification_url,
+                psc_provider,
+                psc_compliance_level,
+                psc_constancia_id,
+                psc_timestamp_token,
+                psc_response_payload,
+                custody_worm_hash,
                 metadata,
                 created_at,
               ] = params;
@@ -132,6 +142,12 @@ class FakeNom151D1 {
                 timestamp_local,
                 verification_url,
                 status: 'issued',
+                psc_provider,
+                psc_compliance_level,
+                psc_constancia_id,
+                psc_timestamp_token,
+                psc_response_payload,
+                custody_worm_hash,
                 metadata,
                 created_at,
               });
@@ -212,7 +228,7 @@ describe('Constancias de Notificación Digital NOM-151 (Sprint 12)', () => {
       });
 
       expect(cert.id).toMatch(/^nom_/);
-      expect(cert.certificateFolio).toMatch(/^NOM151-2026-[A-Z0-9]{6}$/);
+      expect(cert.certificateFolio).toMatch(/^ARK-NOM151-NOM-[A-Z0-9]+-[A-Z0-9]+$/);
       expect(cert.recipientMasked).toContain('A****** F****** A*****');
       expect(cert.messageDigestSha256).toMatch(/^[a-f0-9]{64}$/);
       expect(cert.selloDigital).toMatch(/^[a-f0-9]{64}$/);

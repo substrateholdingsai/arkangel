@@ -1,7 +1,7 @@
 # ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · **22 suites / 352 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.
-> Última actualización: 2026-10-25 (Sprint 12: Constancias de Notificación Digital NOM-151 — Conservación de Mensajes de Datos con Huella Criptográfica SHA-256, Estampado de Tiempo UTC/CDMX, Eficacia Probatoria Plena bajo el Código de Comercio Arts. 89-114, Cotejo Público Tamper-Proof e Integración en la Consola Operativa).
+> **Estado**: `main` · **23 suites / 358 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.
+> Última actualización: 2026-10-25 (Sprint 13: Conector ATEB Servicios PSC — Secretaría de Economía Acreditado, Capa Transversal de Custodia WORM 10 años conforme a Art. 49 Código de Comercio, Cuaderno Procesal Judicial Art. 1298-A CCom y Materialidad Fiscal SAT CFF Arts. 29-A y 69-B / LISR Art. 27 Fracc. XV).
 
 ## Vista general
 
@@ -430,6 +430,28 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
   - **Acta Notarial Imprimible (`Nom151Modal.tsx`)**: Modal con soporte de impresión y exportación a PDF para aportación como prueba documental en Juicios Ejecutivos Mercantiles.
   - **Soporte en Portal de Autoservicio (`DebtorPortal.tsx`) y URL Directa (`/verify/nom151/:folio`)**: Cotejo instantáneo sin requerir inicio de sesión.
 - [x] **Cobertura de Pruebas**: 12 tests nuevos en `tests/nom151.test.ts` (Total: **22 suites / 352/352 tests verdes**).
+
+### Sprint 13 — Conector ATEB Servicios PSC, Capa de Custodia WORM y Cuaderno Judicial/Fiscal (2026-10-25)
+
+- [x] **Conector WebService ATEB Servicios PSC (`src/services/atebPscClient.ts`, `migrations/0013_ateb_psc_integration.sql`)**:
+  - Arquitectura **Dual-Engine** para despachos jurídicos:
+    - **Modo A (Cumplimiento Pleno Oficial)**: Conexión directa a ATEB Servicios PSC (acreditado por la Secretaría de Economía de México) con estampas de tiempo RFC 3161 TSA y constancias NOM-151-SCFI-2016 en formato oficial ASN.1 DER / PKCS#7.
+    - **Modo B (Evidencia Interna Preparada para Migración)**: Motor nativo Arkangel con resguardo de hashes inmutables, preparado para timbrado en lote en ATEB en cuanto el despacho active sus credenciales.
+  - Failover inteligente y resiliente: Si ATEB está en mantenimiento temporal o sin saldo de timbres, Arkangel conmuta a Modo B y encola la constancia para timbrado sin interrumpir las gestiones de cobranza.
+  - Configuración self-serve por tenant en D1 (`tenant_psc_settings`) con enmascaramiento de API keys (`GET /api/v1/nom151/psc/settings` y `POST /api/v1/nom151/psc/settings`).
+- [x] **Capa Transversal de Custodia y Auditoría Inmutable (WORM) (`src/services/custodyWorm.ts`, `worm_audit_log`)**:
+  - Cumplimiento estricto del **Artículo 49 del Código de Comercio**: retención obligatoria mínima de **10 años** para mensajes de datos mercantiles y registros contables.
+  - Arquitectura WORM (*Write Once, Read Many*) con ledger criptográfico encadenado (`prev_hash` -> `entry_hash` con SHA-256) a prueba de manipulaciones o borrados.
+  - Endpoint de verificación matemática de integridad de la cadena (`GET /api/v1/nom151/cases/:caseId/worm-chain`).
+- [x] **Cuaderno Procesal Judicial & Carpeta de Materialidad Fiscal SAT (`src/services/judicialDocket.ts`)**:
+  - **Prueba Plena Mercantil (Código de Comercio Art. 1298-A)**: Cuaderno de pruebas listo para Juicios Orales Mercantiles (Arts. 1390 Bis a 1390 Bis 50) y Ejecutivos Mercantiles, integrando carátula procesal, capítulo de hechos y ofrecimiento de pruebas informáticas.
+  - **Liquidación Automática de Saldo e Intereses Moratorios**: Desglose de capital insoluto, cómputo de días de mora e intereses moratorios calculados a la tasa legal del 6% anual (Art. 362 CCom) o convenida.
+  - **Blindaje de Materialidad Fiscal SAT**: Sustento documental y operativo de fecha cierta que desvirtúa la presunción de operaciones inexistentes o simuladas (**Arts. 29-A y 69-B del CFF**) y acredita las gestiones formales de cobro para deducibilidad de cuentas incobrables (**Art. 27 Fracc. XV de la LISR**).
+  - **Vista Imprimible Oficial (`GET /api/v1/nom151/cases/:caseId/docket/printable`)**: HTML estructurado con estilos CSS para impresión y PDF con sello hash maestro y firmas periciales.
+- [x] **Consola del Operador (`frontend/src/OperatorDrawer.tsx`, `frontend/src/JudicialDocketModal.tsx`)**:
+  - Botón prominente **"⚖️ Cuaderno Judicial & SAT"** en la sección de constancias NOM-151 del expediente.
+  - Modal interactivo con previsualización del cuaderno foliado, estado de la cadena WORM, insignias de cumplimiento oficial ATEB PSC y botón de exportación a PDF.
+- [x] **Cobertura de Pruebas**: 6 tests nuevos en `tests/atebPscAndDocket.test.ts` (Total: **23 suites / 358/358 tests verdes**).
 
 ## Verificación realizada
 

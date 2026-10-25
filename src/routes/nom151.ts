@@ -1,9 +1,12 @@
 /**
- * Rutas de Constancias de Notificación Digital NOM-151-SCFI-2016.
+ * Rutas de Constancias de Notificación Digital NOM-151-SCFI-2016,
+ * Conector ATEB Servicios PSC y Cuaderno Judicial de Pruebas Informáticas.
  *
  * Expone:
  * 1. Endpoints públicos para cotejo y verificación de validez probatoria ante juzgados y CONDUSEF.
  * 2. Endpoints protegidos para consulta y emisión de constancias dentro del expediente del caso.
+ * 3. Endpoints para configuración del PSC (ATEB) por tenant.
+ * 4. Endpoints para generación y visualización imprimible del Expediente Judicial / Materialidad Fiscal.
  */
 
 import { Hono } from 'hono';
@@ -16,10 +19,141 @@ import {
   issueNom151Certificate,
   type IssueNom151Input,
 } from '../services/nom151';
+import {
+  getTenantPscSettings,
+  upsertTenantPscSettings,
+  type TenantPscSettings,
+} from '../services/atebPscClient';
+import {
+  generateCaseJudicialDocket,
+  renderJudicialDocketHtml,
+} from '../services/judicialDocket';
+import { verifyWormChain } from '../services/custodyWorm';
 import type { Env } from '../types/env';
 import type { AuthVars } from '../auth/middleware';
 
 export const nom151 = new Hono<{ Bindings: Env; Variables: AuthVars }>();
+
+/**
+ * GET /api/v1/nom151/psc/settings
+ * Consulta la configuración de ATEB PSC del tenant.
+ */
+nom151.get('/psc/settings', async (c) => {
+  try {
+    const ctx = await resolveTenantContextDeRequest(c.env, c.req.raw);
+    const settings = await getTenantPscSettings(c.env, ctx.tenantId);
+    return c.json({
+      success: true,
+      settings: {
+        ...settings,
+        // Enmascarar la API key por seguridad
+        atebApiKey: settings.atebApiKey ? '••••••••' + settings.atebApiKey.slice(-4) : null,
+      },
+    });
+  } catch (error: any) {
+    logger.error('Error consultando settings de ATEB PSC', { error: error?.message });
+    return c.json({ error: 'settings_query_failed', message: error?.message }, 500);
+  }
+});
+
+/**
+ * POST /api/v1/nom151/psc/settings
+ * Guarda o actualiza credenciales y opciones de ATEB PSC del tenant.
+ */
+nom151.post('/psc/settings', async (c) => {
+  try {
+    const ctx = await resolveTenantContextDeRequest(c.env, c.req.raw);
+    const body = await c.req.json<Partial<TenantPscSettings>>();
+
+    const updated = await upsertTenantPscSettings(c.env, {
+      ...body,
+      tenantId: ctx.tenantId,
+    });
+
+    return c.json({
+      success: true,
+      settings: {
+        ...updated,
+        atebApiKey: updated.atebApiKey ? '••••••••' + updated.atebApiKey.slice(-4) : null,
+      },
+    });
+  } catch (error: any) {
+    logger.error('Error guardando settings de ATEB PSC', { error: error?.message });
+    return c.json({ error: 'settings_save_failed', message: error?.message }, 500);
+  }
+});
+
+/**
+ * GET /api/v1/nom151/cases/:caseId/docket
+ * Compila los datos completos del expediente judicial y de materialidad fiscal del caso.
+ */
+nom151.get('/cases/:caseId/docket', async (c) => {
+  const caseId = c.req.param('caseId');
+  if (!caseId) {
+    return c.json({ error: 'case_id_required', message: 'Identificador de caso requerido' }, 400);
+  }
+
+  try {
+    const ctx = await resolveTenantContextDeRequest(c.env, c.req.raw);
+    const docket = await generateCaseJudicialDocket(ctx, caseId);
+    if (!docket) {
+      return c.json({ error: 'case_not_found', message: 'Caso no encontrado' }, 404);
+    }
+
+    return c.json({ success: true, docket });
+  } catch (error: any) {
+    logger.error('Error generando expediente judicial', { caseId, error: error?.message });
+    return c.json({ error: 'docket_generation_failed', message: error?.message }, 500);
+  }
+});
+
+/**
+ * GET /api/v1/nom151/cases/:caseId/docket/printable
+ * Renderiza el Cuaderno Judicial y de Materialidad en HTML listo para impresión o PDF oficial.
+ */
+nom151.get('/cases/:caseId/docket/printable', async (c) => {
+  const caseId = c.req.param('caseId');
+  if (!caseId) {
+    return c.text('Identificador de caso requerido', 400);
+  }
+
+  try {
+    const ctx = await resolveTenantContextDeRequest(c.env, c.req.raw);
+    const docket = await generateCaseJudicialDocket(ctx, caseId);
+    if (!docket) {
+      return c.text('Caso no encontrado', 404);
+    }
+
+    const html = renderJudicialDocketHtml(docket);
+    return c.html(html);
+  } catch (error: any) {
+    logger.error('Error generando vista imprimible de expediente judicial', {
+      caseId,
+      error: error?.message,
+    });
+    return c.text('Error generando el expediente judicial: ' + error?.message, 500);
+  }
+});
+
+/**
+ * GET /api/v1/nom151/cases/:caseId/worm-chain
+ * Verifica matemáticamente la cadena de custodia WORM del caso.
+ */
+nom151.get('/cases/:caseId/worm-chain', async (c) => {
+  const caseId = c.req.param('caseId');
+  if (!caseId) {
+    return c.json({ error: 'case_id_required', message: 'Identificador de caso requerido' }, 400);
+  }
+
+  try {
+    const ctx = await resolveTenantContextDeRequest(c.env, c.req.raw);
+    const verification = await verifyWormChain(c.env, ctx.tenantId, caseId);
+    return c.json({ success: true, verification });
+  } catch (error: any) {
+    logger.error('Error verificando cadena WORM', { caseId, error: error?.message });
+    return c.json({ error: 'worm_verification_failed', message: error?.message }, 500);
+  }
+});
 
 /**
  * GET /api/v1/nom151/:folio
@@ -101,8 +235,8 @@ nom151.get('/cases/:caseId', async (c) => {
 
   try {
     const ctx = await resolveTenantContextDeRequest(c.env, c.req.raw);
-    const certificates = await listNom151CertificatesByCase(ctx, caseId);
-    return c.json({ success: true, certificates });
+    const certs = await listNom151CertificatesByCase(ctx, caseId);
+    return c.json({ success: true, certificates: certs });
   } catch (error: any) {
     logger.error('Error listando constancias NOM-151 por caso', { caseId, error: error?.message });
     return c.json(

@@ -108,6 +108,19 @@ export function Nom151Modal({
               <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 px-3 py-0.5 text-[10px] font-bold tracking-wide uppercase mb-2">
                 <Check className="w-3 h-3 text-emerald-600" /> Verificación Criptográfica Válida · Integridad Garantizada
               </div>
+              {doc.nivelCumplimientoLabel ? (
+                <div className="mb-2">
+                  <span
+                    className={`inline-block px-2.5 py-0.5 rounded text-[10px] font-bold ${
+                      doc.nivelCumplimiento === 'modo_a_pleno'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-800 text-slate-200'
+                    }`}
+                  >
+                    {doc.nivelCumplimientoLabel}
+                  </span>
+                </div>
+              ) : null}
               <h2 className="text-sm sm:text-base font-extrabold uppercase tracking-wide text-slate-900 font-serif">
                 {doc.titulo}
               </h2>
@@ -137,6 +150,22 @@ export function Nom151Modal({
                 <span className="text-slate-500 font-medium">Fecha y Hora Certificada:</span>
                 <div className="font-mono text-slate-800">{doc.fechaLocalCDMX}</div>
               </div>
+              {doc.folioConstanciaOficialSE ? (
+                <div>
+                  <span className="text-slate-500 font-medium">Folio Oficial PSC (Secretaría de Economía):</span>
+                  <div className="font-mono font-bold text-emerald-800 text-[10px]">
+                    {doc.folioConstanciaOficialSE}
+                  </div>
+                </div>
+              ) : null}
+              {doc.hashCustodiaWORM ? (
+                <div>
+                  <span className="text-slate-500 font-medium">Custodia WORM (Art. 49 CCom):</span>
+                  <div className="font-mono text-slate-700 text-[10px] truncate">
+                    {doc.hashCustodiaWORM.slice(0, 24)}...
+                  </div>
+                </div>
+              ) : null}
               <div className="sm:col-span-2">
                 <span className="text-slate-500 font-medium">ID de Transmisión del Proveedor:</span>
                 <div className="font-mono text-slate-700 text-[10px] truncate">
