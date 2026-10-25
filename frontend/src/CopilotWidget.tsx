@@ -218,9 +218,9 @@ export function CopilotWidget({ activeCaseId, activeCaseName, humanCount }: Copi
           </span>
           <div className="text-left pr-1">
             <div className="flex items-center gap-1.5 text-xs font-semibold tracking-tight">
-              <span>Ark Copilot 3D</span>
-              <span className="rounded bg-cyan-500/20 px-1.5 py-0.2 text-[10px] font-mono text-cyan-300">
-                Spline 3D
+              <span>Ark Copiloto</span>
+              <span className="rounded bg-emerald-500/20 px-1.5 py-0.2 text-[10px] font-mono text-emerald-300">
+                IA Activa
               </span>
             </div>
             <div className="text-[11px] text-slate-400 truncate max-w-[170px]">
