@@ -6,6 +6,7 @@ import {
   ArrowUp,
   ArrowUpDown,
   BookOpen,
+  Bot,
   Briefcase,
   CheckCircle2,
   ChevronLeft,
@@ -14,9 +15,11 @@ import {
   Download,
   Loader2,
   LogOut,
+  PhoneCall,
   Scale,
   Search,
   Settings,
+  Sparkles,
   X,
 } from 'lucide-react';
 import {
@@ -695,7 +698,7 @@ export default function App() {
             </div>
           ) : null}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
             <KpiCard
               label="Casos Activos Hoy"
               value={(metrics?.total ?? 0).toLocaleString('es-MX')}
@@ -723,6 +726,31 @@ export default function App() {
               icon={AlertTriangle}
               tone="err"
               hint={`bloqueos legales hoy: ${legal?.resumen.bloqueos ?? 0}`}
+            />
+          </div>
+
+          {/* KPIs Telefonía & Voice AI (Telnyx) */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+            <KpiCard
+              label="Minutos Hablados Hoy"
+              value={`${(metrics?.minutos_voz_hoy ?? 0).toLocaleString('es-MX', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} min`}
+              icon={PhoneCall}
+              tone="info"
+              hint="Telefonía PSTN celular / Telnyx Voice"
+            />
+            <KpiCard
+              label="Llamadas Completadas (Voice AI)"
+              value={(metrics?.llamadas_voz_hoy ?? 0).toLocaleString('es-MX')}
+              icon={Bot}
+              tone="ok"
+              hint="Conversaciones gestionadas por Voice AI"
+            />
+            <KpiCard
+              label="Promesas Detectadas en Audio"
+              value={(metrics?.promesas_voz_hoy ?? 0).toLocaleString('es-MX')}
+              icon={Sparkles}
+              tone="ok"
+              hint="Compromisos extraídos del diálogo de voz"
             />
           </div>
 

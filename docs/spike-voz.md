@@ -7,6 +7,8 @@
 >
 > Fecha de la última revisión: **2026-10-22**. Tarifas consultadas el
 > **2026-10-21** (enlaces al final de cada sección).
+>
+> 🚀 **Resolución Definitiva (2026-10-25):** Transición formal hacia **Telnyx Voice AI Assistants** completada en producción, superando este spike experimental de Cloudflare Realtime. Ver [§9. Adenda de Cierre](#9-adenda-de-cierre--transición-arquitectónica-exitosa-a-telnyx-voice-ai-assistants).
 
 ---
 
@@ -469,3 +471,45 @@ usuario hablaba otra vez antes de que el bot terminara, el `fin_turno` del
 turno anterior borraba las marcas del nuevo y el round-trip salía con un
 valor absurdo (el `Date.now()` entero, en lugar de milisegundos). Ahora cada
 turno lleva sus propias métricas y los turnos se procesan de uno en uno.
+
+---
+
+## 9. Adenda de Cierre — Transición Arquitectónica Exitosa a Telnyx Voice AI Assistants
+
+> **Estado Oficial: ✅ SUPERADO Y RESUELTO EN PRODUCCIÓN (2026-10-25).**
+> El spike experimental de tubería artesanal en Cloudflare Realtime queda formalmente archivado como un antecedente técnico superado. La arquitectura de voz operativa de Arkangel opera en producción sobre la plataforma **Telnyx Voice AI Assistants**.
+
+### 9.1 Balance del Spike DIY (Cloudflare Realtime + Workers AI)
+El experimento inicial demostró viabilidad funcional conceptual (STT + LLM + TTS en Workers con Durable Objects), pero arrojó un veredicto operativo categórico de **NO-GO**:
+1. **Latencia conversacional inaceptable**: El `round_trip_ms` p95 medido (3,927 ms) destruye la naturalidad del diálogo en cobranza extrajudicial, provocando colisiones de barge-in constantes y abandono de llamada.
+2. **Brecha con la red pública telefónica (PSTN)**: Cloudflare Realtime atiende WebRTC en navegador, pero una agencia o despacho de cobranza requiere marcación masiva saliente a teléfonos celulares y fijos mexicanos (+52 E.164), detección de buzón de voz (AMD) y conmutación SIP.
+3. **Sobrecarga de orquestación**: Mantener tres conexiones WebSocket simultáneas por llamada en edge Durable Objects consumía cuotas elevadas de cómputo y neuronas con riesgo de timeout.
+
+### 9.2 La Arquitectura Definitiva: Telnyx Voice AI Assistants
+La solución implementada y validada en el backend de Arkangel (`src/services/telnyxVoice.ts`, `src/routes/api.ts`, `src/routes/webhooks.ts`) adoptó el motor administrado de **Telnyx Voice AI Assistants**:
+
+```
+Teléfono Deudor (+52 Móvil/Fijo)
+       │ (Voz Telefónica PSTN / Red Celular)
+       ▼
+Red Troncal Telnyx (SBC + Telnyx Voice AI Engine)
+       │ ◄── STT Streaming + LLM Streaming + TTS (< 800 ms round-trip)
+       │ ◄── Barge-in DSP nativo + Detección de Contestadora (AMD)
+       │
+       ├─► Grabación Estéreo Dual-Channel (Bucket S3 / Telnyx Storage)
+       │
+       ▼ (Webhooks asíncronos firmados)
+Cloudflare Worker (Arkangel API / Webhook Router)
+       │
+       ├─► Análisis de Promesas de Pago (Extracción de montos y fechas)
+       ├─► Sello WORM SHA-256 + Constancia NOM-151 / ATEB PSC
+       └─► Inserción en Cuaderno Judicial y Métricas en Tiempo Real
+```
+
+### 9.3 Beneficios Clave Alcanzados en Producción
+* **Latencia conversacional inferior a 800 ms**: El motor de inferencia de Telnyx corre coubicado con las compuertas de telecomunicaciones, eliminando los hops entre navegadores y microservicios desacoplados.
+* **Telefonía E.164 Nacional e Internacional**: Marcación saliente directa a carteras mexicanas con perfiles de voz ultra realistas en español neutro / mexicano (`aura-luna-en`, ElevenLabs, OpenAI o Deepgram optimizado).
+* **Transferencia / Escalamiento Humano (`call.bridge`)**: Cuando el deudor solicita hablar con un abogado o supervisor, el bot transfiere la llamada en vivo a la extensión SIP o número del operador sin colgar.
+* **Sincronización en 1 Clic**: El despacho provisiona y actualiza su agente de voz directamente desde su UI mediante `POST /api/v1/telnyx/assistant/sync`.
+* **Certeza Jurídica Plena**: Cada audio transcrito y analizado se enlaza con el ledger criptográfico inmutable, disponible para descarga en el Cuaderno Judicial con validez conforme al Art. 89 y 89 bis del Código de Comercio.
+

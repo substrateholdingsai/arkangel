@@ -260,6 +260,9 @@ export interface DailyMetrics {
   csv_received_at: string | null;
   csv_name: string | null;
   por_estado: Record<string, number>;
+  minutos_voz_hoy?: number;
+  llamadas_voz_hoy?: number;
+  promesas_voz_hoy?: number;
 }
 
 export interface LegalRegla {

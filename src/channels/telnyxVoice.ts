@@ -764,7 +764,7 @@ export async function processTelnyxVoiceEvent(
             amountCents: 0,
             promisedDate: new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString().slice(0, 10),
             confidence: 0.9,
-            source: 'ai',
+            source: 'voice_ai',
           });
           await updateCase(ctx, caseId, { status: 'promised' });
         }

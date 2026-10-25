@@ -2,10 +2,12 @@ import { useEffect, useState, type FormEvent } from 'react';
 import {
   Activity,
   AlertCircle,
+  Bot,
   Check,
   CheckCircle2,
   Copy,
   Loader2,
+  PhoneCall,
   Save,
   Scale,
   Settings,
@@ -94,6 +96,12 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
   const [inviteRole, setInviteRole] = useState<MembershipRole>('admin');
   const [inviting, setInviting] = useState(false);
   const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
+  const [syncingAssistant, setSyncingAssistant] = useState(false);
+  const [syncAssistantResult, setSyncAssistantResult] = useState<{
+    ok: boolean;
+    assistantId?: string;
+    error?: string;
+  } | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -198,6 +206,32 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
       }));
     } finally {
       setTestingChannel(null);
+    }
+  };
+
+  const handleSyncAssistant = async () => {
+    setSyncingAssistant(true);
+    setSyncAssistantResult(null);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await api.syncTelnyxAssistant({
+        name: `${form.razon_social || 'Despacho'} - Asistente de Cobranza`,
+      });
+      setSyncAssistantResult(res);
+      if (res.ok) {
+        setNotice(
+          `Asistente de Voz Telnyx sincronizado exitosamente (ID: ${res.assistantId || 'registrado'}).`
+        );
+      } else {
+        setError(res.error || 'Error al sincronizar el asistente en Telnyx');
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Error inesperado al contactar Telnyx Voice API';
+      setSyncAssistantResult({ ok: false, error: msg });
+      setError(msg);
+    } finally {
+      setSyncingAssistant(false);
     }
   };
 
@@ -693,6 +727,72 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
                       </div>
                     );
                   })}
+                </div>
+
+                {/* Telefonía y Asistente de Voz Telnyx Voice AI */}
+                <div className="mt-4 rounded-lg border border-indigo-200 bg-linear-to-r from-indigo-50/60 to-purple-50/40 p-4 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-start gap-2.5">
+                      <PhoneCall className="h-4 w-4 text-indigo-600 mt-0.5 shrink-0" />
+                      <div>
+                        <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                          Telefonía & Voice AI (Telnyx Voice Assistants)
+                          <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[9px] font-mono font-bold text-indigo-700">
+                            PRODUCCIÓN
+                          </span>
+                        </h4>
+                        <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">
+                          Marcación PSTN directa a México (+52), latencia conversacional &lt; 800ms, detección de buzón (AMD) y audio firmado para Cuaderno Judicial.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={syncingAssistant}
+                      onClick={() => void handleSyncAssistant()}
+                      className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 px-3 py-1.5 text-xs font-semibold text-white shadow-xs transition-colors disabled:opacity-50 shrink-0 cursor-pointer"
+                    >
+                      {syncingAssistant ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
+                          <span>Sincronizando…</span>
+                        </>
+                      ) : (
+                        <>
+                          <Bot className="h-3.5 w-3.5" />
+                          <span>Sincronizar Asistente de Voz Telnyx</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {syncAssistantResult ? (
+                    <div
+                      className={`rounded-md p-2.5 text-xs flex items-start gap-2 border ${
+                        syncAssistantResult.ok
+                          ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                          : 'bg-red-50 border-red-200 text-red-950'
+                      }`}
+                    >
+                      {syncAssistantResult.ok ? (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
+                      ) : (
+                        <AlertCircle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold">
+                          {syncAssistantResult.ok
+                            ? 'Asistente de Voz Telnyx Sincronizado'
+                            : 'Error al Sincronizar Asistente'}
+                        </div>
+                        <p className="text-[11px] mt-0.5 opacity-90 leading-relaxed font-mono">
+                          {syncAssistantResult.ok
+                            ? `Assistant ID: ${syncAssistantResult.assistantId || 'Activo en Telnyx'} — Guion de cobranza y webhook configurados.`
+                            : syncAssistantResult.error}
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </div>
 
