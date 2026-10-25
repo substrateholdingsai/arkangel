@@ -15,6 +15,7 @@ Este repositorio de instructivos está estructurado por **nivel de usuario y rol
 | **03** | **Operador / Gestor de Cobranza** | [`03-operador-gestor-cobranza.md`](./03-operador-gestor-cobranza.md) | Operación diaria del expediente, Softphone Telnyx PSTN / Voice AI, Copilot 3D por voz y mensajería protegida por el Escudo Legal. |
 | **04** | **Contador / CFO / Auditor Fiscal** | [`04-contador-auditor-fiscal.md`](./04-contador-auditor-fiscal.md) | Sustento de Materialidad SAT (CFF Arts. 29-A y 69-B), deducción de cuentas incobrables (LISR Art. 27 Fracc. XV) y sincronización con Alegra. |
 | **05** | **Deudor / Titular del Crédito (Autoservicio)** | [`05-portal-deudor-autoservicio.md`](./05-portal-deudor-autoservicio.md) | Guía del portal de autoservicio 1-Click SPEI (`/pay/:id`), simulación de quitas, liquidación bancaria y descarga de Carta Finiquito. |
+| **06** | **Equipos de Ventas, TI & Due Diligence** | [`06-auditoria-calidad-anexo-tecnico-comercial.md`](./06-auditoria-calidad-anexo-tecnico-comercial.md) | Anexo técnico, auditoría de calidad de software, integración ATEB PSC, matriz de cumplimiento y propuesta comercial. |
 
 ---
 
