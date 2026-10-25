@@ -845,6 +845,39 @@ export const api = {
     request<{ success: boolean; document: DebtorLegalDocument }>(
       `/api/v1/portal/${encodeURIComponent(id)}/document`
     ),
+
+  // Constancias de Notificación Digital NOM-151-SCFI-2016
+  getNom151Verification: (folio: string) =>
+    request<Nom151VerificationResponse>(`/api/v1/nom151/${encodeURIComponent(folio)}`),
+
+  getNom151Document: (folio: string) =>
+    request<{ success: boolean; document: Nom151PrintableDocument }>(
+      `/api/v1/nom151/${encodeURIComponent(folio)}/document`
+    ),
+
+  getCaseNom151Certificates: (caseId: string) =>
+    request<{ success: boolean; certificates: Nom151Certificate[] }>(
+      `/api/v1/nom151/cases/${encodeURIComponent(caseId)}`
+    ),
+
+  issueCaseNom151Certificate: (
+    caseId: string,
+    payload: {
+      clientId: string;
+      tipoNotificacion: 'requerimiento_pago' | 'carta_convenio' | 'carta_finiquito' | 'aviso_cobranza';
+      channel: 'whatsapp' | 'sms' | 'email' | 'portal';
+      messageContent: string;
+      messageId?: string;
+      providerId?: string;
+    }
+  ) =>
+    request<{ success: boolean; certificate: Nom151Certificate }>(
+      `/api/v1/nom151/cases/${encodeURIComponent(caseId)}/issue`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    ),
 };
 
 export interface DebtorPortalFinancials {
@@ -909,4 +942,61 @@ export interface DebtorLegalDocument {
   vigencia: string;
   clausulas: string[];
   selloDigital: string;
+}
+
+export interface Nom151Certificate {
+  id: string;
+  tenantId: string;
+  caseId: string | null;
+  clientId: string;
+  messageId: string | null;
+  certificateFolio: string;
+  tipoNotificacion: 'requerimiento_pago' | 'carta_convenio' | 'carta_finiquito' | 'aviso_cobranza';
+  channel: 'whatsapp' | 'sms' | 'email' | 'portal';
+  providerId: string | null;
+  recipientMasked: string;
+  messageContent: string;
+  messageDigestSha256: string;
+  cadenaOriginal: string;
+  selloDigital: string;
+  timestampUtc: string;
+  timestampLocal: string;
+  verificationUrl: string;
+  status: 'issued' | 'delivered' | 'verified';
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface Nom151VerificationResponse {
+  success: boolean;
+  valid: boolean;
+  folio: string;
+  certificate: Nom151Certificate;
+  verificationDetails: {
+    digestMatches: boolean;
+    sealMatches: boolean;
+    calculatedDigest: string;
+    calculatedSeal: string;
+    timestampUtc: string;
+    timestampLocal: string;
+    legalAuthority: string;
+  };
+}
+
+export interface Nom151PrintableDocument {
+  folio: string;
+  titulo: string;
+  fechaEmision: string;
+  fechaLocalCDMX: string;
+  emisorRazonSocial: string;
+  emisorCondusef: string;
+  destinatarioEnmascarado: string;
+  canal: string;
+  identificadorTransmision: string;
+  contenidoNotificado: string;
+  huellaCriptograficaSHA256: string;
+  cadenaOriginal: string;
+  selloDigital: string;
+  urlVerificacionPublica: string;
+  fundamentoLegal: string[];
 }

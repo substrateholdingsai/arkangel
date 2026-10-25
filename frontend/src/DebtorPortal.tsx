@@ -474,6 +474,7 @@ export function DebtorPortal({
           <div className="pt-2 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-700">
             <span>Acreedor: {creditor.razonSocial}</span>
             <span>Registro CONDUSEF REDECO: {creditor.condusefRegistro}</span>
+            <span>Certificación Digital: NOM-151-SCFI-2016 (Código de Comercio)</span>
             <span>Actualización SIC (Buró/Círculo): Máx. 5 días hábiles</span>
           </div>
         </div>

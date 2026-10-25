@@ -17,7 +17,8 @@ import {
   X,
 } from 'lucide-react';
 import { Alert, Button, ChannelBadge, StatusBadge } from '@ds';
-import { api, ApiError, type CaseWorkspace } from './api';
+import { api, ApiError, type CaseWorkspace, type Nom151Certificate } from './api';
+import { Nom151Modal } from './Nom151Modal';
 
 function formatMXN(cents: number): string {
   return (cents / 100).toLocaleString('es-MX', {
@@ -87,11 +88,29 @@ export function OperatorDrawer({
   const [cfdiInput, setCfdiInput] = useState('');
   const [savingCfdi, setSavingCfdi] = useState(false);
 
+  // Constancias Digitales NOM-151-SCFI-2016
+  const [nomCertificates, setNomCertificates] = useState<Nom151Certificate[]>([]);
+  const [selectedNomFolio, setSelectedNomFolio] = useState<string | null>(null);
+  const [certifyWithNom151, setCertifyWithNom151] = useState(true);
+  const [issuingManualNom, setIssuingManualNom] = useState(false);
+
+  const cargarNom151 = useCallback(async (id: string) => {
+    try {
+      const res = await api.getCaseNom151Certificates(id);
+      setNomCertificates(res.certificates);
+    } catch {
+      // Sin constancias
+    }
+  }, []);
+
   const cargarFicha = useCallback(async (id: string) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.caseWorkspace(id);
+      const [data] = await Promise.all([
+        api.caseWorkspace(id),
+        cargarNom151(id),
+      ]);
       setWs(data);
       setPromisePesos(String(Math.round(data.case.amount_cents / 100)));
       setCfdiInput(data.cfdi_uuid ?? data.contract?.cfdi_uuid ?? '');
@@ -104,7 +123,7 @@ export function OperatorDrawer({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [cargarNom151]);
 
   useEffect(() => {
     if (!caseId) {
@@ -147,6 +166,34 @@ export function OperatorDrawer({
     );
   };
 
+  const certificarNotificacionManual = async () => {
+    if (!ws) return;
+    setIssuingManualNom(true);
+    setError(null);
+    try {
+      const razon = ws.contract?.nombre_legal || ws.legal.nombre_legal || 'Despacho Autorizado';
+      const condusef = ws.contract?.condusef || ws.legal.condusef || 'REDECO';
+      const clabe = ws.contract?.clabe ? ` CLABE: ${ws.contract.clabe}.` : '';
+      const monto = formatMXN(ws.case.amount_cents);
+      const texto = `REQUERIMIENTO FORMAL DE PAGO: Estimado(a) ${ws.case.name}, le contactamos de ${razon} (Registro CONDUSEF ${condusef}) en seguimiento a su saldo pendiente por ${monto}.${clabe} Notificación formal emitida conforme al Código de Comercio y la NOM-151-SCFI-2016.`;
+
+      const res = await api.issueCaseNom151Certificate(ws.case.id, {
+        clientId: ws.case.client_id,
+        tipoNotificacion: 'requerimiento_pago',
+        channel,
+        messageContent: texto,
+      });
+
+      setNotice(`Constancia NOM-151 emitida con éxito. Folio: ${res.certificate.certificateFolio}`);
+      await cargarNom151(ws.case.id);
+      setSelectedNomFolio(res.certificate.certificateFolio);
+    } catch (err: any) {
+      setError(err?.message || 'No se pudo emitir la constancia NOM-151');
+    } finally {
+      setIssuingManualNom(false);
+    }
+  };
+
   const enviarMensaje = async (e: FormEvent) => {
     e.preventDefault();
     if (!ws || !replyText.trim()) return;
@@ -155,6 +202,21 @@ export function OperatorDrawer({
     setNotice(null);
     try {
       const res = await api.replyCase(ws.case.id, { channel, body: replyText.trim() });
+      if (certifyWithNom151) {
+        try {
+          await api.issueCaseNom151Certificate(ws.case.id, {
+            clientId: ws.case.client_id,
+            tipoNotificacion: 'aviso_cobranza',
+            channel,
+            messageContent: res.message?.body || replyText.trim(),
+            messageId: res.message?.id,
+            providerId: res.message?.provider_id || undefined,
+          });
+          void cargarNom151(ws.case.id);
+        } catch {
+          // Si falla emisión secundaria de constancia, el mensaje principal ya fue enviado
+        }
+      }
       setReplyText('');
       setNotice(
         res.violaciones.length > 0
@@ -1140,7 +1202,70 @@ export function OperatorDrawer({
                 </div>
               </div>
 
-              {/* 5. Compositor del Operador con Filtro Legal Fail-Closed */}
+              {/* 5. Constancias Digitales NOM-151-SCFI-2016 */}
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                    <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                      Constancias Digitales NOM-151 ({nomCertificates.length})
+                    </h3>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={issuingManualNom}
+                    onClick={() => void certificarNotificacionManual()}
+                    className="rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-800 hover:bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold flex items-center gap-1 transition-colors disabled:opacity-50"
+                    title="Emitir constancia formal con estampado criptográfico SHA-256 según la NOM-151-SCFI-2016"
+                  >
+                    {issuingManualNom ? 'Certificando…' : '+ Certificar Notificación'}
+                  </button>
+                </div>
+
+                <div className="p-3">
+                  {nomCertificates.length === 0 ? (
+                    <div className="text-center py-4 text-xs text-slate-500">
+                      No hay constancias NOM-151 emitidas todavía. Pulse "+ Certificar Notificación"
+                      para emitir una constancia formal con valor probatorio pleno ante tribunales y CONDUSEF.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-56 overflow-y-auto">
+                      {nomCertificates.map((cert) => (
+                        <div
+                          key={cert.id}
+                          className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 bg-slate-50/60 hover:bg-slate-50 text-xs"
+                        >
+                          <div>
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <span className="font-mono font-bold text-slate-900">
+                                {cert.certificateFolio}
+                              </span>
+                              <span className="rounded bg-emerald-100 text-emerald-800 text-[10px] font-semibold px-1.5 py-0.2 uppercase">
+                                {cert.tipoNotificacion.replace(/_/g, ' ')}
+                              </span>
+                              <span className="text-[10px] text-slate-400 capitalize">
+                                {cert.channel}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-500 font-mono truncate max-w-sm">
+                              SHA-256: {cert.messageDigestSha256.slice(0, 16)}… · {cert.timestampLocal.slice(0, 16)}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedNomFolio(cert.certificateFolio)}
+                            className="rounded-md border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 px-2.5 py-1 font-semibold text-[11px] shrink-0 ml-2"
+                          >
+                            Ver Acta ↗
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 6. Compositor del Operador con Filtro Legal Fail-Closed */}
               {canOperate ? (
                 <form
                   onSubmit={(e) => void enviarMensaje(e)}
@@ -1171,34 +1296,46 @@ export function OperatorDrawer({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {(['whatsapp', 'sms', 'email'] as const).map((c) => {
-                      const isChannelEnabled = enabledChannels.includes(c);
-                      const label = c === 'whatsapp' ? 'WhatsApp' : c === 'sms' ? 'SMS' : 'Email';
-                      return (
-                        <button
-                          key={c}
-                          type="button"
-                          disabled={!isChannelEnabled}
-                          onClick={() => isChannelEnabled && setChannel(c)}
-                          title={
-                            isChannelEnabled
-                              ? `Enviar por ${label}`
-                              : `Canal ${label} deshabilitado por el Manager del despacho`
-                          }
-                          className={`px-3 py-1 rounded-md text-xs font-medium border transition-colors ${
-                            !isChannelEnabled
-                              ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed line-through'
-                              : channel === c
-                                ? 'bg-slate-900 text-white border-slate-900'
-                                : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
-                          }`}
-                        >
-                          {label}
-                          {!isChannelEnabled ? ' (Off)' : ''}
-                        </button>
-                      );
-                    })}
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {(['whatsapp', 'sms', 'email'] as const).map((c) => {
+                        const isChannelEnabled = enabledChannels.includes(c);
+                        const label = c === 'whatsapp' ? 'WhatsApp' : c === 'sms' ? 'SMS' : 'Email';
+                        return (
+                          <button
+                            key={c}
+                            type="button"
+                            disabled={!isChannelEnabled}
+                            onClick={() => isChannelEnabled && setChannel(c)}
+                            title={
+                              isChannelEnabled
+                                ? `Enviar por ${label}`
+                                : `Canal ${label} deshabilitado por el Manager del despacho`
+                            }
+                            className={`px-3 py-1 rounded-md text-xs font-medium border transition-colors ${
+                              !isChannelEnabled
+                                ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed line-through'
+                                : channel === c
+                                  ? 'bg-slate-900 text-white border-slate-900'
+                                  : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+                            }`}
+                          >
+                            {label}
+                            {!isChannelEnabled ? ' (Off)' : ''}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <label className="flex items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={certifyWithNom151}
+                        onChange={(e) => setCertifyWithNom151(e.target.checked)}
+                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <span>Certificar con NOM-151</span>
+                    </label>
                   </div>
 
                   <textarea
@@ -1241,6 +1378,13 @@ export function OperatorDrawer({
           ) : null}
         </div>
       </div>
+
+      {selectedNomFolio ? (
+        <Nom151Modal
+          folio={selectedNomFolio}
+          onClose={() => setSelectedNomFolio(null)}
+        />
+      ) : null}
     </div>
   );
 }

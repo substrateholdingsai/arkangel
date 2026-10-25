@@ -53,6 +53,7 @@ import { CopilotWidget } from './CopilotWidget';
 import { OperatorDrawer } from './OperatorDrawer';
 import { TenantSettingsModal } from './TenantSettingsModal';
 import { DebtorPortal } from './DebtorPortal';
+import { Nom151Modal } from './Nom151Modal';
 
 function getPortalIdFromUrl(): string | null {
   if (typeof window === 'undefined') return null;
@@ -61,6 +62,15 @@ function getPortalIdFromUrl(): string | null {
   if (match && match[1]) return match[1];
   const params = new URLSearchParams(window.location.search);
   return params.get('pay') || params.get('portal') || null;
+}
+
+function getNom151FolioFromUrl(): string | null {
+  if (typeof window === 'undefined') return null;
+  const path = window.location.pathname;
+  const match = path.match(/^\/verify\/nom151\/([a-zA-Z0-9_-]+)/);
+  if (match && match[1]) return match[1];
+  const params = new URLSearchParams(window.location.search);
+  return params.get('nom151') || null;
 }
 
 const WATERMARK = '/assets/arkangel-watermark.png';
@@ -111,10 +121,12 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountingOpen, setAccountingOpen] = useState(false);
   const [portalId, setPortalId] = useState<string | null>(() => getPortalIdFromUrl());
+  const [nom151Folio, setNom151Folio] = useState<string | null>(() => getNom151FolioFromUrl());
 
   useEffect(() => {
     const handlePopState = () => {
       setPortalId(getPortalIdFromUrl());
+      setNom151Folio(getNom151FolioFromUrl());
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -623,6 +635,18 @@ export default function App() {
         portalId={portalId}
         onBackToDashboard={() => {
           setPortalId(null);
+          window.history.pushState({}, '', '/');
+        }}
+      />
+    );
+  }
+
+  if (nom151Folio) {
+    return (
+      <Nom151Modal
+        folio={nom151Folio}
+        onClose={() => {
+          setNom151Folio(null);
           window.history.pushState({}, '', '/');
         }}
       />

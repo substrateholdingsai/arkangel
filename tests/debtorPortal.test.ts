@@ -216,6 +216,13 @@ class FakePortalD1 {
               return (con as unknown as T) || null;
             }
 
+            // Consulta de tenants
+            if (s.includes('FROM tenants WHERE id = ?')) {
+              const tId = params[0];
+              const t = this.tenants.find((item) => item.id === tId);
+              return (t as unknown as T) || null;
+            }
+
             return null;
           },
 

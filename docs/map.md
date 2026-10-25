@@ -1,7 +1,7 @@
 # ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · **21 suites / 340 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.
-> Última actualización: 2026-10-25 (Sprint 11: Portal de Autoservicio del Deudor — 1-Click SPEI Checkout, Desglose de Quitas CONDUSEF, Copiado Inmediato de CLABE con Catálogo de Bancos, Confirmación de Transferencia, Emisión de Carta Convenio / Finiquito Digital Imprimible e Integración con Conciliación Automática).
+> **Estado**: `main` · **22 suites / 352 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.
+> Última actualización: 2026-10-25 (Sprint 12: Constancias de Notificación Digital NOM-151 — Conservación de Mensajes de Datos con Huella Criptográfica SHA-256, Estampado de Tiempo UTC/CDMX, Eficacia Probatoria Plena bajo el Código de Comercio Arts. 89-114, Cotejo Público Tamper-Proof e Integración en la Consola Operativa).
 
 ## Vista general
 
@@ -410,6 +410,26 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
   - Botón "Ver Portal SPEI ↗" para previsualización inmediata de la ficha del deudor.
   - Botón "Insertar Enlace 1-Click SPEI" para incluir la URL directa del portal en respuestas de WhatsApp y SMS.
 - [x] **Cobertura de Pruebas**: 14 tests nuevos en `tests/debtorPortal.test.ts` (Total: **21 suites / 340/340 tests verdes**).
+
+### Sprint 12 — Constancia de Notificación Digital NOM-151-SCFI-2016 (2026-10-25)
+
+- [x] **Motor Criptográfico y Modelo Legal (`src/services/nom151.ts`, `migrations/0012_nom151_evidence.sql`)**:
+  - **Norma Oficial Mexicana NOM-151-SCFI-2016**: Conservación de mensajes de datos y digitalización de documentos con prueba plena legal (Código de Comercio Artículos 89 a 114).
+  - **Huella Digital Determinista (SHA-256 Digest)** del contenido íntegro del mensaje de datos (FIPS PUB 180-4 / Web Crypto API).
+  - **Cadena Original Estandarizada**: `||NOM151|1.0|FOLIO|TIMESTAMP_UTC|RAZON_SOCIAL|CONDUSEF_REGISTRO|CLIENTE_ID|TIPO|CANAL|PROVIDER_ID|SHA256_MENSAJE||`.
+  - **Sello Digital y Estampillado de Tiempo**: Generación de sello criptográfico y estampilla de tiempo exacta sincronizada en UTC y hora local del centro de México (CDMX).
+  - **Detección Automática de Alteraciones (Tamper-Proof)**: Cualquier modificación al texto notificado invalida instantáneamente la comprobación matemática del hash.
+- [x] **Rutas y Cotejo Judicial Público (`src/routes/nom151.ts`)**:
+  - `GET /api/v1/nom151/:folio`: Endpoint público para validación de autenticidad en tiempo real por jueces mercantiles, peritos o deudores.
+  - `GET /api/v1/nom151/:folio/document`: Renderizado de documento legal notarial con fundamentos del Código de Comercio y REDECO/CONDUSEF.
+  - `GET /api/v1/nom151/cases/:caseId`: Listado de constancias vinculadas al expediente.
+  - `POST /api/v1/nom151/cases/:caseId/issue`: Emisión manual o automática de constancias de notificación.
+- [x] **Integración con la Consola del Operador y Portal (`frontend/src/Nom151Modal.tsx`, `frontend/src/OperatorDrawer.tsx`)**:
+  - **Sección en Expediente**: Panel de "Constancias Digitales NOM-151" con listado de folios, hashes y enlaces directos para ver el acta legal.
+  - **Certificación en 1-Click**: Botón "+ Certificar Notificación" y casilla en el compositor para sellar automáticamente con NOM-151 cada aviso saliente de WhatsApp, SMS o Email.
+  - **Acta Notarial Imprimible (`Nom151Modal.tsx`)**: Modal con soporte de impresión y exportación a PDF para aportación como prueba documental en Juicios Ejecutivos Mercantiles.
+  - **Soporte en Portal de Autoservicio (`DebtorPortal.tsx`) y URL Directa (`/verify/nom151/:folio`)**: Cotejo instantáneo sin requerir inicio de sesión.
+- [x] **Cobertura de Pruebas**: 12 tests nuevos en `tests/nom151.test.ts` (Total: **22 suites / 352/352 tests verdes**).
 
 ## Verificación realizada
 
