@@ -50,6 +50,11 @@ export interface Tenant {
   agent_auto_threshold_cents: number;
   dry_run: number;
   cron_auto_fire: number;
+  /** Parámetros del protocolo A2A (cobranza agente a agente) */
+  a2a_enabled?: number;
+  a2a_max_discount_pct?: number;
+  a2a_max_installments?: number;
+  a2a_min_down_payment_pct?: number;
   /** 1 = tenant por defecto de la plataforma (el que se usa sin resolver). */
   is_default: number;
   created_at: string;

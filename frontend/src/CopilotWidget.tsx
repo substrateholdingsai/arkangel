@@ -69,7 +69,10 @@ export function CopilotWidget({ activeCaseId, activeCaseName, humanCount }: Copi
     let isMounted = true;
     const checkGpu = async () => {
       try {
-        const nav = typeof navigator !== 'undefined' ? (navigator as unknown as { gpu?: { requestAdapter: () => Promise<unknown> } }) : undefined;
+        const nav =
+          typeof navigator !== 'undefined'
+            ? (navigator as unknown as { gpu?: { requestAdapter: () => Promise<unknown> } })
+            : undefined;
         if (!nav?.gpu) {
           if (isMounted) setSplineError(true);
           return;

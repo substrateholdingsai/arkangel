@@ -24,6 +24,8 @@ export interface Client {
   phone: string;
   email: string | null;
   curp: string | null;
+  rfc?: string | null;
+  auth_pin?: string | null;
   /** `null` = opt-in desconocido (permitido en el primer contacto). `0` = rechazo explícito. */
   whatsapp_opt_in: number | null;
   sms_opt_in: number | null;

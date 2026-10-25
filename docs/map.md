@@ -1,7 +1,7 @@
 # ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · **17 suites / 292 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.
-> Última actualización: 2026-10-24 (Sprint 8: Buscador en Vivo, Ordenamiento y Paginación Real en Dashboard, Diagnóstico Interactivo de Canales `POST /tenant/channels/test`, Semáforo NOM-184 Fail-Closed + Sherman v2 en Drawer, y Mascota 3D Spline con Dictado por Voz en CopilotWidget).
+> **Estado**: `main` · **19 suites / 310 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.
+> Última actualización: 2026-10-25 (Sprint 9: Protocolo A2A — Cobranza Agente a Agente, Handshake de Identidad RFC/PIN contra Secreto Financiero CONDUSEF, Motor Matemático de Quitas Anti-Jailbreak, Endpoints REST y MCP Server JSON-RPC 2.0).
 
 ## Vista general
 
@@ -106,6 +106,11 @@ Cada ruta exige **su** scope: sin credencial → 401, con credencial pero sin sc
 | POST     | `/webhooks/resend`                         | —                                                 | Email entrante                                                                            |
 | POST     | `/webhooks/conekta`                        | RSA-SHA256 `Digest`                               | Conciliación automática SPEI / OXXO Pay (Conekta v2.2 — PyMEs/Mid-Market México)          |
 | POST     | `/webhooks/cobre`                          | HMAC-SHA256 `event-signature`                     | Conciliación automática SPEI corporativo (Cobre B2B — Enterprise)                         |
+| POST     | `/api/v1/a2a/auth`                         | público                                           | Autenticación de agentes deudores con RFC/PIN (Reglas 4.1 y 4.2 CONDUSEF)                 |
+| GET      | `/api/v1/a2a/terms/:caseId`                | público / token A2A                               | Opciones de liquidación y quita máxima autorizada por política del despacho               |
+| POST     | `/api/v1/a2a/negotiate`                    | público / token A2A                               | Negociación algorítmica de quita y parcialidades: convenio con CLABE o contraoferta        |
+| GET      | `/api/v1/a2a/agreement/:id`                | público / token A2A                               | Detalle, estado y CLABE SPEI del convenio pactado entre agentes                          |
+| POST     | `/api/v1/a2a/mcp`                          | público / token A2A                               | Interfaz Model Context Protocol JSON-RPC 2.0 (`tools/list` y `tools/call` para IAs)       |
 
 Tokens de máquina: `ADMIN_TOKEN` (plataforma, break-glass), `INTAKE_TOKEN`
 (`service_ingest`) y `GROK_BOT_TOKEN` (`service_agent`). Los de servicio quedan
@@ -342,11 +347,37 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
   - **Dictado por Voz Omnicanal**: Web Speech API nativa (`es-MX`) activable tocando directamente la mascota en el header ("Toca a Ark y háblale") o pulsando el botón de micrófono en el composer de texto, con feedback visual de escucha en tiempo real.
   - **Launcher Rediseñado**: Botón flotante circular con avatar de Ark, halo de brillo cian reactivo al hover y badge de estado conectado al Worker.
 
+### Sprint 9 — Protocolo A2A (Agent-to-Agent Collections & Programmatic Negotiation) (2026-10-25)
+
+- [x] **Detección y Handshake de Identidad A2A (`src/services/a2a.ts`, `POST /api/v1/a2a/auth`)**:
+  - Blindaje fail-closed estricto de secreto financiero conforme a **Reglas CONDUSEF 4.1 y 4.2**: ningún agente externo accede a cifras de deuda sin autenticar la titularidad mediante PIN de 4 dígitos o últimos 4 caracteres del RFC con homoclave (o CURP).
+  - Enmascaramiento preventivo de datos personales (`maskName`: ej. `C***** S*** H***`) para preservar privacidad en reportes de agentes.
+- [x] **Motor Algorítmico de Quitas Anti-Jailbreak (`evaluateA2AOffer`)**:
+  - Evaluación matemática 100% determinista en TypeScript/D1 inmune a prompt injections (ofertas de $1 peso o peticiones fuera de rango rechazadas automáticamente).
+  - Umbrales configurables por despacho en D1 (`a2a_max_discount_pct`, `a2a_max_installments`, `a2a_min_down_payment_pct`).
+  - Generación automática de contraoferta estructurada cuando la propuesta del agente del deudor se ubica por debajo del piso legal autorizado.
+- [x] **Formalización de Convenios y Rieles SPEI (`a2a_agreements`, `contracts.clabe`)**:
+  - Creación de convenio con folio `agr_xxx`, expiración a 48h y vinculación a la CLABE bancaria de 18 dígitos del contrato.
+  - Generación de URL de confirmación humana en 1 clic (`/pay/:agreementId`) para el agente personal que requiere autorización del titular.
+  - Registro sincronizado en `promises` (`status = 'open'`, `confidence = 0.95`, `source = a2a:agent_id`) reconociendo la promesa de pago para telemetría y módulo contable Alegra.
+- [x] **Servidor MCP Nativo JSON-RPC 2.0 (`POST /api/v1/a2a/mcp`)**:
+  - Soporte completo para clientes de IA (Claude Desktop, OpenAI Custom GPTs, bots corporativos) mediante Model Context Protocol.
+  - Métodos `tools/list` y `tools/call` implementando 4 herramientas nativas:
+    - `arkangel_a2a_auth`: verificación de identidad y factor de autenticación.
+    - `arkangel_a2a_get_terms`: consulta de adeudo, porcentaje de quita máxima y ofertas base.
+    - `arkangel_a2a_submit_offer`: postulación de oferta y emisión de convenio con CLABE o contraoferta.
+    - `arkangel_a2a_get_agreement`: consulta de estado y CLABE de convenio existente.
+- [x] **Migración `0011_a2a_protocol.sql`**:
+  - Columnas `rfc` y `auth_pin` en `clients`.
+  - Columnas de políticas A2A en `tenants` (`a2a_enabled`, `a2a_max_discount_pct`, `a2a_max_installments`, `a2a_min_down_payment_pct`).
+  - Tabla `a2a_agreements` con índices compuestos por `(tenant_id, case_id)`.
+- [x] **Cobertura de Pruebas**: 18 tests nuevos en `tests/a2aProtocol.test.ts` y `tests/a2aRoute.test.ts` (Total: **310/310 tests verdes**).
+
 ## Verificación realizada
 
 | Qué                             | Cómo                                                                                              | Resultado                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Suite unitaria                  | `npm test` (17 archivos)                                                                          | **292/292**                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Suite unitaria                  | `npm test` (19 archivos)                                                                          | **310/310**                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Estilo y tipos                  | `npm run lint` · `npm run typecheck`                                                              | limpios                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Build del worker                | `npm run build:worker`                                                                            | limpio                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Migraciones                     | `wrangler d1 migrations apply --local` (BD nueva)                                                 | 8 migraciones OK; esquema igual al que lee el código                                                                                                                                                                                                                                                                                                                                                                                                                            |
