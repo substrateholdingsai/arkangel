@@ -137,6 +137,16 @@ export function OperatorDrawer({
     );
   };
 
+  const insertarEnlacePortal = () => {
+    if (!ws) return;
+    const portalUrl = `${window.location.origin}/pay/${ws.case.id}`;
+    setReplyText((prev) =>
+      prev
+        ? `${prev} Puede consultar su descuento y liquidar en 1-click SPEI aquí: ${portalUrl}`
+        : `Consulte su descuento y liquide en 1-click SPEI aquí: ${portalUrl}`
+    );
+  };
+
   const enviarMensaje = async (e: FormEvent) => {
     e.preventDefault();
     if (!ws || !replyText.trim()) return;
@@ -609,11 +619,21 @@ export function OperatorDrawer({
                       {formatMXN(ws.case.amount_cents)}
                     </div>
                   </div>
-                  <div className="pt-2 mt-2 border-t border-slate-100 text-[11px] text-slate-500 data-mono truncate">
-                    CLABE:{' '}
-                    <span className="font-semibold text-slate-700">
-                      {ws.contract?.clabe || 'Sin contrato'}
-                    </span>
+                  <div className="pt-2 mt-2 border-t border-slate-100 flex items-center justify-between text-[11px]">
+                    <div className="text-slate-500 data-mono truncate">
+                      CLABE:{' '}
+                      <span className="font-semibold text-slate-700">
+                        {ws.contract?.clabe || 'Sin contrato'}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => window.open(`/pay/${ws.case.id}`, '_blank')}
+                      className="text-[10px] text-emerald-700 hover:text-emerald-900 font-semibold underline shrink-0 ml-1"
+                      title="Abrir portal de autoservicio del deudor con checkout SPEI"
+                    >
+                      Ver Portal SPEI ↗
+                    </button>
                   </div>
                 </div>
 
@@ -1133,13 +1153,22 @@ export function OperatorDrawer({
                         Responder como Operador (Protegido por Motor Legal)
                       </span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={insertarPlantillaLegal}
-                      className="text-xs font-medium text-emerald-700 hover:text-emerald-600 underline"
-                    >
-                      Insertar identificación CONDUSEF + CLABE
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={insertarPlantillaLegal}
+                        className="text-xs font-medium text-emerald-700 hover:text-emerald-600 underline"
+                      >
+                        Insertar identificación CONDUSEF + CLABE
+                      </button>
+                      <button
+                        type="button"
+                        onClick={insertarEnlacePortal}
+                        className="text-xs font-medium text-emerald-700 hover:text-emerald-600 underline"
+                      >
+                        Insertar Enlace 1-Click SPEI
+                      </button>
+                    </div>
                   </div>
 
                   <div className="flex items-center gap-2 flex-wrap">

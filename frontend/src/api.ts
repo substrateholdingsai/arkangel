@@ -825,4 +825,88 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(params),
     }),
+
+  // Portal de Autoservicio del Deudor (1-Click SPEI Checkout)
+  getDebtorPortal: (id: string) =>
+    request<{ success: boolean; portal: DebtorPortalData }>(
+      `/api/v1/portal/${encodeURIComponent(id)}`
+    ),
+
+  confirmDebtorPayment: (
+    id: string,
+    payload: { trackingKey?: string; bankOrigin?: string; payerEmail?: string; notes?: string }
+  ) =>
+    request<PaymentConfirmationResponse>(`/api/v1/portal/${encodeURIComponent(id)}/confirm`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  getDebtorDocument: (id: string) =>
+    request<{ success: boolean; document: DebtorLegalDocument }>(
+      `/api/v1/portal/${encodeURIComponent(id)}/document`
+    ),
 };
+
+export interface DebtorPortalFinancials {
+  originalAmountCents: number;
+  originalAmountFormatted: string;
+  discountPct: number;
+  discountAmountCents: number;
+  discountAmountFormatted: string;
+  payableAmountCents: number;
+  payableAmountFormatted: string;
+  installments: number;
+  paymentReference: string;
+}
+
+export interface DebtorPortalDebtor {
+  maskedName: string;
+  maskedPhone: string;
+  maskedEmail: string;
+}
+
+export interface DebtorPortalCreditor {
+  razonSocial: string;
+  condusefRegistro: string;
+  bankName: string;
+  clabe: string;
+}
+
+export interface DebtorPortalData {
+  portalId: string;
+  caseId: string;
+  agreementId: string | null;
+  status: 'pending' | 'payment_reported' | 'fulfilled' | 'expired';
+  debtor: DebtorPortalDebtor;
+  creditor: DebtorPortalCreditor;
+  financials: DebtorPortalFinancials;
+  expiresAt: string;
+  isExpired: boolean;
+  legalNotice: string;
+}
+
+export interface PaymentConfirmationResponse {
+  success: boolean;
+  status: 'payment_reported' | 'fulfilled';
+  receiptFolio: string;
+  message: string;
+  reportedAt: string;
+}
+
+export interface DebtorLegalDocument {
+  folio: string;
+  fechaEmision: string;
+  tipoDocumento: 'carta_convenio' | 'carta_finiquito';
+  razonSocial: string;
+  condusefRegistro: string;
+  deudorNombre: string;
+  montoOriginal: string;
+  descuento: string;
+  montoLiquidar: string;
+  clabe: string;
+  banco: string;
+  referencia: string;
+  vigencia: string;
+  clausulas: string[];
+  selloDigital: string;
+}

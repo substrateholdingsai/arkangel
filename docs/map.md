@@ -1,7 +1,7 @@
 # ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · **20 suites / 326 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.
-> Última actualización: 2026-10-25 (Sprint 10: Telefonía Telnyx Voice v2 & Voice AI Assistants — Marcación Saliente PSTN con AMD, Integración de Agentes Autónomos de Voz Telnyx, Softphone WebRTC con Micrófono Real, Bridging/Transferencias en Caliente, Manejo Legal de Opt-Outs SMS y Webhooks de Conversación/Grabación CONDUSEF).
+> **Estado**: `main` · **21 suites / 340 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.
+> Última actualización: 2026-10-25 (Sprint 11: Portal de Autoservicio del Deudor — 1-Click SPEI Checkout, Desglose de Quitas CONDUSEF, Copiado Inmediato de CLABE con Catálogo de Bancos, Confirmación de Transferencia, Emisión de Carta Convenio / Finiquito Digital Imprimible e Integración con Conciliación Automática).
 
 ## Vista general
 
@@ -394,6 +394,22 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
 - [x] **Cumplimiento Legal y Opt-Out Inmediato (`src/channels/telnyx.ts`, `src/orquestacion/inbound.ts`)**:
   - Detección de palabras clave de baja en SMS entrantes (`STOP`, `UNSUBSCRIBE`, `BAJA`, `ALTO`, `NO MOLESTAR`) activando de inmediato `do_not_disturb = 1` (Art. 18 Bis LFPC / REUS).
 - [x] **Cobertura de Pruebas**: 16 tests nuevos en `tests/telnyxVoice.test.ts` (Total: **326/326 tests verdes**).
+
+### Sprint 11 — Portal de Autoservicio del Deudor & 1-Click SPEI Checkout (2026-10-25)
+
+- [x] **Portal Público de Autoservicio (`src/routes/portal.ts`, `src/services/debtorPortal.ts`, `frontend/src/DebtorPortal.tsx`)**:
+  - Enrutamiento público bypass (`/pay/:id` o `/portal/:id` o `?pay=:id`), sin requerir sesión ni cookie operativa `ark_session`.
+  - **Blindaje CONDUSEF / REDECO y Secrecía Financiera**: Datos del titular (nombre, teléfono, correo) estrictamente enmascarados bajo el estándar financiero de privacidad ante consultas de terceros.
+  - **Desglose Financiero con Quita Condonada**: Adeudo original, descuento autorizado por el despacho (% y MXN) y saldo único de liquidación con fecha límite de vigencia.
+  - **1-Click SPEI Checkout**: CLABE de 18 dígitos con espaciado agrupado de fácil lectura, botón de copiado con feedback visual instantáneo, y resolución automática del Banco Receptor (STP 646, BBVA 012, Banamex 002, Banorte 072, Nu 638, etc.).
+  - **Reporte de Transferencia SPEI Realizada**: Formulario emergente para registro de clave de rastreo bancario, banco emisor y correo de notificación; genera promesa con confianza 0.99 y evento de auditoría en la base de datos.
+  - **Emisión Digital de Carta Convenio y Carta Finiquito (Art. 112 Bis LFPC)**: Documento formal con cláusulas de liberación crediticia, actualización ante Buró y Círculo de Crédito en máximo 5 días hábiles, sello digital SHA-256 y modo imprimible.
+- [x] **Sincronización Bidireccional con Conciliación SPEI (`src/services/pagos.ts`)**:
+  - Al liquidarse la cuenta vía webhook de Cobre o Conekta SPEI, el convenio pasa automáticamente a `fulfilled` y el portal muestra la felicitación con descarga de Carta Finiquito.
+- [x] **Integración con la Consola de Operadores (`frontend/src/OperatorDrawer.tsx`)**:
+  - Botón "Ver Portal SPEI ↗" para previsualización inmediata de la ficha del deudor.
+  - Botón "Insertar Enlace 1-Click SPEI" para incluir la URL directa del portal en respuestas de WhatsApp y SMS.
+- [x] **Cobertura de Pruebas**: 14 tests nuevos en `tests/debtorPortal.test.ts` (Total: **21 suites / 340/340 tests verdes**).
 
 ## Verificación realizada
 

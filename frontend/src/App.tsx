@@ -52,6 +52,16 @@ import { useAuth } from './auth/AuthContext';
 import { CopilotWidget } from './CopilotWidget';
 import { OperatorDrawer } from './OperatorDrawer';
 import { TenantSettingsModal } from './TenantSettingsModal';
+import { DebtorPortal } from './DebtorPortal';
+
+function getPortalIdFromUrl(): string | null {
+  if (typeof window === 'undefined') return null;
+  const path = window.location.pathname;
+  const match = path.match(/^\/(?:pay|portal)\/([a-zA-Z0-9_-]+)/);
+  if (match && match[1]) return match[1];
+  const params = new URLSearchParams(window.location.search);
+  return params.get('pay') || params.get('portal') || null;
+}
 
 const WATERMARK = '/assets/arkangel-watermark.png';
 const WATERMARK_DARK = '/assets/arkangel-watermark-dark.png';
@@ -100,6 +110,15 @@ export default function App() {
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountingOpen, setAccountingOpen] = useState(false);
+  const [portalId, setPortalId] = useState<string | null>(() => getPortalIdFromUrl());
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setPortalId(getPortalIdFromUrl());
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   const conectado = session !== null;
   const tenantId = activeTenant?.tenantId ?? null;
@@ -597,6 +616,18 @@ export default function App() {
       }
     />
   );
+
+  if (portalId) {
+    return (
+      <DebtorPortal
+        portalId={portalId}
+        onBackToDashboard={() => {
+          setPortalId(null);
+          window.history.pushState({}, '', '/');
+        }}
+      />
+    );
+  }
 
   return (
     <PageShell nav={nav}>

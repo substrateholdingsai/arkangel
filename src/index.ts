@@ -23,6 +23,7 @@ import { RateLimiterDO } from './durable/rate-limiter';
 import { CallSessionDO } from './durable/call-session';
 import { spike } from './routes/spike';
 import { a2a } from './routes/a2a';
+import { portal } from './routes/portal';
 
 export { CallLockDO, RateLimiterDO, CallSessionDO };
 
@@ -59,6 +60,7 @@ app.route('/api/v1', api);
 app.route('/api/v1', agent);
 app.route('/api/v1', contabilidad);
 app.route('/api/v1/a2a', a2a);
+app.route('/api/v1/portal', portal);
 app.route('/webhooks', webhooks);
 
 // Spike de voz (EXPERIMENTAL). Las rutas responden 404 mientras

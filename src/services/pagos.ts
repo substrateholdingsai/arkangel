@@ -245,12 +245,18 @@ export async function reconcilePayment(
     }
   }
 
-  // 5. Cerrar promesas abiertas como cumplidas (fulfilled) si liquidó
+  // 5. Cerrar promesas abiertas como cumplidas (fulfilled) y formalizar convenios si liquidó
   if (fullyPaid) {
     await ctx.env.DB.prepare(
       "UPDATE promises SET status = 'fulfilled' WHERE tenant_id = ? AND client_id = ? AND status = 'open'"
     )
       .bind(ctx.tenantId, clientId)
+      .run();
+
+    await ctx.env.DB.prepare(
+      "UPDATE a2a_agreements SET status = 'fulfilled', updated_at = ? WHERE tenant_id = ? AND client_id = ? AND status IN ('pending', 'payment_reported')"
+    )
+      .bind(nowIso(), ctx.tenantId, clientId)
       .run();
   }
 
