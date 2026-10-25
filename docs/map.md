@@ -1,7 +1,7 @@
 # ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · **20 suites / 322 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.
-> Última actualización: 2026-10-25 (Sprint 10: Telefonía Telnyx Voice v2 & WebRTC — Capacidad Unificada de Comunicación para Humanos y AI, Marcación Saliente PSTN con AMD, Softphone con Micrófono Real, Bridging/Transferencias en Caliente, Manejo Legal de Opt-Outs SMS y Webhooks de Grabación CONDUSEF).
+> **Estado**: `main` · **20 suites / 326 tests verdes** · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.
+> Última actualización: 2026-10-25 (Sprint 10: Telefonía Telnyx Voice v2 & Voice AI Assistants — Marcación Saliente PSTN con AMD, Integración de Agentes Autónomos de Voz Telnyx, Softphone WebRTC con Micrófono Real, Bridging/Transferencias en Caliente, Manejo Legal de Opt-Outs SMS y Webhooks de Conversación/Grabación CONDUSEF).
 
 ## Vista general
 
@@ -49,7 +49,7 @@ migrations/                  0001_init · 0002_legal · 0003_alegra_sync · 0004
 │                             0008_drop_clerk · 0009_tenant_config · 0010_spike_calls · 0011_a2a_protocol
 scripts/                     seed.sql, seed-demo-data.sql, seed-owner.ts, forge_arkangel_watermark.py
 docs/                        arquitectura.md · map.md · runbook-cobranza.md · demo-deudores.csv · ARKANGEL-MERIDIAN.md
-tests/                       20 archivos (322 tests: unit + telnyx voz/webrtc + auth nativa + operador + copilot + pagos Conekta/Cobre + protocolo A2A + MCP + canales/diagnóstico + semáforo NOM-184)
+tests/                       20 archivos (326 tests: unit + telnyx voice ai/webrtc + auth nativa + operador + copilot + pagos Conekta/Cobre + protocolo A2A + MCP + canales/diagnóstico + semáforo NOM-184)
 ```
 
 ## Endpoints
@@ -74,9 +74,10 @@ Cada ruta exige **su** scope: sin credencial → 401, con credencial pero sin sc
 | GET      | `/api/v1/cases/:id/workspace`              | `cases:read`                                      | Workspace del operador: caso, cliente, contrato, deudas, mensajes y **Diagnóstico IA**    |
 | POST     | `/api/v1/cases/:id/reply`                  | `messages:send`                                   | Respuesta humana auditada por las 12 reglas del Motor Legal (422 si viola)                |
 | POST     | `/api/v1/cases/:id/resolve`                | `cases:resolve`                                   | Resolución humana (`promise`, `paid`, `dnd`, `return_to_ai`)                              |
-| POST     | `/api/v1/cases/:id/call`                   | `messages:send`                                   | Softphone auditado: inicio con guion CONDUSEF (`start`) con opción Telnyx PSTN + AMD y bitácora de cierre (`complete`) |
+| POST     | `/api/v1/cases/:id/call`                   | `messages:send`                                   | Softphone auditado: inicio con guion CONDUSEF (`start`) con opción Telnyx PSTN / Voice AI + AMD y bitácora de cierre (`complete`) |
 | POST     | `/api/v1/cases/:id/call/transfer`          | `messages:send`                                   | Transferencia en caliente de llamada activa (Call Bridging AI ↔ Operador Humano)          |
 | GET      | `/api/v1/telnyx/webrtc-token`              | `messages:send`                                   | Emite credenciales SIP/WebRTC para el softphone del operador autenticado en el navegador |
+| POST     | `/api/v1/telnyx/assistant/sync`            | `legal:config`                                    | Sincroniza/aprovisiona el Asistente de Voz Legal en Telnyx inyectando reglas CONDUSEF     |
 | POST     | `/api/v1/cases/:id/notes`                  | `cases:resolve`                                   | Notas internas manuales del operador sobre la ficha del caso                              |
 | PUT      | `/api/v1/cases/:id/cfdi`                   | `cases:write`                                     | Vincula UUID de CFDI timbrado (SAT) al contrato (`contract_cfdi` → `cfdi_relacionado`)    |
 | POST     | `/api/v1/payments/reconcile`               | `cases:resolve`                                   | Conciliación de pagos individual (JSON) o masiva (CSV bancario BBVA/Banorte/STP)          |
@@ -375,34 +376,30 @@ dentro del Worker y la sesión es un token aleatorio que D1 guarda **hasheado**.
   - Tabla `a2a_agreements` con índices compuestos por `(tenant_id, case_id)`.
 - [x] **Cobertura de Pruebas**: 18 tests nuevos en `tests/a2aProtocol.test.ts` y `tests/a2aRoute.test.ts` (Total: **310/310 tests verdes**).
 
-### Sprint 10 — Telefonía Telnyx Voice v2 & WebRTC (Comunicación Unificada Humanos + AI) (2026-10-25)
+### Sprint 10 — Telefonía Telnyx Voice v2 & Voice AI Assistants (2026-10-25)
 
-- [x] **Módulo Telnyx Voice & Call Control v2 (`src/channels/telnyxVoice.ts`)**:
-  - **Marcación saliente PSTN (`dialCall`)**: Marcación telefónica directa a móviles y fijos de deudores usando la API de Call Control de Telnyx (`POST /v2/calls`) con cabeceras de contexto (`X-Case-ID`, `X-Tenant-ID`).
-  - **Detección de Contestadora Automática (AMD Premium)**: Análisis acústico inicial configurado para distinguir entre humanos (`human`) y máquinas/buzones (`machine`).
-  - **Interrupción inteligente por buzón de voz**: Si AMD determina `machine`, la llamada se cuelga de inmediato (`hangupCall`) para proteger costos y evitar infracciones regulatorias por mensajes mudos en contestadores.
-  - **Identificación legal auditada por voz (`speakCall`)**: Locución TTS nativa en español (`es-MX`) para lectura del guion obligatorio CONDUSEF al iniciar la llamada.
-  - **Grabación y Trazabilidad Legal (`startRecording`)**: Grabación dual MP3 con tono legal de aviso previo; persistencia automática del enlace de audio en el expediente (`messages` / `legal_audit`) ante el webhook `call.recording.saved`.
-  - **Call Bridging y Transferencia en Caliente (`transferCall`)**: Transferencia de llamadas activas entre el agente de IA y un operador humano o supervisor ante escalamientos (`POST /api/v1/cases/:id/call/transfer`).
-  - **Credenciales WebRTC para Navegador (`generateWebRTCCredentials`)**: Emisión de tokens de telefonía SIP para operadores autenticados (`GET /api/v1/telnyx/webrtc-token`).
-- [x] **Webhooks de Voz Telnyx (`src/routes/webhooks.ts`)**:
-  - Enrutador inteligente en `/telnyx`: detecta automáticamente eventos de voz (`call.*`) vs mensajería SMS/WhatsApp, manteniendo la verificación criptográfica Ed25519 (`telnyx-signature-ed25519`).
-  - Manejo de ciclo de vida completo: `call.initiated`, `call.answered`, `call.machine.detection.ended`, `call.recording.saved`, `call.hangup`.
-- [x] **Cumplimiento Legal y Opt-Out Inmediato (`src/channels/telnyx.ts`, `src/orquestacion/inbound.ts`)**:
-  - Detección automática de palabras clave de baja en SMS entrantes (`STOP`, `UNSUBSCRIBE`, `BAJA`, `ALTO`, `NO MOLESTAR`).
-  - Activación inmediata de `do_not_disturb = 1` en el cliente (Art. 18 Bis de la LFPC y registro REUS), cerrando el flujo con clasificación legal heurística.
-- [x] **Softphone Interactivo en el Panel (`frontend/src/OperatorDrawer.tsx`, `api.ts`)**:
-  - Selector de línea: **Telnyx PSTN** o **Línea Directa**.
+- [x] **Integración Nativa de Telnyx Voice AI Assistants (`src/channels/telnyxVoice.ts`)**:
+  - **Aprovisionamiento del Asistente Legal (`createOrUpdateTelnyxAssistant`, `POST /api/v1/telnyx/assistant/sync`)**: Creación programática en Telnyx de agentes de voz autónomos inyectando las 12 reglas del motor legal, CONDUSEF, políticas anti-amenazas y guiones asertivos.
+  - **Arranque en Caliente (`startAIAssistant`)**: Integración con `POST /v2/calls/{call_control_id}/actions/ai_assistant_start` para transferir la llamada directamente al asistente conversacional.
+  - **Webhooks de Conversación en Tiempo Real**: Procesamiento de `call.conversation.created`, `call.conversation.ended` (con extracción de transcripción y detección automática de promesas de pago) y `call.conversation_insights` (análisis de sentimiento e intención).
+- [x] **Telefonía Saliente PSTN con AMD (`dialCall`)**:
+  - Marcación telefónica a móviles y fijos de deudores usando Call Control v2 con cabeceras de contexto (`X-Case-ID`, `X-Tenant-ID`, `X-Mode`).
+  - Detección de Contestadora Automática (**AMD Premium**): si detecta máquina/buzón, corta la llamada de inmediato (`hangupCall`), protegiendo costos y evitando sanciones.
+  - Trazabilidad y grabación dual (`startRecording`) con tono legal y sellado de URL en el expediente.
+- [x] **Softphone Humano y Transferencia en Vivo (`frontend/src/OperatorDrawer.tsx`)**:
+  - Selector de línea: **Telnyx PSTN (Humano)**, **Telnyx Voice AI (Autónomo)** o **Línea Directa**.
   - Captura de audio de micrófono real del navegador (`navigator.mediaDevices.getUserMedia`) con mute/unmute a nivel de pista física.
-  - Indicador de estado en tiempo real con etiqueta de conexión Telnyx PSTN.
-  - Formulario interactivo de transferencia en caliente (Call Bridging) hacia extensiones o teléfonos de supervisores.
-- [x] **Cobertura de Pruebas**: 12 tests nuevos en `tests/telnyxVoice.test.ts` (Total: **322/322 tests verdes**).
+  - Formulario de transferencia en caliente (Call Bridging) hacia extensiones o teléfonos de supervisores (`POST /api/v1/cases/:id/call/transfer`).
+  - Emisión de credenciales SIP/WebRTC (`GET /api/v1/telnyx/webrtc-token`).
+- [x] **Cumplimiento Legal y Opt-Out Inmediato (`src/channels/telnyx.ts`, `src/orquestacion/inbound.ts`)**:
+  - Detección de palabras clave de baja en SMS entrantes (`STOP`, `UNSUBSCRIBE`, `BAJA`, `ALTO`, `NO MOLESTAR`) activando de inmediato `do_not_disturb = 1` (Art. 18 Bis LFPC / REUS).
+- [x] **Cobertura de Pruebas**: 16 tests nuevos en `tests/telnyxVoice.test.ts` (Total: **326/326 tests verdes**).
 
 ## Verificación realizada
 
 | Qué                             | Cómo                                                                                              | Resultado                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Suite unitaria                  | `npm test` (20 archivos)                                                                          | **322/322**                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Suite unitaria                  | `npm test` (20 archivos)                                                                          | **326/326**                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Estilo y tipos                  | `npm run lint` · `npm run typecheck`                                                              | limpios                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Build del worker                | `npm run build:worker`                                                                            | limpio                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Migraciones                     | `wrangler d1 migrations apply --local` (BD nueva)                                                 | 8 migraciones OK; esquema igual al que lee el código                                                                                                                                                                                                                                                                                                                                                                                                                            |

@@ -537,7 +537,7 @@ export const api = {
   callCase: (
     caseId: string,
     input:
-      | { phase: 'start'; dial?: boolean; mode?: 'telnyx' | 'mock' }
+      | { phase: 'start'; dial?: boolean; mode?: 'telnyx' | 'telnyx_ai' | 'mock' }
       | { phase: 'complete'; duration_seconds: number; outcome: string; notes: string }
   ) =>
     request<{
@@ -560,6 +560,15 @@ export const api = {
       {
         method: 'POST',
         body: JSON.stringify(input),
+      }
+    ),
+
+  syncTelnyxAssistant: (config?: { name?: string; model?: string; voice?: string }) =>
+    request<{ ok: boolean; assistantId?: string; error?: string }>(
+      '/api/v1/telnyx/assistant/sync',
+      {
+        method: 'POST',
+        body: JSON.stringify(config ?? {}),
       }
     ),
 

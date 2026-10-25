@@ -67,7 +67,7 @@ export function OperatorDrawer({
   const [callSeconds, setCallSeconds] = useState(0);
   const [callScript, setCallScript] = useState<string | null>(null);
   const [callControlId, setCallControlId] = useState<string | null>(null);
-  const [callDialMode, setCallDialMode] = useState<'telnyx' | 'mock'>('telnyx');
+  const [callDialMode, setCallDialMode] = useState<'telnyx' | 'telnyx_ai' | 'mock'>('telnyx');
   const [transferTarget, setTransferTarget] = useState('');
   const [showTransfer, setShowTransfer] = useState(false);
   const [transferring, setTransferring] = useState(false);
@@ -810,12 +810,15 @@ export function OperatorDrawer({
                     <div className="flex items-center gap-2">
                       <select
                         value={callDialMode}
-                        onChange={(e) => setCallDialMode(e.target.value as 'telnyx' | 'mock')}
+                        onChange={(e) =>
+                          setCallDialMode(e.target.value as 'telnyx' | 'telnyx_ai' | 'mock')
+                        }
                         disabled={callingBusy || limiteAlcanzado}
                         className="rounded bg-slate-800 border border-slate-700 px-2 py-1 text-[11px] text-slate-200"
                         title="Modo de llamada telefónica"
                       >
-                        <option value="telnyx">Telnyx PSTN</option>
+                        <option value="telnyx">Telnyx PSTN (Humano)</option>
+                        <option value="telnyx_ai">Telnyx Voice AI (Autónomo)</option>
                         <option value="mock">Línea Directa</option>
                       </select>
                       <Button
@@ -839,7 +842,9 @@ export function OperatorDrawer({
                           ? 'Conectando…'
                           : limiteAlcanzado
                             ? 'Límite alcanzado'
-                            : 'Llamar ahora'}
+                            : callDialMode === 'telnyx_ai'
+                              ? 'Lanzar Voice AI'
+                              : 'Llamar ahora'}
                       </Button>
                     </div>
                   ) : (
@@ -849,7 +854,7 @@ export function OperatorDrawer({
                       </span>
                       {callControlId ? (
                         <span className="hidden sm:inline-block px-1.5 py-0.5 rounded bg-emerald-950/80 text-[10px] font-mono text-emerald-400 border border-emerald-800">
-                          Telnyx PSTN
+                          {callDialMode === 'telnyx_ai' ? 'Telnyx Voice AI' : 'Telnyx PSTN'}
                         </span>
                       ) : null}
                       <button

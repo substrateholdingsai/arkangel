@@ -42,12 +42,14 @@ export interface Env {
   WHATSAPP_TEMPLATE_NAME?: string;
   WHATSAPP_TEMPLATE_LANG?: string;
 
-  // ── Telnyx (SMS & WhatsApp Business API) ──
+  // ── Telnyx (SMS & WhatsApp Business API & Voice AI) ──
   TELNYX_API_KEY: string;
   TELNYX_MESSAGING_PROFILE_ID: string;
   TELNYX_FROM_NUMBER: string;
   TELNYX_WHATSAPP_FROM?: string;
   TELNYX_WEBHOOK_PUBLIC_KEY?: string;
+  TELNYX_CONNECTION_ID?: string;
+  TELNYX_ASSISTANT_ID?: string;
 
   // ── Ajustes operativos (vars) ──
   AI_MODEL?: string;

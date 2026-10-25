@@ -3,7 +3,12 @@ import { askCopilot, type CopilotHistoryItem } from '../ai/copilot';
 import { adapters, testChannelConnectivity } from '../channels';
 import { parseCobreWebhook } from '../channels/cobre';
 import { parseConektaWebhook } from '../channels/conekta';
-import { dialCall, generateWebRTCCredentials, transferCall } from '../channels/telnyxVoice';
+import {
+  createOrUpdateTelnyxAssistant,
+  dialCall,
+  generateWebRTCCredentials,
+  transferCall,
+} from '../channels/telnyxVoice';
 import { formatMXN, formatMXNShort } from '../lib/money';
 import { maskPhone } from '../lib/phone';
 import { isWithinSendWindow, localHour } from '../lib/score';
@@ -765,18 +770,24 @@ api.post('/cases/:id/call', async (c) => {
     let callControlId: string | undefined;
     let dialStatus = 'ready';
 
-    if (payload.dial === true || payload.mode === 'telnyx') {
+    const isAiMode = payload.mode === 'telnyx_ai';
+    const isPstnMode = payload.dial === true || payload.mode === 'telnyx' || isAiMode;
+
+    if (isPstnMode) {
       const dialRes = await dialCall(c.env, {
         to: targetPhone,
         amd: true,
+        assistantId: isAiMode ? c.env.TELNYX_ASSISTANT_ID : undefined,
+        greeting: isAiMode ? guionApertura : undefined,
         customHeaders: {
           'X-Case-ID': item.id,
           'X-Tenant-ID': ctx.tenantId,
+          'X-Mode': isAiMode ? 'ai_assistant' : 'operator',
         },
       });
       if (dialRes.ok && dialRes.callControlId) {
         callControlId = dialRes.callControlId;
-        dialStatus = 'dialing';
+        dialStatus = isAiMode ? 'ai_assistant_dialing' : 'dialing';
       } else {
         dialStatus = 'mock';
       }
@@ -870,6 +881,33 @@ api.get('/telnyx/webrtc-token', async (c) => {
   const sipUsername = `op_${cleanActor || 'agent'}`;
   const creds = await generateWebRTCCredentials(c.env, sipUsername);
   return c.json(creds, creds.ok ? 200 : 500);
+});
+
+api.post('/telnyx/assistant/sync', async (c) => {
+  const guardia = await exigePrincipalConScope(c, 'legal:config');
+  if (!guardia.ok) return guardia.response;
+  const resultado = await tenantContextDeRequest(c, guardia.principal, guardia.origen);
+  if (!resultado.ok) return resultado.response;
+  const ctx = resultado.ctx;
+
+  const legal = configLegal(ctx);
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+
+  const assistant = await createOrUpdateTelnyxAssistant(c.env, {
+    razonSocial: legal.nombreLegal,
+    condusef: legal.condusef,
+    name: typeof body.name === 'string' ? body.name : undefined,
+    model: typeof body.model === 'string' ? body.model : undefined,
+    voice: typeof body.voice === 'string' ? body.voice : undefined,
+  });
+
+  if (assistant.ok && assistant.assistantId) {
+    await logEvent(ctx, 'telnyx.assistant_synced', {
+      payload: { assistantId: assistant.assistantId, actor: guardia.principal.actorId },
+    });
+  }
+
+  return c.json(assistant, assistant.ok ? 200 : 502);
 });
 
 api.get('/clients/:id', async (c) => {

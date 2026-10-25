@@ -6,6 +6,8 @@ import { normalizePhone } from '../lib/phone';
 import { findClientByContact, findOpenCase } from '../services/clientes';
 import { logEvent } from '../services/eventos';
 import { recordMessage } from '../services/mensajes';
+import { recordPromise } from '../services/promesas';
+import { updateCase } from '../services/casos';
 import { resolveTenantContext } from '../tenancy/context';
 import type { Env } from '../types/env';
 
@@ -24,6 +26,8 @@ export interface DialCallParams {
   amd?: boolean; // Answering Machine Detection
   streamUrl?: string; // WebSocket para streaming de audio bidireccional
   customHeaders?: Record<string, string>;
+  assistantId?: string; // Telnyx Voice AI Assistant
+  greeting?: string; // Locución inicial del AI Assistant
 }
 
 export interface DialCallResult {
@@ -123,6 +127,13 @@ export async function dialCall(
   if (params.streamUrl) {
     bodyPayload.stream_url = params.streamUrl;
     bodyPayload.stream_track = 'both_tracks';
+  }
+  const assistantId = params.assistantId ?? env.TELNYX_ASSISTANT_ID;
+  if (assistantId) {
+    bodyPayload.assistant = {
+      id: assistantId,
+      ...(params.greeting ? { greeting: params.greeting } : {}),
+    };
   }
 
   const url = 'https://api.telnyx.com/v2/calls';
@@ -396,6 +407,127 @@ export async function generateWebRTCCredentials(
   };
 }
 
+export interface StartAIAssistantParams {
+  assistantId?: string;
+  greeting?: string;
+  clientState?: string;
+  voice?: string;
+}
+
+/**
+ * Inicia un Telnyx Voice AI Assistant en una llamada activa de Call Control.
+ * Permite que el asistente de IA tome el control de la conversación con ultra-baja latencia.
+ */
+export async function startAIAssistant(
+  env: Env,
+  callControlId: string,
+  params?: StartAIAssistantParams,
+  override?: TelnyxCallConfig
+): Promise<CallActionResult> {
+  const config = resolveVoiceConfig(env, override);
+  if (!config) return { ok: false, error: 'Telnyx no configurado' };
+
+  const assistantId = params?.assistantId ?? env.TELNYX_ASSISTANT_ID;
+  const payload: Record<string, unknown> = {};
+
+  if (assistantId) {
+    payload.assistant = { id: assistantId };
+  }
+  if (params?.greeting) {
+    payload.greeting = params.greeting;
+  }
+  if (params?.clientState) {
+    payload.client_state = params.clientState;
+  }
+  if (params?.voice) {
+    payload.voice = params.voice;
+  }
+
+  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/ai_assistant_start`;
+  const response = await fetchJson<{ errors?: Array<{ detail?: string }> }>(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  return {
+    ok: response.ok,
+    error: response.data?.errors?.[0]?.detail ?? response.error,
+  };
+}
+
+export interface CreateAssistantConfig {
+  name?: string;
+  model?: string;
+  instructions?: string;
+  voice?: string;
+  razonSocial?: string;
+  condusef?: string;
+}
+
+/**
+ * Crea o aprovisiona el Asistente de Voz Legal de Arkangel en Telnyx.
+ * Inyecta las directrices de la CONDUSEF, NOM-184 y política anti-amenazas.
+ */
+export async function createOrUpdateTelnyxAssistant(
+  env: Env,
+  config?: CreateAssistantConfig,
+  override?: TelnyxCallConfig
+): Promise<{ ok: boolean; assistantId?: string; error?: string }> {
+  const voiceCfg = resolveVoiceConfig(env, override);
+  if (!voiceCfg) return { ok: false, error: 'Telnyx no configurado' };
+
+  const razon = config?.razonSocial ?? 'Despacho Autorizado de Cobranza';
+  const condusef = config?.condusef ?? 'REDECO-CONDUSEF';
+
+  const defaultPrompt = `Eres el Agente de Voz de Inteligencia Artificial de ${razon} (Registro CONDUSEF: ${condusef}).
+Tu función es negociar el pago de deudas de forma empática, profesional, respetuosa y 100% legal.
+
+REGLAS LEGALES INMUTABLES:
+1. IDENTIFICACIÓN INMEDIATA: Debes identificarte al inicio indicando tu nombre, que representas a ${razon} y que llamas en seguimiento a su cuenta pendiente.
+2. VERIFICACIÓN DE IDENTIDAD: Antes de dar montos detallados o datos sensibles, confirma que estás hablando con el titular de la cuenta.
+3. CERO AMENAZAS: Tienes estrictamente prohibido usar lenguaje intimidatorio, hablar de embargo de bienes en la primera llamada, penas de prisión, o amenazar a familiares/referencias.
+4. HORARIOS Y RESPETO: Respetas la NOM-184. Si el deudor te pide no ser contactado ("No molestar" / DND), acepta su decisión pacíficamente y despídete con cortesía.
+5. NEGOCIACIÓN DE QUITAS Y PLAZOS: Puedes ofrecer planes de pago de hasta 3 quincenas o descuento de hasta 20% si paga en una sola exhibición.
+6. ESCALAMIENTO HUMANO: Si el deudor se molesta, exige hablar con un supervisor o una persona, o la conversación sale de tu alcance, ofrece transferirlo inmediatamente a un ejecutivo humano disponible.`;
+
+  const body = {
+    name: config?.name ?? 'Arkangel Legal Collections Agent',
+    model: config?.model ?? 'openai/gpt-4o-mini',
+    instructions: config?.instructions ?? defaultPrompt,
+    voice_settings: {
+      voice: config?.voice ?? 'Telnyx.Polly.Mia',
+      language: 'es-MX',
+    },
+  };
+
+  const url = 'https://api.telnyx.com/v2/ai/assistants';
+  const response = await fetchJson<{
+    data?: { id?: string };
+    errors?: Array<{ detail?: string }>;
+  }>(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${voiceCfg.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const err = response.data?.errors?.[0]?.detail ?? response.error ?? 'Error creando asistente';
+    return { ok: false, error: err };
+  }
+
+  return {
+    ok: true,
+    assistantId: response.data?.data?.id,
+  };
+}
+
 export interface TelnyxVoiceEvent {
   eventType: string;
   callControlId?: string;
@@ -411,6 +543,10 @@ export interface TelnyxVoiceEvent {
   recordingUrl?: string;
   durationSeconds?: number;
   customHeaders?: Record<string, string>;
+  conversationId?: string;
+  transcript?: string;
+  summary?: string;
+  insights?: Record<string, unknown>;
   raw: unknown;
 }
 
@@ -450,6 +586,10 @@ export function parseTelnyxVoiceEvent(payload: unknown): TelnyxVoiceEvent | null
           start_time?: string;
           end_time?: string;
           custom_headers?: Array<{ name: string; value: string }>;
+          conversation_id?: string;
+          transcript?: string;
+          summary?: string;
+          insights?: Record<string, unknown>;
         };
       };
     }
@@ -496,6 +636,10 @@ export function parseTelnyxVoiceEvent(payload: unknown): TelnyxVoiceEvent | null
     recordingUrl: p.recording_urls?.mp3 ?? p.recording_urls?.wav,
     durationSeconds,
     customHeaders: headersMap,
+    conversationId: p.conversation_id,
+    transcript: p.transcript,
+    summary: p.summary,
+    insights: p.insights,
     raw: payload,
   };
 }
@@ -560,7 +704,96 @@ export async function processTelnyxVoiceEvent(
           to: event.to,
         },
       });
+
+      if (
+        event.callControlId &&
+        (event.customHeaders?.['X-Mode'] === 'ai_assistant' ||
+          event.clientState?.includes('ai_assistant'))
+      ) {
+        await startAIAssistant(env, event.callControlId, {
+          assistantId: env.TELNYX_ASSISTANT_ID,
+          clientState: event.clientState,
+        });
+      }
+
       return { ok: true, actionTaken: 'answered_logged' };
+    }
+
+    case 'call.conversation.created': {
+      await logEvent(ctx, 'telnyx.conversation_created', {
+        caseId,
+        clientId,
+        payload: {
+          callControlId: event.callControlId,
+          conversationId: event.conversationId,
+        },
+      });
+      return { ok: true, actionTaken: 'conversation_created' };
+    }
+
+    case 'call.conversation.ended': {
+      const summaryText = event.summary || event.transcript || '';
+      if (summaryText && caseId) {
+        await recordMessage(ctx, {
+          caseId,
+          clientId: clientId ?? `cli_${caseId}`,
+          channel: 'sms',
+          direction: 'outbound',
+          providerId: event.callControlId ?? `conv_${Date.now()}`,
+          body: `[Conversación Telnyx Voice AI · ${event.durationSeconds ?? 0}s] ${summaryText}`,
+          status: 'delivered',
+          meta: {
+            conversationId: event.conversationId,
+            durationSeconds: event.durationSeconds,
+            insights: event.insights,
+            voice_ai: true,
+          },
+        });
+
+        const lowerSummary = summaryText.toLowerCase();
+        if (
+          lowerSummary.includes('promete') ||
+          lowerSummary.includes('acuerda pagar') ||
+          lowerSummary.includes('pagará') ||
+          lowerSummary.includes('compromiso')
+        ) {
+          await recordPromise(ctx, {
+            tenantId: ctx.tenantId,
+            caseId,
+            clientId: clientId ?? `cli_${caseId}`,
+            amountCents: 0,
+            promisedDate: new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString().slice(0, 10),
+            confidence: 0.9,
+            source: 'ai',
+          });
+          await updateCase(ctx, caseId, { status: 'promised' });
+        }
+      }
+
+      await logEvent(ctx, 'telnyx.conversation_ended', {
+        caseId,
+        clientId,
+        payload: {
+          callControlId: event.callControlId,
+          conversationId: event.conversationId,
+          durationSeconds: event.durationSeconds,
+          hasSummary: Boolean(summaryText),
+        },
+      });
+      return { ok: true, actionTaken: 'conversation_ended' };
+    }
+
+    case 'call.conversation_insights': {
+      await logEvent(ctx, 'telnyx.conversation_insights', {
+        caseId,
+        clientId,
+        payload: {
+          callControlId: event.callControlId,
+          conversationId: event.conversationId,
+          insights: event.insights,
+        },
+      });
+      return { ok: true, actionTaken: 'insights_logged' };
     }
 
     case 'call.machine.detection.ended': {

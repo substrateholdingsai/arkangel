@@ -7,6 +7,8 @@ import {
   speakCall,
   startRecording,
   generateWebRTCCredentials,
+  startAIAssistant,
+  createOrUpdateTelnyxAssistant,
   isTelnyxVoiceEvent,
   parseTelnyxVoiceEvent,
   processTelnyxVoiceEvent,
@@ -188,36 +190,65 @@ describe('Telnyx Voice (Call Control v2 & WebRTC)', () => {
       expect(result.sipUsername).toBe('op_ana123');
       expect(result.jwt).toBe('jwt_mock_token_abc');
     });
+
+    it('startAIAssistant ejecuta POST /v2/calls/:id/actions/ai_assistant_start', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockJsonResponse({}));
+
+      const result = await startAIAssistant(fakeEnv, 'v3:ctrl_abc', {
+        assistantId: 'asst_voice_legal_1',
+        greeting: 'Buenos días, le llamamos del despacho.',
+      });
+      expect(fetchSpy).toHaveBeenCalled();
+      expect(fetchSpy.mock.calls[0]![0]).toContain('/actions/ai_assistant_start');
+      expect(result.ok).toBe(true);
+    });
+
+    it('createOrUpdateTelnyxAssistant crea un asistente en POST /v2/ai/assistants', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        mockJsonResponse({
+          data: { id: 'asst_new_123' },
+        })
+      );
+
+      const result = await createOrUpdateTelnyxAssistant(fakeEnv, {
+        razonSocial: 'Despacho Alfa',
+        condusef: 'REDECO-123',
+      });
+      expect(fetchSpy).toHaveBeenCalled();
+      expect(fetchSpy.mock.calls[0]![0]).toBe('https://api.telnyx.com/v2/ai/assistants');
+      expect(result.ok).toBe(true);
+      expect(result.assistantId).toBe('asst_new_123');
+    });
   });
 
   describe('processTelnyxVoiceEvent (Webhooks en vivo)', () => {
+    const defaultTenantRow = {
+      id: 't_default',
+      slug: 'default',
+      nombre: 'Tenant Default',
+      status: 'active',
+      is_default: 1,
+      send_window_start: 8,
+      send_window_end: 22,
+      max_contacts_per_day: 3,
+      rate_limit_rpm: 42,
+      dedupe_window_hours: 24,
+      tz: 'America/Mexico_City',
+      created_at: '2026-10-01T00:00:00Z',
+      updated_at: '2026-10-01T00:00:00Z',
+    };
+    const stmt = {
+      bind: () => stmt,
+      run: async () => ({ success: true }),
+      first: async () => defaultTenantRow,
+      all: async () => ({ results: [defaultTenantRow] }),
+    };
+    const mockDb = {
+      prepare: () => stmt,
+    };
+
     it('al detectar contestador automático (machine) en AMD, cuelga la llamada de inmediato', async () => {
       const hangupSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockJsonResponse({}));
-
-      const defaultTenantRow = {
-        id: 't_default',
-        slug: 'default',
-        nombre: 'Tenant Default',
-        status: 'active',
-        is_default: 1,
-        send_window_start: 8,
-        send_window_end: 22,
-        max_contacts_per_day: 3,
-        rate_limit_rpm: 42,
-        dedupe_window_hours: 24,
-        tz: 'America/Mexico_City',
-        created_at: '2026-10-01T00:00:00Z',
-        updated_at: '2026-10-01T00:00:00Z',
-      };
-      const stmt = {
-        bind: () => stmt,
-        run: async () => ({ success: true }),
-        first: async () => defaultTenantRow,
-        all: async () => ({ results: [defaultTenantRow] }),
-      };
-      const mockDb = {
-        prepare: () => stmt,
-      };
 
       const testEnv = {
         ...fakeEnv,
@@ -236,6 +267,47 @@ describe('Telnyx Voice (Call Control v2 & WebRTC)', () => {
       expect(res.ok).toBe(true);
       expect(res.actionTaken).toBe('machine_hangup');
       expect(hangupSpy).toHaveBeenCalled();
+    });
+
+    it('procesa call.conversation.ended y registra la conversación y promesa si hubo acuerdo', async () => {
+      const testEnv = {
+        ...fakeEnv,
+        DB: mockDb,
+      } as unknown as Env;
+
+      const event = {
+        eventType: 'call.conversation.ended',
+        callControlId: 'v3:conv_1',
+        conversationId: 'conv_session_100',
+        durationSeconds: 45,
+        summary: 'El deudor confirma su identidad y promete pagar el saldo total este viernes.',
+        clientState: JSON.stringify({ caseId: 'cas_1' }),
+        raw: {},
+      };
+
+      const res = await processTelnyxVoiceEvent(testEnv, event);
+      expect(res.ok).toBe(true);
+      expect(res.actionTaken).toBe('conversation_ended');
+    });
+
+    it('procesa call.conversation_insights registrando la telemetría del diálogo', async () => {
+      const testEnv = {
+        ...fakeEnv,
+        DB: mockDb,
+      } as unknown as Env;
+
+      const event = {
+        eventType: 'call.conversation_insights',
+        callControlId: 'v3:conv_1',
+        conversationId: 'conv_session_100',
+        insights: { sentiment: 'positive', intent: 'payment_plan' },
+        clientState: JSON.stringify({ caseId: 'cas_1' }),
+        raw: {},
+      };
+
+      const res = await processTelnyxVoiceEvent(testEnv, event);
+      expect(res.ok).toBe(true);
+      expect(res.actionTaken).toBe('insights_logged');
     });
   });
 });
