@@ -22,11 +22,13 @@ export type WormRecordType =
   | 'telnyx_call'
   | 'debtor_agreement'
   | 'judicial_docket_export'
-  | 'payment_receipt';
+  | 'payment_receipt'
+  | 'hermes_forensic_opinion';
 
 export type WormAction = 'created' | 'verified' | 'exported' | 'tamper_check';
 
-export type WormActor = 'operator' | 'system' | 'telnyx_webhook' | 'public_verifier';
+export type WormActor =
+  'operator' | 'system' | 'telnyx_webhook' | 'public_verifier' | 'hermes_agent';
 
 export interface WormAuditInput {
   tenantId: string;
@@ -168,7 +170,9 @@ export async function verifyWormChain(
 
   query += ` ORDER BY created_at ASC, id ASC`;
 
-  const { results } = await env.DB.prepare(query).bind(...binds).all<any>();
+  const { results } = await env.DB.prepare(query)
+    .bind(...binds)
+    .all<any>();
 
   let previousHash = GENESIS_PREV_HASH;
   let valid = true;

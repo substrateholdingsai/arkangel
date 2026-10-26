@@ -58,7 +58,10 @@ class FakeNom151D1 {
               return (cl as unknown as T) || null;
             }
 
-            if (s.includes('FROM nom151_certificates n') && s.includes('WHERE n.certificate_folio = ?')) {
+            if (
+              s.includes('FROM nom151_certificates n') &&
+              s.includes('WHERE n.certificate_folio = ?')
+            ) {
               const folio = params[0];
               const cert = this.certificates.find((c) => c.certificate_folio === folio);
               if (!cert) return null;
@@ -81,16 +84,24 @@ class FakeNom151D1 {
           },
 
           all: async <T>(): Promise<{ results: T[] }> => {
-            if (s.includes('FROM nom151_certificates') && s.includes('WHERE tenant_id = ? AND case_id = ?')) {
+            if (
+              s.includes('FROM nom151_certificates') &&
+              s.includes('WHERE tenant_id = ? AND case_id = ?')
+            ) {
               const [tId, cId] = params;
-              const certs = this.certificates.filter((c) => c.tenant_id === tId && c.case_id === cId);
+              const certs = this.certificates.filter(
+                (c) => c.tenant_id === tId && c.case_id === cId
+              );
               return { results: certs as unknown as T[] };
             }
             return { results: [] };
           },
 
           run: async (): Promise<{ success: boolean }> => {
-            if (s.includes('INSERT INTO worm_audit_log') || s.includes('INSERT INTO tenant_psc_settings')) {
+            if (
+              s.includes('INSERT INTO worm_audit_log') ||
+              s.includes('INSERT INTO tenant_psc_settings')
+            ) {
               return { success: true };
             }
 
@@ -244,7 +255,8 @@ describe('Constancias de Notificación Digital NOM-151 (Sprint 12)', () => {
         clientId: 'cli_nom_1',
         tipoNotificacion: 'carta_convenio',
         channel: 'sms',
-        messageContent: 'Convenio formal autorizado con 25% de quita. Pague antes del 28 de octubre.',
+        messageContent:
+          'Convenio formal autorizado con 25% de quita. Pague antes del 28 de octubre.',
         providerId: 'sms_9988',
       });
 
@@ -333,7 +345,9 @@ describe('Constancias de Notificación Digital NOM-151 (Sprint 12)', () => {
       expect(doc).not.toBeNull();
       expect(doc?.titulo).toContain('FINIQUITO');
       expect(doc?.emisorRazonSocial).toContain('Servicios Jurídicos y Cobranza Especializada');
-      expect(doc?.fundamentoLegal.some((f) => f.includes('ARTÍCULO 89 DEL CÓDIGO DE COMERCIO'))).toBe(true);
+      expect(
+        doc?.fundamentoLegal.some((f) => f.includes('ARTÍCULO 89 DEL CÓDIGO DE COMERCIO'))
+      ).toBe(true);
       expect(doc?.fundamentoLegal.some((f) => f.includes('NOM-151-SCFI-2016'))).toBe(true);
     });
   });
@@ -376,7 +390,11 @@ describe('Constancias de Notificación Digital NOM-151 (Sprint 12)', () => {
         messageContent: 'Convenio formal emitido',
       });
 
-      const res = await app.request(`/api/v1/nom151/${cert.certificateFolio}/document`, {}, ctx.env);
+      const res = await app.request(
+        `/api/v1/nom151/${cert.certificateFolio}/document`,
+        {},
+        ctx.env
+      );
       expect(res.status).toBe(200);
 
       const body = (await res.json()) as any;

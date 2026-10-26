@@ -104,10 +104,7 @@ export function maskEmail(email: string | null | undefined): string {
   if (!email || !email.includes('@')) return '***@***.***';
   const [user, domain] = email.split('@');
   if (!user || !domain) return '***@***.***';
-  const maskedUser =
-    user.length <= 2
-      ? user[0] + '***'
-      : user[0] + '***' + user[user.length - 1];
+  const maskedUser = user.length <= 2 ? user[0] + '***' : user[0] + '***' + user[user.length - 1];
   const parts = domain.split('.');
   const maskedDomain = parts
     .map((p) => (p.length <= 2 ? p : p[0] + '*'.repeat(Math.min(p.length - 1, 6))))
@@ -155,10 +152,7 @@ function formatMXN(cents: number): string {
  * Consulta la información pública y sanitizada para el portal del deudor.
  * Fail-closed: si el identificador no existe, retorna null. No expone datos sensibles no enmascarados.
  */
-export async function getDebtorPortalData(
-  env: Env,
-  id: string
-): Promise<DebtorPortalData | null> {
+export async function getDebtorPortalData(env: Env, id: string): Promise<DebtorPortalData | null> {
   const cleanId = id.trim();
 
   // 1. Si es un convenio acordado (agr_...)
@@ -281,7 +275,8 @@ export async function getDebtorPortalData(
   let payableAmountCents = caseRow.amount_cents;
   let discountPct = 0;
   const agreementId = existingAgr?.id || null;
-  const expiresAt = existingAgr?.expires_at || new Date(Date.now() + 48 * 3600 * 1000).toISOString();
+  const expiresAt =
+    existingAgr?.expires_at || new Date(Date.now() + 48 * 3600 * 1000).toISOString();
 
   if (existingAgr) {
     originalAmountCents = existingAgr.original_amount_cents;
@@ -294,9 +289,7 @@ export async function getDebtorPortalData(
   }
 
   const isExpired =
-    !isPaid &&
-    existingAgr?.status === 'pending' &&
-    new Date(expiresAt).getTime() < Date.now();
+    !isPaid && existingAgr?.status === 'pending' && new Date(expiresAt).getTime() < Date.now();
 
   const status: DebtorPortalData['status'] = isPaid
     ? 'fulfilled'

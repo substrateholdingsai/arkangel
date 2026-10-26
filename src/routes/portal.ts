@@ -97,6 +97,9 @@ portal.get('/:id/document', async (c) => {
     return c.json({ success: true, document });
   } catch (error: any) {
     logger.error('Error generando documento legal en portal', { id, error: error?.message });
-    return c.json({ error: 'internal_error', message: 'No se pudo generar el documento legal' }, 500);
+    return c.json(
+      { error: 'internal_error', message: 'No se pudo generar el documento legal' },
+      500
+    );
   }
 });

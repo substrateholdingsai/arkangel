@@ -20,6 +20,10 @@ export interface Env {
   RATE_LIMITER: DurableObjectNamespace;
   /** DO del spike de voz: uno por llamada. */
   CALL_SESSION: DurableObjectNamespace;
+  /** DO para microVMs Firecracker del Agente Hermes (Plano 2). */
+  HERMES_SANDBOX?: DurableObjectNamespace;
+  /** Bucket R2 para persistencia episódica de /home/hermes. */
+  HERMES_MEMORY_BUCKET?: R2Bucket;
 
   // ── Tokens de acceso (no son secretos de proveedor, pero sí protegidos) ──
   ADMIN_TOKEN: string;

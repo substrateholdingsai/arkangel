@@ -24,10 +24,7 @@ import {
   upsertTenantPscSettings,
   type TenantPscSettings,
 } from '../services/atebPscClient';
-import {
-  generateCaseJudicialDocket,
-  renderJudicialDocketHtml,
-} from '../services/judicialDocket';
+import { generateCaseJudicialDocket, renderJudicialDocketHtml } from '../services/judicialDocket';
 import { verifyWormChain } from '../services/custodyWorm';
 import type { Env } from '../types/env';
 import type { AuthVars } from '../auth/middleware';
@@ -271,8 +268,7 @@ nom151.post('/cases/:caseId/issue', async (c) => {
       return c.json(
         {
           error: 'invalid_payload',
-          message:
-            'Campos obligatorios: clientId, tipoNotificacion, channel y messageContent.',
+          message: 'Campos obligatorios: clientId, tipoNotificacion, channel y messageContent.',
         },
         400
       );
@@ -293,7 +289,10 @@ nom151.post('/cases/:caseId/issue', async (c) => {
   } catch (error: any) {
     logger.error('Error emitiendo constancia NOM-151', { caseId, error: error?.message });
     return c.json(
-      { error: 'issue_failed', message: error?.message || 'No se pudo emitir la constancia NOM-151' },
+      {
+        error: 'issue_failed',
+        message: error?.message || 'No se pudo emitir la constancia NOM-151',
+      },
       500
     );
   }

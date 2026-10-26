@@ -1,22 +1,8 @@
 import { useEffect, useState } from 'react';
-import {
-  Check,
-  FileCheck2,
-  Lock,
-  Printer,
-  Scale,
-  ShieldCheck,
-  X,
-} from 'lucide-react';
+import { Check, FileCheck2, Lock, Printer, Scale, ShieldCheck, X } from 'lucide-react';
 import { api, type Nom151PrintableDocument } from './api';
 
-export function Nom151Modal({
-  folio,
-  onClose,
-}: {
-  folio: string;
-  onClose: () => void;
-}) {
+export function Nom151Modal({ folio, onClose }: { folio: string; onClose: () => void }) {
   const [doc, setDoc] = useState<Nom151PrintableDocument | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -106,7 +92,8 @@ export function Nom151Modal({
             {/* Encabezado Formal Notarial */}
             <div className="text-center pb-4 border-b border-slate-200">
               <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 px-3 py-0.5 text-[10px] font-bold tracking-wide uppercase mb-2">
-                <Check className="w-3 h-3 text-emerald-600" /> Verificación Criptográfica Válida · Integridad Garantizada
+                <Check className="w-3 h-3 text-emerald-600" /> Verificación Criptográfica Válida ·
+                Integridad Garantizada
               </div>
               {doc.nivelCumplimientoLabel ? (
                 <div className="mb-2">
@@ -125,7 +112,8 @@ export function Nom151Modal({
                 {doc.titulo}
               </h2>
               <div className="text-xs text-slate-600 font-medium mt-1">
-                Acreedor Emisor: <span className="font-bold text-slate-900">{doc.emisorRazonSocial}</span>
+                Acreedor Emisor:{' '}
+                <span className="font-bold text-slate-900">{doc.emisorRazonSocial}</span>
               </div>
               <div className="text-[11px] text-slate-700 font-mono">
                 Registro CONDUSEF / REDECO: {doc.emisorCondusef}
@@ -152,7 +140,9 @@ export function Nom151Modal({
               </div>
               {doc.folioConstanciaOficialSE ? (
                 <div>
-                  <span className="text-slate-500 font-medium">Folio Oficial PSC (Secretaría de Economía):</span>
+                  <span className="text-slate-500 font-medium">
+                    Folio Oficial PSC (Secretaría de Economía):
+                  </span>
                   <div className="font-mono font-bold text-emerald-800 text-[10px]">
                     {doc.folioConstanciaOficialSE}
                   </div>
@@ -177,7 +167,8 @@ export function Nom151Modal({
             {/* Contenido Notificado Exacto */}
             <div>
               <div className="text-[11px] font-bold text-slate-800 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
-                <FileCheck2 className="w-4 h-4 text-emerald-600" /> Contenido Íntegro del Mensaje de Datos
+                <FileCheck2 className="w-4 h-4 text-emerald-600" /> Contenido Íntegro del Mensaje de
+                Datos
               </div>
               <div className="bg-slate-900 text-slate-100 rounded-xl p-4 font-mono text-[11px] leading-relaxed whitespace-pre-wrap select-all border border-slate-800">
                 {doc.contenidoNotificado}

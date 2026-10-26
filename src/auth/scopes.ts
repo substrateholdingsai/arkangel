@@ -16,6 +16,7 @@ export const SCOPES = [
   'cases:write',
   'cases:dispatch',
   'cases:release',
+  'cases:resolve',
   // Clientes (deudores)
   'clients:read',
   'clients:write',
@@ -71,6 +72,7 @@ const TENANT_SCOPES = [
   'cases:write',
   'cases:dispatch',
   'cases:release',
+  'cases:resolve',
   'clients:read',
   'clients:write',
   'messages:read',
@@ -106,6 +108,7 @@ export const ROLE_SCOPES: Record<Role, readonly Scope[]> = {
   compliance: [
     'cases:read',
     'cases:release',
+    'cases:resolve',
     'clients:read',
     'messages:read',
     'promises:read',
@@ -119,6 +122,7 @@ export const ROLE_SCOPES: Record<Role, readonly Scope[]> = {
     'cases:read',
     'cases:write',
     'cases:dispatch',
+    'cases:resolve',
     'clients:read',
     'clients:write',
     'messages:read',

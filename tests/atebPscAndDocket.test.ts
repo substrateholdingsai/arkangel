@@ -1,24 +1,15 @@
 import { Hono } from 'hono';
 import { describe, expect, it } from 'vitest';
 import { nom151 } from '../src/routes/nom151';
-import {
-  recordWormAuditEntry,
-  verifyWormChain,
-} from '../src/services/custodyWorm';
-import {
-  upsertTenantPscSettings,
-  stampDigestWithAtebPsc,
-} from '../src/services/atebPscClient';
-import {
-  issueNom151Certificate,
-} from '../src/services/nom151';
+import { recordWormAuditEntry, verifyWormChain } from '../src/services/custodyWorm';
+import { upsertTenantPscSettings, stampDigestWithAtebPsc } from '../src/services/atebPscClient';
+import { issueNom151Certificate } from '../src/services/nom151';
 import {
   generateCaseJudicialDocket,
   renderJudicialDocketHtml,
 } from '../src/services/judicialDocket';
 import type { TenantContext } from '../src/tenancy/types';
 import type { Env } from '../src/types/env';
-import type { AuthVars } from '../src/auth/middleware';
 
 class FakeAtebD1 {
   certificates: any[] = [];
@@ -293,7 +284,8 @@ describe('Conector ATEB Servicios PSC y Cuaderno Judicial NOM-151', () => {
     });
 
     // Simulamos un atacante alterando el hash de la base de datos
-    fakeDb.wormAuditLogs[0].entry_hash = 'hackeado_hash_invalido_000000000000000000000000000000000000000000';
+    fakeDb.wormAuditLogs[0].entry_hash =
+      'hackeado_hash_invalido_000000000000000000000000000000000000000000';
 
     const check = await verifyWormChain(env, 't_psc', 'cas_psc_1');
     expect(check.valid).toBe(false);
@@ -360,6 +352,9 @@ describe('Conector ATEB Servicios PSC y Cuaderno Judicial NOM-151', () => {
     const ctx: TenantContext = {
       tenantId: 't_psc',
       tenant: fakeDb.tenants[0] as any,
+      config: {} as any,
+      channels: [],
+      principal: { tipo: 'usuario', id: 'usr_1', email: 'test@garza.mx', rol: 'admin' } as any,
       env,
     };
 
@@ -388,6 +383,9 @@ describe('Conector ATEB Servicios PSC y Cuaderno Judicial NOM-151', () => {
     const ctx: TenantContext = {
       tenantId: 't_psc',
       tenant: fakeDb.tenants[0] as any,
+      config: {} as any,
+      channels: [],
+      principal: { tipo: 'usuario', id: 'usr_1', email: 'test@garza.mx', rol: 'admin' } as any,
       env,
     };
 
@@ -425,7 +423,7 @@ describe('Conector ATEB Servicios PSC y Cuaderno Judicial NOM-151', () => {
     const fakeDb = new FakeAtebD1();
     const env = { DB: fakeDb as any, APP_URL: 'https://arkangel.arksystems.site' } as Env;
 
-    const app = new Hono<{ Bindings: Env; Variables: AuthVars }>();
+    const app = new Hono<{ Bindings: Env; Variables: any }>();
     app.use('*', async (c, next) => {
       c.set('tenantId', 't_psc');
       c.set('user', { id: 'usr_1', email: 'test@garza.mx', role: 'admin' });
@@ -434,51 +432,71 @@ describe('Conector ATEB Servicios PSC y Cuaderno Judicial NOM-151', () => {
     app.route('/api/v1/nom151', nom151);
 
     // 1. Guardar settings de ATEB PSC
-    const saveRes = await app.request('/api/v1/nom151/psc/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Tenant-Id': 't_psc' },
-      body: JSON.stringify({
-        atebEnabled: true,
-        atebEnvironment: 'sandbox',
-        atebClientId: 'CLI_ATEB_TEST',
-        atebApiKey: 'secret_12345',
-        atebTsaEnabled: true,
-      }),
-    }, env);
+    const saveRes = await app.request(
+      '/api/v1/nom151/psc/settings',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Tenant-Id': 't_psc' },
+        body: JSON.stringify({
+          atebEnabled: true,
+          atebEnvironment: 'sandbox',
+          atebClientId: 'CLI_ATEB_TEST',
+          atebApiKey: 'secret_12345',
+          atebTsaEnabled: true,
+        }),
+      },
+      env
+    );
     expect(saveRes.status).toBe(200);
     const saveJson: any = await saveRes.json();
     expect(saveJson.success).toBe(true);
     expect(saveJson.settings.atebApiKey).toBe('••••••••2345');
 
     // 2. Consultar settings de ATEB PSC
-    const getRes = await app.request('/api/v1/nom151/psc/settings', {
-      headers: { 'X-Tenant-Id': 't_psc' },
-    }, env);
+    const getRes = await app.request(
+      '/api/v1/nom151/psc/settings',
+      {
+        headers: { 'X-Tenant-Id': 't_psc' },
+      },
+      env
+    );
     expect(getRes.status).toBe(200);
     const getJson: any = await getRes.json();
     expect(getJson.settings.atebClientId).toBe('CLI_ATEB_TEST');
 
     // 3. Expediente judicial
-    const docketRes = await app.request('/api/v1/nom151/cases/cas_psc_1/docket', {
-      headers: { 'X-Tenant-Id': 't_psc' },
-    }, env);
+    const docketRes = await app.request(
+      '/api/v1/nom151/cases/cas_psc_1/docket',
+      {
+        headers: { 'X-Tenant-Id': 't_psc' },
+      },
+      env
+    );
     expect(docketRes.status).toBe(200);
     const docketJson: any = await docketRes.json();
     expect(docketJson.success).toBe(true);
     expect(docketJson.docket.folioExpediente).toBeDefined();
 
     // 4. Vista imprimible HTML del expediente
-    const printRes = await app.request('/api/v1/nom151/cases/cas_psc_1/docket/printable', {
-      headers: { 'X-Tenant-Id': 't_psc' },
-    }, env);
+    const printRes = await app.request(
+      '/api/v1/nom151/cases/cas_psc_1/docket/printable',
+      {
+        headers: { 'X-Tenant-Id': 't_psc' },
+      },
+      env
+    );
     expect(printRes.status).toBe(200);
     const htmlText = await printRes.text();
     expect(htmlText).toContain('CUADERNO DE PRUEBAS ELECTRÓNICAS');
 
     // 5. Verificación de la cadena WORM
-    const wormRes = await app.request('/api/v1/nom151/cases/cas_psc_1/worm-chain', {
-      headers: { 'X-Tenant-Id': 't_psc' },
-    }, env);
+    const wormRes = await app.request(
+      '/api/v1/nom151/cases/cas_psc_1/worm-chain',
+      {
+        headers: { 'X-Tenant-Id': 't_psc' },
+      },
+      env
+    );
     expect(wormRes.status).toBe(200);
     const wormJson: any = await wormRes.json();
     expect(wormJson.success).toBe(true);

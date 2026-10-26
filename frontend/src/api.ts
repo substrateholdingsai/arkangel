@@ -867,7 +867,8 @@ export const api = {
     caseId: string,
     payload: {
       clientId: string;
-      tipoNotificacion: 'requerimiento_pago' | 'carta_convenio' | 'carta_finiquito' | 'aviso_cobranza';
+      tipoNotificacion:
+        'requerimiento_pago' | 'carta_convenio' | 'carta_finiquito' | 'aviso_cobranza';
       channel: 'whatsapp' | 'sms' | 'email' | 'portal';
       messageContent: string;
       messageId?: string;
@@ -900,6 +901,41 @@ export const api = {
   getCaseWormChain: (caseId: string) =>
     request<{ success: boolean; verification: WormChainVerification }>(
       `/api/v1/nom151/cases/${encodeURIComponent(caseId)}/worm-chain`
+    ),
+
+  // Agente Autónomo Hermes en Cloudflare Sandboxes (Hermes-flare)
+  requestHermesForensics: (caseId: string, documentsR2Urls?: string[]) =>
+    request<{ ok: boolean; job: HermesJob }>(
+      `/api/v1/hermes/forensics/${encodeURIComponent(caseId)}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ documentsR2Urls }),
+      }
+    ),
+
+  requestHermesSkipTrace: (clientId: string, caseId?: string) =>
+    request<{ ok: boolean; job: HermesJob }>(
+      `/api/v1/hermes/skip-trace/${encodeURIComponent(clientId)}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ caseId }),
+      }
+    ),
+
+  requestHermesDocketSynthesis: (caseId: string) =>
+    request<{ ok: boolean; job: HermesJob }>(
+      `/api/v1/hermes/docket-synthesis/${encodeURIComponent(caseId)}`,
+      {
+        method: 'POST',
+      }
+    ),
+
+  getHermesJob: (jobId: string) =>
+    request<{ ok: boolean; job: HermesJob }>(`/api/v1/hermes/jobs/${encodeURIComponent(jobId)}`),
+
+  listHermesJobsForCase: (caseId: string) =>
+    request<{ ok: boolean; jobs: HermesJob[] }>(
+      `/api/v1/hermes/cases/${encodeURIComponent(caseId)}/jobs`
     ),
 };
 
@@ -1110,4 +1146,19 @@ export interface WormChainVerification {
   compromisedAtId: string | null;
   retentionRequirement: string;
   checkedAt: string;
+}
+
+export interface HermesJob {
+  id: string;
+  tenantId: string;
+  caseId: string | null;
+  clientId: string | null;
+  taskType: 'skip_trace' | 'sat_materiality' | 'judicial_synthesis';
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  resultSummary: string | null;
+  resultPayload: any;
+  wormEntryHash: string | null;
+  r2SnapshotPath: string | null;
+  createdAt: string;
+  updatedAt: string;
 }

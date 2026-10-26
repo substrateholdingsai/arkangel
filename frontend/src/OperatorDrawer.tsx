@@ -106,27 +106,27 @@ export function OperatorDrawer({
     }
   }, []);
 
-  const cargarFicha = useCallback(async (id: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [data] = await Promise.all([
-        api.caseWorkspace(id),
-        cargarNom151(id),
-      ]);
-      setWs(data);
-      setPromisePesos(String(Math.round(data.case.amount_cents / 100)));
-      setCfdiInput(data.cfdi_uuid ?? data.contract?.cfdi_uuid ?? '');
-      const enabled = data.legal.enabled_channels ?? ['whatsapp', 'sms', 'email'];
-      if (enabled.length > 0) {
-        setChannel((prev) => (enabled.includes(prev) ? prev : enabled[0]!));
+  const cargarFicha = useCallback(
+    async (id: string) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const [data] = await Promise.all([api.caseWorkspace(id), cargarNom151(id)]);
+        setWs(data);
+        setPromisePesos(String(Math.round(data.case.amount_cents / 100)));
+        setCfdiInput(data.cfdi_uuid ?? data.contract?.cfdi_uuid ?? '');
+        const enabled = data.legal.enabled_channels ?? ['whatsapp', 'sms', 'email'];
+        if (enabled.length > 0) {
+          setChannel((prev) => (enabled.includes(prev) ? prev : enabled[0]!));
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'No se pudo cargar el expediente');
+      } finally {
+        setLoading(false);
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo cargar el expediente');
-    } finally {
-      setLoading(false);
-    }
-  }, [cargarNom151]);
+    },
+    [cargarNom151]
+  );
 
   useEffect(() => {
     if (!caseId) {
@@ -1240,7 +1240,8 @@ export function OperatorDrawer({
                   {nomCertificates.length === 0 ? (
                     <div className="text-center py-4 text-xs text-slate-500">
                       No hay constancias NOM-151 emitidas todavía. Pulse "+ Certificar Notificación"
-                      para emitir una constancia formal con valor probatorio pleno ante tribunales y CONDUSEF.
+                      para emitir una constancia formal con valor probatorio pleno ante tribunales y
+                      CONDUSEF.
                     </div>
                   ) : (
                     <div className="space-y-2 max-h-56 overflow-y-auto">
@@ -1271,7 +1272,8 @@ export function OperatorDrawer({
                               </span>
                             </div>
                             <div className="text-[11px] text-slate-500 font-mono truncate max-w-sm">
-                              SHA-256: {cert.messageDigestSha256.slice(0, 16)}… · {cert.timestampLocal.slice(0, 16)}
+                              SHA-256: {cert.messageDigestSha256.slice(0, 16)}… ·{' '}
+                              {cert.timestampLocal.slice(0, 16)}
                             </div>
                           </div>
                           <button
@@ -1403,17 +1405,11 @@ export function OperatorDrawer({
       </div>
 
       {selectedNomFolio ? (
-        <Nom151Modal
-          folio={selectedNomFolio}
-          onClose={() => setSelectedNomFolio(null)}
-        />
+        <Nom151Modal folio={selectedNomFolio} onClose={() => setSelectedNomFolio(null)} />
       ) : null}
 
       {showJudicialDocket && ws ? (
-        <JudicialDocketModal
-          caseId={ws.case.id}
-          onClose={() => setShowJudicialDocket(false)}
-        />
+        <JudicialDocketModal caseId={ws.case.id} onClose={() => setShowJudicialDocket(false)} />
       ) : null}
     </div>
   );

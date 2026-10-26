@@ -21,10 +21,7 @@ import type { TenantContext } from '../tenancy/types';
 import type { Env } from '../types/env';
 
 export type Nom151TipoNotificacion =
-  | 'requerimiento_pago'
-  | 'carta_convenio'
-  | 'carta_finiquito'
-  | 'aviso_cobranza';
+  'requerimiento_pago' | 'carta_convenio' | 'carta_finiquito' | 'aviso_cobranza';
 
 export type Nom151Channel = 'whatsapp' | 'sms' | 'email' | 'portal';
 

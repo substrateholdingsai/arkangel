@@ -50,13 +50,8 @@ const ATEB_ENDPOINTS = {
 /**
  * Consulta la configuración de ATEB PSC para un tenant.
  */
-export async function getTenantPscSettings(
-  env: Env,
-  tenantId: string
-): Promise<TenantPscSettings> {
-  const row = await env.DB.prepare(
-    `SELECT * FROM tenant_psc_settings WHERE tenant_id = ?`
-  )
+export async function getTenantPscSettings(env: Env, tenantId: string): Promise<TenantPscSettings> {
+  const row = await env.DB.prepare(`SELECT * FROM tenant_psc_settings WHERE tenant_id = ?`)
     .bind(tenantId)
     .first<any>();
 
@@ -113,7 +108,7 @@ export async function upsertTenantPscSettings(
       settings.atebEnvironment || 'sandbox',
       settings.atebClientId || null,
       settings.atebApiKey || null,
-      settings.atebTsaEnabled ?? 1 ? 1 : 0,
+      (settings.atebTsaEnabled ?? 1) ? 1 : 0,
       settings.autoStampOutbound ? 1 : 0,
       now,
       now
@@ -178,7 +173,7 @@ export async function stampDigestWithAtebPsc(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${settings.atebApiKey}`,
+        Authorization: `Bearer ${settings.atebApiKey}`,
         'X-ATEB-Client-Id': settings.atebClientId || '',
       },
       body: JSON.stringify({

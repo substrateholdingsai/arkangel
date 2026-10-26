@@ -227,7 +227,8 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
         setError(res.error || 'Error al sincronizar el asistente en Telnyx');
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Error inesperado al contactar Telnyx Voice API';
+      const msg =
+        err instanceof Error ? err.message : 'Error inesperado al contactar Telnyx Voice API';
       setSyncAssistantResult({ ok: false, error: msg });
       setError(msg);
     } finally {
@@ -742,7 +743,8 @@ export function TenantSettingsModal({ open, onClose, onSaved }: TenantSettingsMo
                           </span>
                         </h4>
                         <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">
-                          Marcación PSTN directa a México (+52), latencia conversacional &lt; 800ms, detección de buzón (AMD) y audio firmado para Cuaderno Judicial.
+                          Marcación PSTN directa a México (+52), latencia conversacional &lt; 800ms,
+                          detección de buzón (AMD) y audio firmado para Cuaderno Judicial.
                         </p>
                       </div>
                     </div>

@@ -1,0 +1,35 @@
+# Dockerfile para Cloudflare Sandbox - Runtime Hermes Agent
+FROM python:3.11-slim-bookworm AS base
+
+# Herramientas del sistema requeridas por Hermes y análisis forense
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    build-essential \
+    libxml2-dev \
+    libxslt1-dev \
+    poppler-utils \
+    tesseract-ocr \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Inyección del sandbox-shim oficial de Cloudflare
+COPY --from=docker.io/cloudflare/sandbox:latest /usr/local/bin/sandbox-shim /usr/local/bin/sandbox-shim
+
+# Creación de usuario no privilegiado para seguridad
+RUN useradd -m -s /bin/bash hermes
+USER hermes
+WORKDIR /home/hermes
+
+# Instalación de Hermes Agent (Nous Research) y librerías forenses
+RUN pip install --no-cache-dir --user \
+    hermes-agent \
+    pandas \
+    pypdf \
+    cryptography \
+    httpx
+
+# Directorio de trabajo y memoria persistente
+RUN mkdir -p /home/hermes/workspace /home/hermes/.hermes
+
+CMD ["sleep", "infinity"]

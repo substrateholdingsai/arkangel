@@ -149,7 +149,9 @@ export async function generateCaseJudicialDocket(
   const gestionesOperativas = (messagesResult.results || []).map((m) => ({
     tipo: `${m.channel.toUpperCase()} (${m.direction === 'outbound' ? 'Saliente' : 'Entrante'})`,
     fecha: formatLocalTimestamp(m.created_at),
-    detalle: m.body ? m.body.slice(0, 120) + (m.body.length > 120 ? '...' : '') : 'Gestión de cobro',
+    detalle: m.body
+      ? m.body.slice(0, 120) + (m.body.length > 120 ? '...' : '')
+      : 'Gestión de cobro',
     identificadorProveedor: m.provider_id || null,
   }));
 
@@ -248,7 +250,9 @@ export function renderJudicialDocketHtml(docket: JudicialDocketData): string {
         <td style="padding: 8px 6px;">${p.fecha}</td>
         <td style="padding: 8px 6px;">
           <span style="display:inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; background: ${
-            p.cumplimiento.includes('Oficial') ? '#dcfce7; color: #166534' : '#fef9c3; color: #854d0e'
+            p.cumplimiento.includes('Oficial')
+              ? '#dcfce7; color: #166534'
+              : '#fef9c3; color: #854d0e'
           };">
             ${p.cumplimiento}
           </span>

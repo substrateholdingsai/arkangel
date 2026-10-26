@@ -1,7 +1,7 @@
 # ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · **23 suites / 358 tests verdes** (incluye arnés de regresión de voz `tests/spikeVoz.test.ts`, 25 tests) · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.  
-> Última actualización: **2026-10-25** (Sprint 13: Conector ATEB Servicios PSC — Acreditado Secretaría de Economía, Custodia Criptográfica WORM 10 años Art. 49 CCom, Cuaderno Procesal Judicial Art. 1298-A CCom y Materialidad Fiscal SAT Arts. 29-A / 69-B CFF y 27 Fracc. XV LISR + Cierre formal de Spike de Voz con Telnyx Voice AI Assistants en producción).
+> **Estado**: `main` · **24 suites / 363 tests verdes** (incluye arnés de regresión de voz y suite forense Hermes-flare en Cloudflare Sandboxes) · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.  
+> Última actualización: **2026-10-25** (Sprint 14: Agente Autónomo Hermes en Cloudflare Sandboxes / Hermes-flare — MicroVMs Firecracker, Skip-Tracing Patrimonial RPPC, Peritaje SAT Arts. 29-A / 69-B CFF / 27-XV LISR, Síntesis de Cuaderno Judicial Art. 1298-A CCom y Persistencia R2).
 
 ---
 
@@ -19,6 +19,12 @@ Arkangel es una plataforma de cobranza agéntica, omnicanal y de certeza procesa
   * **Conector Dual-Engine ATEB PSC**: Modo A (Cumplimiento Pleno Oficial con estampillas RFC 3161 TSA y constancias ASN.1 DER del PSC acreditado por la Secretaría de Economía) y Modo B (Evidencia Interna Preparada para Migración con failover resiliente).
   * **Custodia WORM interna (bitácora encadenada `worm_audit_log`, retención 10 años Art. 49 CCom)** como evidencia preparada para migración; la constancia NOM-151 plena se obtiene al conmutar a Modo A con ATEB PSC (ver §8, Frontera Activa #1).
   * **Cuaderno Procesal Judicial & Carpeta SAT**: Expediente foliado descargable e imprimible para Juicios Ejecutivos y Orales Mercantiles (Art. 1298-A CCom) con liquidación de saldo e intereses moratorios calculados al 6% anual (Art. 362 CCom) y materialidad fiscal probatoria ante el SAT (Arts. 29-A y 69-B CFF, y deducción de incobrables Art. 27 Fracc. XV LISR). El expediente distingue expresamente mediante distintivos visuales los folios timbrados en Modo A (Oficial ATEB PSC) de los generados en Modo B (Evidencia Interna Presuntiva).
+* **Plano 2: Alta Inteligencia Forense con Agente Hermes en Cloudflare Sandboxes (`hermes-flare`)**:
+  * **Separación de Planos de Cómputo**: Desacoplamiento arquitectónico entre Plano 1 (Edge V8 Isolates, transaccional, latencia < 50 ms) y Plano 2 (Firecracker microVMs aisladas vía `@cloudflare/sandbox`, Python 3.11, Nous Research Hermes Agent, trabajos de 30s a 15 min).
+  * **Skip-Tracing Patrimonial**: Cruce autónomo de RPPC, boletines judiciales y SAT para dictamen clasificado de solvencia (`Clase A: Solvente con bienes inscritos`, `Clase B: Flujo bancario`, `Clase C: Insolvente`).
+  * **Peritaje de Materialidad SAT**: Escrutinio masivo de CFDIs contra listas negras EFOS (Art. 69-B CFF) y validación matemática de deducibilidad para ISR conforme al Art. 27 Fracción XV de la LISR.
+  * **Síntesis del Cuaderno Judicial Mercantil**: Redacción pericial estructurada de hechos y agravios (Art. 1298-A CCom) y liquidación automatizada de intereses moratorios al 6% anual legal (Art. 362 CCom).
+  * **Persistencia Episódica & Bitácora WORM**: Snapshots de `/home/hermes` en Cloudflare R2 (`HERMES_MEMORY_BUCKET`) y sellado inmutable en `worm_audit_log` bajo `hermes_forensic_opinion` / `hermes_agent`.
 * **Motor Legal Fail-Closed**: Auditoría estricta de 12 reglas / 48 conductas prohibidas (CONDUSEF / REDECO / NOM-184 / LFPC / Código Penal Federal).
 * **Scoring Sherman v2**: Algoritmo de propensión de pago y priorización de cartera con calibración continua.
 * **Módulo Contable (Alegra MCP)**: Reconciliación contable en dos fases, idempotencia criptográfica y publicación diaria en R2 y Alegra.
@@ -35,6 +41,7 @@ src/
 │   ├── health.ts            Health check (/api/v1/health) y liveness del worker
 │   ├── ingest.ts            Ingesta de carteras CSV multipart o JSON (/api/v1/ingest/csv)
 │   ├── api.ts               Core API: casos, softphone, llamadas, notas, CFDI, conciliación, métricas, copilot, tenants
+│   ├── hermes.ts            Endpoints forenses Hermes (/api/v1/hermes/*): skip-trace, peritaje SAT 69-B y síntesis judicial
 │   ├── nom151.ts            Constancias NOM-151, emisión, verificación judicial pública, bitácora WORM, cuaderno procesal y config ATEB PSC
 │   ├── portal.ts            Portal público de autoservicio del deudor (/api/v1/portal/*, /pay/:id, cartas finiquito)
 │   ├── a2a.ts               Protocolo Agent-to-Agent: auth con secreto financiero, negociación de quitas y servidor MCP JSON-RPC 2.0
@@ -47,6 +54,7 @@ src/
 │   ├── auth.ts              Helpers de autenticación y cabeceras
 │   └── spike.ts             Rutas de benchmarking experimental (archivado)
 ├── services/                
+│   ├── hermesForensics.ts   Orquestador de Plano 2: Skip-tracing patrimonial, peritaje SAT (Arts. 29-A/69-B CFF/27-XV LISR) y síntesis judicial
 │   ├── casos.ts             Gestión del ciclo de vida de casos (ready, queued, contacted, promised, paid, escalated, dnd)
 │   ├── clientes.ts          Directorio de titulares deudores, teléfonos E.164, CURP y RFC
 │   ├── deudas.ts            Obligaciones financieras, saldos pendientes y fechas de vencimiento
@@ -81,9 +89,13 @@ src/
 ├── contabilidad/            buildPayload, sendToAlegra, alegraClient (MCP JSON-RPC 2.0 / SSE) y esquemas Zod
 ├── tenancy/                 Tipos, resolución de contexto, repositorio, canales por tenant, llaves y middleware
 ├── auth/                    Autenticación nativa (PBKDF2-SHA256), sesiones hasheadas en D1, membresías, guards, scopes y email Resend
-├── durable/                 Durable Objects: RateLimiterDO (límites atómicos por tenant/canal), CallLockDO y CallSessionDO
+├── durable/                 Durable Objects: HermesSandboxDO (Sandboxes Firecracker), RateLimiterDO, CallLockDO y CallSessionDO
 ├── lib/                     Criptografía, parseo CSV, utilidades HTTP, idempotencia, logger estructurado W3C, money, phone, score
 └── types/                   Variables de entorno (env.ts) y modelos de cobranza (cobranza.ts)
+
+Dockerfile.sandbox           Definición de contenedor Firecracker para Cloudflare Sandboxes con sandbox-shim y runtime Hermes
+migrations/
+└── 0014_hermes_forensics.sql Tabla hermes_forensic_jobs con índices por tenant, caso, cliente y status
 
 frontend/                    Single Page Application React + Vite + Tailwind CSS
 ├── App.tsx                  Dashboard principal: KPIs omnicanal y Voice AI, Dropzone CSV, tabla con buscador/orden/paginación, telemetría
@@ -217,6 +229,7 @@ tests/                       23 suites unitarias y de integración (358 tests ap
 | `nom151_certificates` | 0012, 0013 | Constancias NOM-151 emitidas: folios, hashes deterministas SHA-256, sellos, proveedor PSC y nivel de cumplimiento |
 | `worm_audit_log` | 0013 | **Bitácora WORM inmutable encadenada** (`prev_hash` -> `entry_hash`) para retención de 10 años (Art. 49 CCom; ver §1) |
 | `tenant_psc_settings` | 0013 | Credenciales de Conector ATEB PSC por despacho (Modo A oficial vs Modo B presuntivo) |
+| `hermes_forensic_jobs` | 0014 | Dictámenes periciales y trabajos forenses de Hermes (Skip-Trace, SAT 69-B, Síntesis Judicial) |
 
 ---
 
@@ -275,17 +288,25 @@ tests/                       23 suites unitarias y de integración (358 tests ap
 * **Cuaderno Procesal Judicial & Carpeta SAT**: Expediente integral para Juicios Ejecutivos Mercantiles y Orales Mercantiles (Art. 1298-A CCom), con cálculo de intereses moratorios al 6% anual (Art. 362 CCom) y materialidad probatoria ante el SAT (Arts. 29-A y 69-B CFF, y 27 Fracc. XV LISR). Distinción explícita por folio en interfaz y reporte impreso: Modo A Oficial ATEB PSC (verde) vs Modo B Presuntivo Arkangel (amarillo).
 * **Sincronización en 1-Clic y KPIs de Voz en Dashboard**: Botón de aprovisionamiento de Asistente de Voz Telnyx en la UI y tarjetas KPI de Minutos de Voz, Llamadas AI y Promesas en Audio en la pantalla principal.
 
+### Sprint 14 — Agente Autónomo Hermes en Cloudflare Sandboxes (`hermes-flare`)
+* **Separación Radical de Planos de Cómputo**: Arquitectura de dos planos: Plano 1 (Edge V8 Isolates, transaccional, Telnyx Voice AI, SPEI checkout, latencia < 50 ms) y Plano 2 (Firecracker microVMs aisladas con `@cloudflare/sandbox`, Python 3.11, Nous Research Hermes Agent, trabajos forenses de 30s a 15 min).
+* **Skip-Tracing Patrimonial y Dictamen de Embargabilidad**: Rastreo autónomo de activos, sociedades y domicilios fiscales en registros públicos (RPPC, boletines judiciales, SAT) con clasificación procesal (`Clase A: Solvente con bienes inscritos`, `Clase B: Flujo bancario`, `Clase C: Insolvente`).
+* **Peritaje Forense SAT (Arts. 29-A, 69-B CFF y 27-XV LISR)**: Parseo y escrutinio masivo de CFDIs contra listas negras EFOS (definitivos y presuntos) y emisión automatizada de la Carpeta de Materialidad Fiscal que valida la deducción por incobrabilidad para ISR.
+* **Redacción Procesal del Cuaderno Judicial Mercantil (Art. 1298-A CCom)**: Redacción estructurada de agravios y capítulos de hechos basada en constancias NOM-151 y audios transcritos, junto con cómputo automatizado de intereses moratorios al 6% anual legal (Art. 362 CCom).
+* **Persistencia Episódica R2 & Bitácora WORM**: Durable Object `HermesSandboxDO` con snapshotting a Cloudflare R2 (`HERMES_MEMORY_BUCKET`), inmutabilidad WORM bajo actor `hermes_agent` y hash SHA-256 en `worm_audit_log`.
+* **Integración UI en 1 Clic**: Botón `[Solicitar Peritaje Hermes SAT / Skip-Tracing]` y acciones rápidas en el modal del Cuaderno Judicial con telemetría de microVM en vivo.
+
 ---
 
 ## 6. Estado de verificación y calidad del código
 
 | Verificación | Herramienta / Comando | Resultado actual |
 | :--- | :--- | :--- |
-| **Suite completa de pruebas** | `npm test` (23 archivos) | **23 suites / 358 tests aprobados (100% verde)**; incluye `tests/spikeVoz.test.ts` (25 tests de regresión de percentiles, DO y contratos de voz) |
+| **Suite completa de pruebas** | `npm test` (24 archivos) | **24 suites / 363 tests aprobados (100% verde)**; incluye peritajes forenses Hermes, arnés de voz y contratos procesales |
 | **Latencia Voice AI (Telnyx)** | Telemetría en producción | **< 800 ms objetivo de diseño bajo SLA del proveedor; arnés telemétrico formal de p50/p95 en producción en curso (ver §8)** |
 | **Linter de código** | `npm run lint` (`--max-warnings 0`) | **0 errores, 0 warnings** |
 | **Compilación frontend** | `npm run build:frontend` (Vite) | **1638 módulos transformados, bundle limpio** |
-| **Compilación del Worker** | `npm run build:worker` (Wrangler dry-run) | **Todos los bindings D1/KV/Queue/DO/R2/AI validados** |
+| **Compilación del Worker** | `npm run build:worker` (Wrangler dry-run) | **Todos los bindings D1/KV/Queue/DO/R2/AI/Sandbox validados** |
 | **Integración Continua** | `.github/workflows/ci.yml` en GitHub Actions | **Runs en `main` y pull requests en verde** |
 | **Ambiente de Producción** | `curl -s https://arkangel.arksystems.site/api/v1/health` | **`{"ok": true, "service": "arkangel-cobranza", "env": "production"}`** |
 

@@ -20,7 +20,7 @@ class FakePortalD1 {
       case_id: 'cas_portal_1',
       client_id: 'cli_portal_1',
       original_amount_cents: 1000000, // $10,000.00 MXN
-      agreed_amount_cents: 750000,   // $7,500.00 MXN (25% off)
+      agreed_amount_cents: 750000, // $7,500.00 MXN (25% off)
       discount_pct: 25,
       installments: 1,
       status: 'pending',
@@ -288,7 +288,9 @@ describe('Portal de Autoservicio del Deudor (Sprint 11)', () => {
     });
 
     it('identifica correctamente el banco receptor a partir de los 3 primeros dígitos de la CLABE', () => {
-      expect(getBankNameFromClabe('646180123456789012')).toBe('STP (Sistema de Transferencias y Pagos)');
+      expect(getBankNameFromClabe('646180123456789012')).toBe(
+        'STP (Sistema de Transferencias y Pagos)'
+      );
       expect(getBankNameFromClabe('012180001234567890')).toBe('BBVA México');
       expect(getBankNameFromClabe('002180001234567890')).toBe('Citibanamex');
       expect(getBankNameFromClabe('072180001234567890')).toBe('Banorte');
@@ -382,8 +384,12 @@ describe('Portal de Autoservicio del Deudor (Sprint 11)', () => {
 
       expect(doc).not.toBeNull();
       expect(doc?.tipoDocumento).toBe('carta_finiquito');
-      expect(doc?.clausulas.some((c) => c.includes('FINIQUITO Y EXTINCIÓN DE OBLIGACIÓN'))).toBe(true);
-      expect(doc?.clausulas.some((c) => c.includes('Sociedades de Información Crediticia'))).toBe(true);
+      expect(doc?.clausulas.some((c) => c.includes('FINIQUITO Y EXTINCIÓN DE OBLIGACIÓN'))).toBe(
+        true
+      );
+      expect(doc?.clausulas.some((c) => c.includes('Sociedades de Información Crediticia'))).toBe(
+        true
+      );
     });
   });
 

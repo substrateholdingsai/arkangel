@@ -15,11 +15,7 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
-import {
-  api,
-  type DebtorLegalDocument,
-  type DebtorPortalData,
-} from './api';
+import { api, type DebtorLegalDocument, type DebtorPortalData } from './api';
 
 export function DebtorPortal({
   portalId,
@@ -172,7 +168,10 @@ export function DebtorPortal({
   const isExpired = status === 'expired';
 
   // Formato visual de CLABE en 4 bloques: 6461 8012 3456 7890 12
-  const formattedClabe = creditor.clabe.replace(/(\d{4})(\d{4})(\d{4})(\d{4})(\d{2})/, '$1 $2 $3 $4 $5');
+  const formattedClabe = creditor.clabe.replace(
+    /(\d{4})(\d{4})(\d{4})(\d{4})(\d{2})/,
+    '$1 $2 $3 $4 $5'
+  );
 
   return (
     <div className="min-h-screen bg-slate-50/70 text-slate-900 pb-16">
@@ -228,11 +227,13 @@ export function DebtorPortal({
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold mb-2 shadow-xs border">
             {isFulfilled ? (
               <span className="bg-emerald-500/10 text-emerald-800 border-emerald-300 flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Cuenta Totalmente Liquidada
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Cuenta Totalmente
+                Liquidada
               </span>
             ) : isReported ? (
               <span className="bg-amber-500/10 text-amber-800 border-amber-300 flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 text-amber-600" /> Transferencia en Proceso de Conciliación
+                <Clock className="w-3.5 h-3.5 text-amber-600" /> Transferencia en Proceso de
+                Conciliación
               </span>
             ) : isExpired ? (
               <span className="bg-rose-500/10 text-rose-800 border-rose-300 flex items-center gap-1.5">
@@ -240,7 +241,8 @@ export function DebtorPortal({
               </span>
             ) : (
               <span className="bg-emerald-50 text-emerald-800 border-emerald-200 flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-emerald-600" /> Descuento Autorizado · Pago 1-Click
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600" /> Descuento Autorizado · Pago
+                1-Click
               </span>
             )}
           </div>
@@ -434,7 +436,8 @@ export function DebtorPortal({
         {/* Pasos rápidos para pagar en App Bancaria */}
         <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
           <h4 className="text-xs font-bold text-slate-900 mb-3 uppercase tracking-wider flex items-center gap-1.5">
-            <HelpCircle className="w-4 h-4 text-emerald-600" /> ¿Cómo pagar desde tu aplicación móvil?
+            <HelpCircle className="w-4 h-4 text-emerald-600" /> ¿Cómo pagar desde tu aplicación
+            móvil?
           </h4>
           <ol className="space-y-2.5 text-xs text-slate-600 list-decimal list-inside">
             <li>
@@ -444,8 +447,8 @@ export function DebtorPortal({
               Selecciona <strong>Transferir</strong> o <strong>Nuevo Destinatario</strong>.
             </li>
             <li>
-              Pega la <strong>CLABE de 18 dígitos</strong> copiada arriba y verifica que el banco sea{' '}
-              <strong>{creditor.bankName}</strong>.
+              Pega la <strong>CLABE de 18 dígitos</strong> copiada arriba y verifica que el banco
+              sea <strong>{creditor.bankName}</strong>.
             </li>
             <li>
               Ingresa el monto exacto:{' '}
@@ -647,7 +650,9 @@ export function DebtorPortal({
 
                 <div className="pt-6 border-t border-slate-200 font-sans text-[10px] text-slate-500 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
                   <div>
-                    <div className="font-semibold text-slate-700">Sello Digital de Autenticidad:</div>
+                    <div className="font-semibold text-slate-700">
+                      Sello Digital de Autenticidad:
+                    </div>
                     <div className="font-mono text-slate-500">{legalDoc.selloDigital}</div>
                   </div>
                   <div className="text-right text-emerald-700 font-semibold flex items-center gap-1">
