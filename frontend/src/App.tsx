@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Clock,
   Download,
+  Globe,
   Loader2,
   LogOut,
   PhoneCall,
@@ -57,6 +58,30 @@ import { OperatorDrawer } from './OperatorDrawer';
 import { TenantSettingsModal } from './TenantSettingsModal';
 import { DebtorPortal } from './DebtorPortal';
 import { Nom151Modal } from './Nom151Modal';
+import { LandingPage } from './landing/LandingPage';
+
+function shouldShowAppView(): boolean {
+  if (typeof window === 'undefined') return false;
+  const path = window.location.pathname;
+  if (
+    path.startsWith('/app') ||
+    path.startsWith('/login') ||
+    path.startsWith('/dashboard') ||
+    path.startsWith('/consola')
+  ) {
+    return true;
+  }
+  const params = new URLSearchParams(window.location.search);
+  if (
+    params.get('view') === 'app' ||
+    params.get('view') === 'console' ||
+    params.has('auth') ||
+    params.has('token')
+  ) {
+    return true;
+  }
+  return false;
+}
 
 function getPortalIdFromUrl(): string | null {
   if (typeof window === 'undefined') return null;
@@ -125,11 +150,13 @@ export default function App() {
   const [accountingOpen, setAccountingOpen] = useState(false);
   const [portalId, setPortalId] = useState<string | null>(() => getPortalIdFromUrl());
   const [nom151Folio, setNom151Folio] = useState<string | null>(() => getNom151FolioFromUrl());
+  const [showAppConsole, setShowAppConsole] = useState<boolean>(() => shouldShowAppView());
 
   useEffect(() => {
     const handlePopState = () => {
       setPortalId(getPortalIdFromUrl());
       setNom151Folio(getNom151FolioFromUrl());
+      setShowAppConsole(shouldShowAppView());
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -620,6 +647,18 @@ export default function App() {
                 Configurar
               </Button>
             ) : null}
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={Globe}
+              onClick={() => {
+                setShowAppConsole(false);
+                window.history.pushState({}, '', '/');
+              }}
+              title="Ver Landing Pública"
+            >
+              <span className="hidden lg:inline text-xs">Landing</span>
+            </Button>
             <span className="hidden md:inline text-xs text-slate-500">
               {session?.user.fullName || session?.user.email}
             </span>
@@ -652,6 +691,30 @@ export default function App() {
           setNom151Folio(null);
           window.history.pushState({}, '', '/');
         }}
+      />
+    );
+  }
+
+  if (!showAppConsole) {
+    return (
+      <LandingPage
+        onGoToApp={() => {
+          setShowAppConsole(true);
+          window.history.pushState({}, '', '/app');
+        }}
+        onGoToPortal={() => {
+          // Si no hay deudor específico, puede probar el caso demo
+          setPortalId('demo');
+          window.history.pushState({}, '', '/portal/demo');
+        }}
+        onGoToVerify={(folio) => {
+          if (folio) {
+            setNom151Folio(folio);
+            window.history.pushState({}, '', `/verify/nom151/${folio}`);
+          }
+        }}
+        isAuthenticated={conectado}
+        userEmail={session?.user.email}
       />
     );
   }
