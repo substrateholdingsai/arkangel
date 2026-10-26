@@ -18,8 +18,8 @@ export const ProductTour: React.FC = () => {
     {
       id: 'intake',
       badge: 'Paso 1 · Operación Mínima',
-      title: 'Modo Neandertal: 1 Botón • 0 Tablas',
-      subtitle: 'La automatización más simple y a prueba de errores para tu equipo.',
+      title: 'Modo a prueba de fallas: 1 Botón • 0 Tablas',
+      subtitle: 'La automatización más simple y segura para tu equipo.',
       description:
         'Elimina la complejidad operativa. Tu equipo solo arrastra el archivo CSV con la cartera del día y presiona el botón verde de disparo. Arkangel valida RFCs, números telefónicos E.164, filtra deudores con promesas activas y programa los envíos en la ventana legal permitida.',
       highlights: [
