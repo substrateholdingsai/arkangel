@@ -70,5 +70,5 @@ export function canActOnTenant(principal: Principal, tenantId: string): boolean 
 
 /** ¿El principal es de plataforma? */
 export function isPlatform(principal: Principal): boolean {
-  return principal.tenantId === null;
+  return principal.kind === 'platform';
 }

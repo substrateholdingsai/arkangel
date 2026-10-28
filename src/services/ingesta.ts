@@ -70,6 +70,7 @@ export async function ingestRows(
         name: row.nombre,
         phone,
         email: row.email,
+        rfc: row.rfc,
         source,
       });
 

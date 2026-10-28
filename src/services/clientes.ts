@@ -9,6 +9,7 @@ export interface ClientInput {
   phone?: string | null;
   email?: string | null;
   curp?: string | null;
+  rfc?: string | null;
   source?: string;
 }
 
@@ -19,6 +20,8 @@ interface ClientRow {
   phone: string | null;
   email: string | null;
   curp: string | null;
+  rfc?: string | null;
+  auth_pin?: string | null;
   whatsapp_opt_in: number | null;
   sms_opt_in: number | null;
   email_opt_in: number | null;
@@ -35,6 +38,8 @@ function toClient(row: ClientRow): Client {
     phone: row.phone ?? '',
     email: row.email ?? null,
     curp: row.curp ?? null,
+    rfc: row.rfc ?? null,
+    auth_pin: row.auth_pin ?? null,
     whatsapp_opt_in: row.whatsapp_opt_in,
     sms_opt_in: row.sms_opt_in,
     email_opt_in: row.email_opt_in,
@@ -93,6 +98,16 @@ export async function findOrCreateClient(ctx: TenantContext, input: ClientInput)
     )
     .run();
 
+  if (input.rfc) {
+    try {
+      await ctx.env.DB.prepare('UPDATE clients SET rfc = ? WHERE tenant_id = ? AND id = ?')
+        .bind(input.rfc.trim().toUpperCase(), ctx.tenantId, id)
+        .run();
+    } catch {
+      /* ignore if column not in mock */
+    }
+  }
+
   logger.info('Cliente creado', { clientId: id, phone, tenantId: ctx.tenantId });
 
   return {
@@ -101,6 +116,7 @@ export async function findOrCreateClient(ctx: TenantContext, input: ClientInput)
     phone: phone ?? '',
     email,
     curp,
+    rfc: input.rfc?.trim().toUpperCase() ?? null,
     whatsapp_opt_in: null,
     sms_opt_in: null,
     email_opt_in: null,
@@ -117,8 +133,22 @@ async function touchClient(
 ): Promise<Client> {
   const email = input.email?.trim() || client.email;
   const name = client.name && client.name !== 'Cliente sin nombre' ? client.name : input.name;
+  const rfc = input.rfc?.trim().toUpperCase() || client.rfc || null;
 
-  if (email === client.email && name === client.name) return client;
+  if (email === client.email && name === client.name && rfc === client.rfc) return client;
+
+  if (rfc && rfc !== client.rfc) {
+    try {
+      await ctx.env.DB.prepare(
+        'UPDATE clients SET name = ?, email = ?, rfc = ?, updated_at = ? WHERE tenant_id = ? AND id = ?'
+      )
+        .bind(name, email, rfc, nowIso(), ctx.tenantId, client.id)
+        .run();
+      return { ...client, name, email, rfc };
+    } catch {
+      /* fallback si la columna no existe en mock */
+    }
+  }
 
   await ctx.env.DB.prepare(
     'UPDATE clients SET name = ?, email = ?, updated_at = ? WHERE tenant_id = ? AND id = ?'
@@ -126,7 +156,7 @@ async function touchClient(
     .bind(name, email, nowIso(), ctx.tenantId, client.id)
     .run();
 
-  return { ...client, name, email };
+  return { ...client, name, email, rfc: client.rfc ?? null };
 }
 
 export async function getClient(ctx: TenantContext, id: string): Promise<Client | null> {

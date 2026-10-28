@@ -12,6 +12,7 @@ import { maskPhone } from '../lib/phone';
 import { recordPromise } from './promesas';
 import { logEventForTenant } from './eventos';
 import { resolveTenantContext } from '../tenancy/context';
+import { notifyArkLedgerPayment } from './arkLedgerWebhook';
 import type { Env } from '../types/env';
 
 export interface DebtorPortalFinancials {
@@ -461,6 +462,35 @@ export async function confirmDebtorPayment(
     trackingKey: details.trackingKey,
     amountCents: payableAmountCents,
   });
+
+  // Notificar webhook hacia ark-ledger si corresponde al tenant canaco_merida
+  if (tenantId === 'canaco_merida' || env.ARK_LEDGER_WEBHOOK_URL) {
+    try {
+      let rfc: string | null = null;
+      if (clientId) {
+        const clientRow = await env.DB.prepare(
+          'SELECT rfc FROM clients WHERE tenant_id = ? AND id = ? LIMIT 1'
+        )
+          .bind(tenantId, clientId)
+          .first<{ rfc: string | null }>()
+          .catch(() => null);
+        if (clientRow?.rfc) rfc = clientRow.rfc;
+      }
+
+      await notifyArkLedgerPayment(env, {
+        rfc: rfc || 'XAXX010101000',
+        folio_pago: details.trackingKey || receiptFolio,
+        monto: payableAmountCents / 100,
+        tenant_id: tenantId,
+        metodo: 'spei_1click_portal',
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn('Fallo opcional notificando ark-ledger desde portal de autoservicio', {
+        error: msg,
+      });
+    }
+  }
 
   return {
     success: true,

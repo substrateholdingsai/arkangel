@@ -7,6 +7,7 @@ export interface CsvColumnMap {
   monto: number;
   vencimiento: number;
   ref: number;
+  rfc?: number;
   tieneEncabezado: boolean;
 }
 
@@ -18,6 +19,7 @@ export interface CsvRow {
   montoCents: number;
   vencimiento: string | null;
   ref: string | null;
+  rfc?: string | null;
   linea: number;
 }
 
@@ -39,7 +41,7 @@ const KEYWORDS = {
   email: ['email', 'correo', 'mail', 'e-mail'],
   monto: ['monto', 'amount', 'deuda', 'saldo', 'total', 'importe', 'cargo', 'adeudo', 'moneda'],
   vencimiento: ['venc', 'vencimiento', 'due', 'fecha', 'limite', 'límite'],
-  ref: ['id', 'cuenta', 'factura', 'folio', 'clave', 'referencia', 'expediente', 'contrato'],
+  ref: ['id', 'cuenta', 'factura', 'folio', 'clave', 'referencia', 'expediente', 'contrato', 'rfc'],
 };
 
 function detectDelimiter(line: string): string {
@@ -136,12 +138,13 @@ export function detectColumns(rows: string[][]): CsvColumnMap {
   const email = findColumn(headers, KEYWORDS.email);
   const monto = findColumn(headers, KEYWORDS.monto);
   const vencimiento = findColumn(headers, KEYWORDS.vencimiento);
+  const rfc = findColumn(headers, ['rfc']);
   const ref = findColumn(headers, KEYWORDS.ref);
 
   const tieneEncabezado = [nombre, telefono, monto].filter((i) => i >= 0).length >= 2;
 
   if (tieneEncabezado) {
-    return { nombre, telefono, email, monto, vencimiento, ref, tieneEncabezado: true };
+    return { nombre, telefono, email, monto, vencimiento, ref, rfc, tieneEncabezado: true };
   }
 
   return {
@@ -151,6 +154,7 @@ export function detectColumns(rows: string[][]): CsvColumnMap {
     monto: 2,
     vencimiento: 3,
     ref: -1,
+    rfc: -1,
     tieneEncabezado: false,
   };
 }
@@ -219,6 +223,9 @@ export function rowsToCollectionRows(rows: string[][]): CsvRow[] {
     const montoRaw = cell(map.monto);
     const vencimientoRaw = cell(map.vencimiento);
     const refRaw = cell(map.ref);
+    const rfcRaw = map.rfc !== undefined && map.rfc >= 0 ? cell(map.rfc) : '';
+    const resolvedRfc =
+      rfcRaw || (refRaw && /^[A-Z&Ñ]{3,4}\d{6}[A-Z0-9]{3}$/i.test(refRaw) ? refRaw : null);
 
     const montoCents = parseAmountToCents(montoRaw);
     if (!nombre && !telefonoRaw && montoCents === null) return;
@@ -231,6 +238,7 @@ export function rowsToCollectionRows(rows: string[][]): CsvRow[] {
       montoCents: montoCents ?? 0,
       vencimiento: parseDate(vencimientoRaw),
       ref: refRaw || null,
+      rfc: resolvedRfc || null,
       linea: index + (map.tieneEncabezado ? 2 : 1),
     });
   });

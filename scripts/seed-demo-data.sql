@@ -166,3 +166,39 @@ INSERT INTO legal_audit (
    'SANITIZE', 'Lenguaje intimidatorio o coercitivo detectado: "último aviso".',
    'Removido: "último aviso"', 'cas_demo_01', 'cli_demo_01', 'whatsapp',
    datetime('now', '-45 minutes'));
+
+-- 10. CANACO SERVYTUR MÉRIDA (Aprovisionamiento y canales oficiales)
+INSERT OR REPLACE INTO tenants (
+  id, slug, nombre, status, config_mode,
+  razon_social, condusef_registro, allowed_payment_domains,
+  tz, send_window_start, send_window_end, max_contacts_per_day,
+  legal_monto_tolerancia_cents, legal_horario_en_respuestas,
+  rate_limit_rpm, dedupe_window_hours, score_amount_ceiling_cents,
+  agent_mode, agent_auto_threshold_cents, dry_run, cron_auto_fire,
+  a2a_enabled, a2a_max_discount_pct, a2a_max_installments, a2a_min_down_payment_pct,
+  is_default, created_at, updated_at
+) VALUES (
+  'canaco_merida', 'canaco-merida', 'CANACO SERVYTUR Mérida', 'active', 'db',
+  'CÁMARA NACIONAL DE COMERCIO, SERVICIOS Y TURISMO DE MÉRIDA', 'CANACO-MERIDA-SIEM-2026',
+  'arksystems.site,pagos.arksystems.site,ledger.arksystems.site,socios.canacomerida.com.mx',
+  'America/Merida', 8, 20, 2, 0, 0, 42, 24, 500000,
+  'supervised', 200000, 0, 0, 1, 15, 3, 50, 0, datetime('now'), datetime('now')
+);
+
+INSERT INTO users (id, email, full_name, password_hash, email_verified_at, platform_role, created_at)
+VALUES (
+  'usr_canaco_admin_horus', 'horus.i2d@gmail.com', 'Horus - Administrador Cameral CANACO Mérida',
+  'pbkdf2_sha256$100000$canacomeridaseed1$d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2',
+  unixepoch(), 'user', unixepoch()
+) ON CONFLICT(email) DO UPDATE SET full_name = excluded.full_name;
+
+INSERT INTO tenant_memberships (user_id, tenant_id, role, created_at)
+SELECT id, 'canaco_merida', 'admin', unixepoch() FROM users WHERE lower(email) = 'horus.i2d@gmail.com'
+ON CONFLICT(user_id, tenant_id) DO UPDATE SET role = 'admin';
+
+INSERT OR REPLACE INTO tenant_channels (id, tenant_id, channel, provider_account_id, credentials, status, created_at, updated_at)
+VALUES
+  ('chan_canaco_whatsapp', 'canaco_merida', 'whatsapp', '+529999253060', '{"whatsapp":{"from_number":"+529999253060","phone_number_id":"canaco_merida_wa_mid"}}', 'active', datetime('now'), datetime('now')),
+  ('chan_canaco_sms', 'canaco_merida', 'sms', '+529999253060', '{"sms":{"from_number":"+529999253060","messaging_profile_id":"canaco_merida_prof_999"}}', 'active', datetime('now'), datetime('now')),
+  ('chan_canaco_email', 'canaco_merida', 'email', 'canacomerida.com.mx', '{"email":{"from_email":"afiliaciones@canacomerida.com.mx"}}', 'active', datetime('now'), datetime('now'));
+

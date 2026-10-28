@@ -55,8 +55,17 @@ export async function verifyEd25519(
   }
 }
 
-/** Constante de tiempo para tokens de API/admin. */
-export function safeCompare(a: string | null | undefined, b: string | null | undefined): boolean {
+/** Constante de tiempo para tokens de API/admin. Hashea ambas entradas para que
+ *  la comparación sea siempre de longitud fija y no filtre la longitud del secreto. */
+export async function safeCompare(
+  a: string | null | undefined,
+  b: string | null | undefined
+): Promise<boolean> {
   if (!a || !b) return false;
-  return timingSafeEqual(a, b);
+  const enc = new TextEncoder();
+  const [ha, hb] = await Promise.all([
+    crypto.subtle.digest('SHA-256', enc.encode(a)),
+    crypto.subtle.digest('SHA-256', enc.encode(b)),
+  ]);
+  return timingSafeEqual(bytesToHex(new Uint8Array(ha)), bytesToHex(new Uint8Array(hb)));
 }

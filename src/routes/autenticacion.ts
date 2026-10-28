@@ -83,7 +83,7 @@ autenticacion.post('/login', async (c) => {
 
   // Se verifica contra un hash señuelo cuando el usuario no existe: así el
   // tiempo de respuesta no revela qué correos están dados de alta.
-  const hashFicticio = `pbkdf2_sha256${PASSWORD_ITERATIONS}$25000$${'00'.repeat(16)}${'00'.repeat(32)}`;
+  const hashFicticio = `pbkdf2_sha256$${PASSWORD_ITERATIONS}$${'00'.repeat(16)}$${'00'.repeat(32)}`;
   const coincide = await verifyPassword(password, user?.passwordHash ?? hashFicticio);
 
   if (!user || !coincide || !user.emailVerifiedAt) {

@@ -1,0 +1,160 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "get_daily_overview",
+      "description": "Obtiene el diagnóstico operativo del despacho, resumen de métricas del día, reglas legales activas y estado de cumplimiento.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "Fecha a consultar en formato ISO (YYYY-MM-DD). Si se omite, toma la fecha de hoy."
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "list_cases_today",
+      "description": "Obtiene el listado de casos de la cartera del día con montos, scores Sherman, estado y último canal de contacto.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "Fecha a consultar (YYYY-MM-DD)."
+          },
+          "status": {
+            "type": "string",
+            "enum": ["ready", "promise_broken", "human", "paid", "promised", "queued", "dnd"],
+            "description": "Filtro opcional por estado del caso."
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_case_workspace",
+      "description": "Consulta la ficha 360 del deudor: diagnóstico IA, deudas, contrato legal, historial omnicanal y contactos en las últimas 24 horas (NOM-184).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "description": "Identificador único del caso en Arkangel."
+          }
+        },
+        "required": ["case_id"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "request_batch_dispatch",
+      "description": "Ejecuta el disparo masivo omnicanal para todos los casos elegibles del día en la cola. REQUIERE APROBACIÓN HUMANA PREVIA.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "Fecha del lote a disparar (YYYY-MM-DD)."
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "trigger_voice_call",
+      "description": "Detona una llamada telefónica saliente mediante Telnyx Voice AI para un caso prioritario. REQUIERE APROBACIÓN HUMANA PREVIA.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "description": "Identificador del caso a llamar."
+          },
+          "assistant_id": {
+            "type": "string",
+            "description": "Identificador opcional del asistente o prompt de Telnyx."
+          }
+        },
+        "required": ["case_id"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "send_case_message",
+      "description": "Envía un mensaje individual (WhatsApp, SMS o Email) pasando por el motor legal fail-closed. REQUIERE APROBACIÓN HUMANA PREVIA.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "description": "Identificador del caso."
+          },
+          "message": {
+            "type": "string",
+            "description": "Texto del mensaje a enviar."
+          },
+          "channel": {
+            "type": "string",
+            "enum": ["whatsapp", "sms", "email"],
+            "description": "Canal de salida."
+          }
+        },
+        "required": ["case_id", "message"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "add_internal_note",
+      "description": "Registra una nota interna de bitácora en el expediente del caso (sin contactar al deudor).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "description": "Identificador del caso."
+          },
+          "note": {
+            "type": "string",
+            "description": "Contenido de la nota interna u observación."
+          }
+        },
+        "required": ["case_id", "note"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "request_hermes_forensics",
+      "description": "Detona un análisis forense de solvencia patrimonial con el motor Hermes para casos de alto valor.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "description": "Identificador del caso a peritar."
+          }
+        },
+        "required": ["case_id"]
+      }
+    }
+  }
+]

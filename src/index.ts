@@ -32,19 +32,50 @@ export { CallLockDO, RateLimiterDO, CallSessionDO, HermesSandboxDO };
 
 const app = new Hono<{ Bindings: Env; Variables: AuthVars }>();
 
+function originPermitido(origin: string, appUrl: string | undefined): string | null {
+  let originUrl: URL;
+  try {
+    originUrl = new URL(origin);
+  } catch {
+    return null;
+  }
+  const permitidos = new Set<string>();
+  if (appUrl) {
+    try {
+      permitidos.add(new URL(appUrl).origin);
+    } catch {
+      /* ignore */
+    }
+  }
+  // Desarrollo local
+  permitidos.add('http://localhost:5173');
+  permitidos.add('http://127.0.0.1:5173');
+  permitidos.add('http://localhost:8788');
+  permitidos.add('http://127.0.0.1:8788');
+  if (permitidos.has(originUrl.origin)) return originUrl.origin;
+  // Subdominios de arksystems.site
+  if (originUrl.hostname === 'arksystems.site' || originUrl.hostname.endsWith('.arksystems.site')) {
+    return originUrl.origin;
+  }
+  return null;
+}
+
 // Trace middleware - adds trace context to all requests
 app.use('*', traceMiddleware());
 
 app.use('/api/*', async (c, next) => {
   await next();
   const origin = c.req.header('origin');
-  // La sesión viaja en cookie: el navegador sólo acepta credenciales si el
-  // origen es explícito (no `*`) y se permite el envío de credenciales.
-  c.header('Access-Control-Allow-Origin', origin ?? '*');
-  if (origin) c.header('Access-Control-Allow-Credentials', 'true');
+  const allowedOrigin = origin ? originPermitido(origin, c.env.APP_URL) : null;
+  if (allowedOrigin) {
+    c.header('Access-Control-Allow-Origin', allowedOrigin);
+    c.header('Access-Control-Allow-Credentials', 'true');
+  } else {
+    c.header('Access-Control-Allow-Origin', '*');
+  }
   c.header(
     'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, x-admin-token, x-intake-token, x-tenant-id, x-tenant-slug'
+    'Content-Type, Authorization, x-admin-token, x-intake-token, x-grok-bot-token, x-tenant-id, x-tenant-slug'
   );
   c.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   if (c.req.method === 'OPTIONS') return c.body(null, 204);

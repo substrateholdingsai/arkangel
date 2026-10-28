@@ -31,6 +31,8 @@
     "spike:voz": "tsx scripts/spike-voz.ts",
     "seed:owner": "tsx scripts/seed-owner.ts",
     "seed:owner:remote": "tsx scripts/seed-owner.ts --remote",
+    "seed:canaco": "tsx scripts/seed-canaco.ts",
+    "seed:canaco:remote": "tsx scripts/seed-canaco.ts --remote",
     "seed:tenant-config": "tsx scripts/seed-tenant-config.ts",
     "seed:tenant-config:remote": "tsx scripts/seed-tenant-config.ts --remote",
     "cf-typegen": "wrangler types",

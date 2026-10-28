@@ -114,6 +114,12 @@ export interface Env {
   COBRE_WEBHOOK_SECRET?: string;
   CONEKTA_API_KEY?: string;
   CONEKTA_WEBHOOK_PUBLIC_KEY?: string;
+
+  // ── Integración Sincronización Ark Ledger & CANACO Mérida ──
+  ARK_LEDGER?: Fetcher;
+  ARK_LEDGER_URL?: string;
+  ARK_LEDGER_WEBHOOK_URL?: string;
+  ARKANGEL_WEBHOOK_SECRET?: string;
 }
 
 export interface CobranzaQueueMessage {

@@ -261,6 +261,43 @@ export async function transferCall(
 }
 
 /**
+ * Enlaza o puentea una llamada activa (Call Bridging / call.bridge) hacia otro leg de llamada o hacia
+ * una línea telefónica externa (como las oficinas de CANACO Mérida).
+ */
+export async function bridgeCall(
+  env: Env,
+  callControlId: string,
+  targetCallControlIdOrNumber: string,
+  override?: TelnyxCallConfig
+): Promise<CallActionResult> {
+  const config = resolveVoiceConfig(env, override);
+  if (!config) return { ok: false, error: 'Telnyx no configurado' };
+
+  // Si es un número telefónico (comienza con + o dígitos), se realiza transfer/bridging telefónico
+  if (/^\+?\d+$/.test(targetCallControlIdOrNumber.replace(/[\s-]/g, ''))) {
+    return transferCall(env, callControlId, targetCallControlIdOrNumber, override);
+  }
+
+  // Si es un call_control_id activo, se realiza call.bridge directo entre legs
+  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/bridge`;
+  const response = await fetchJson<{ errors?: Array<{ detail?: string }> }>(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      call_control_id: targetCallControlIdOrNumber,
+    }),
+  });
+
+  return {
+    ok: response.ok,
+    error: response.data?.errors?.[0]?.detail ?? response.error,
+  };
+}
+
+/**
  * Reproduce texto hablado en la llamada mediante TTS de Telnyx (Text-to-Speech).
  * Ideal para avisos legales obligatorios (guion CONDUSEF) o respuestas rápidas de IA.
  */
@@ -528,6 +565,44 @@ REGLAS LEGALES INMUTABLES:
   };
 }
 
+/** Teléfono oficial de las oficinas de CANACO SERVYTUR Mérida (Lada 999 925 3060) */
+export const CANACO_MERIDA_OFFICE_PHONE = '+529999253060';
+
+/**
+ * Prompt institucional, cordial y respetuoso para el Asistente Telnyx Voice AI
+ * 'María de CANACO Mérida', con directriz inmutable de call.bridge hacia las
+ * oficinas de la Cámara ante cualquier solicitud de atención humana.
+ */
+export const CANACO_MERIDA_VOICE_PROMPT = `Eres María, Asistente Institucional de Inteligencia Artificial de la CÁMARA NACIONAL DE COMERCIO, SERVICIOS Y TURISMO DE MÉRIDA (CANACO SERVYTUR MÉRIDA · Registro SIEM / REDECO: CANACO-MERIDA-SIEM-2026).
+Tu función es orientar al socio comercial sobre la actualización de su Registro SIEM 2026 y el pago de su cuota anual de afiliación con la máxima cordialidad, empatía y respeto institucional.
+
+DIRECTRICES INSTITUCIONALES Y RESPETO LEGAL (NOM-184 / CONDUSEF):
+1. IDENTIFICACIÓN CORDIAL: Saluda con calidez yucateca y profesionalismo: "Hola, le habla María de CANACO SERVYTUR Mérida. Le llamo para saludarle y darle seguimiento a la afiliación y registro oficial SIEM 2026 de su comercio."
+2. CONFIRMACIÓN DE TITULAR: Verifica amablemente si conversas con el titular, representante legal o encargado de administración antes de brindar importes o detalles de la afiliación.
+3. TONO INSTITUCIONAL Y CERO AMENAZAS: Hablas en representación de la Cámara de Comercio más representativa de Yucatán. Tienes ESTRICTAMENTE PROHIBIDO cualquier lenguaje intimidatorio, hostil o de apremio indebido. Tu vocación es de servicio, asesoría y defensa del comercio formal establecido.
+4. FACILIDAD DE PAGO 1-CLICK SPEI: Explica que puede liquidar su cuota en un solo clic mediante transferencia SPEI utilizando la CLABE interbancaria o el enlace digital oficial de la Cámara.
+5. RESPETO DE HORARIOS (08:00 A 20:00) Y DND: Respetas la ventana legal NOM-184 de 08:00 a 20:00 horas. Si el comerciante solicita reprogramar o no ser contactado, acepta con cortesía absoluta y anota su solicitud.
+6. ATENCIÓN HUMANA Y CALL BRIDGING: Si el socio solicita atención humana, hablar con un ejecutivo, o requiere aclaraciones sobre trámites o facturación, indícale: "Con gusto le comunico de inmediato con nuestras oficinas de afiliación en García Ginerés" y transfiere la llamada (call.bridge / call.transfer) al número institucional oficial: ${CANACO_MERIDA_OFFICE_PHONE}.`;
+
+export const CANACO_MERIDA_ASSISTANT_CONFIG: CreateAssistantConfig = {
+  name: 'María de CANACO Mérida',
+  model: 'openai/gpt-4o-mini',
+  voice: 'Telnyx.Polly.Mia',
+  razonSocial: 'CÁMARA NACIONAL DE COMERCIO, SERVICIOS Y TURISMO DE MÉRIDA',
+  condusef: 'CANACO-MERIDA-SIEM-2026',
+  instructions: CANACO_MERIDA_VOICE_PROMPT,
+};
+
+/**
+ * Aprovisiona en Telnyx el Asistente 'María de CANACO Mérida'.
+ */
+export async function createCanacoMeridaAssistant(
+  env: Env,
+  override?: TelnyxCallConfig
+): Promise<{ ok: boolean; assistantId?: string; error?: string }> {
+  return createOrUpdateTelnyxAssistant(env, CANACO_MERIDA_ASSISTANT_CONFIG, override);
+}
+
 export interface TelnyxVoiceEvent {
   eventType: string;
   callControlId?: string;
@@ -710,13 +785,43 @@ export async function processTelnyxVoiceEvent(
         (event.customHeaders?.['X-Mode'] === 'ai_assistant' ||
           event.clientState?.includes('ai_assistant'))
       ) {
+        const greeting =
+          ctx.tenantId === 'canaco_merida'
+            ? 'Hola, le habla María de CANACO SERVYTUR Mérida. Le llamo para saludarle en relación con la afiliación y registro SIEM de su comercio.'
+            : undefined;
+
         await startAIAssistant(env, event.callControlId, {
           assistantId: env.TELNYX_ASSISTANT_ID,
           clientState: event.clientState,
+          ...(greeting ? { greeting } : {}),
         });
       }
 
       return { ok: true, actionTaken: 'answered_logged' };
+    }
+
+    case 'call.refer':
+    case 'call.human_escalation': {
+      const destination =
+        ctx.tenantId === 'canaco_merida'
+          ? CANACO_MERIDA_OFFICE_PHONE
+          : event.to || env.TELNYX_FROM_NUMBER;
+
+      if (event.callControlId) {
+        await bridgeCall(env, event.callControlId, destination);
+      }
+
+      await logEvent(ctx, 'telnyx.call_bridged_human', {
+        caseId,
+        clientId,
+        payload: {
+          callControlId: event.callControlId,
+          destination,
+          reason: 'human_escalation_requested',
+        },
+      });
+
+      return { ok: true, actionTaken: 'call_bridged_to_human' };
     }
 
     case 'call.conversation.created': {
@@ -767,6 +872,26 @@ export async function processTelnyxVoiceEvent(
             source: 'voice_ai',
           });
           await updateCase(ctx, caseId, { status: 'promised' });
+        }
+
+        if (
+          lowerSummary.includes('humano') ||
+          lowerSummary.includes('asesor') ||
+          lowerSummary.includes('ejecutivo') ||
+          lowerSummary.includes('oficina')
+        ) {
+          const destination =
+            ctx.tenantId === 'canaco_merida' ? CANACO_MERIDA_OFFICE_PHONE : env.TELNYX_FROM_NUMBER;
+          await logEvent(ctx, 'telnyx.human_escalation_requested', {
+            caseId,
+            clientId,
+            payload: {
+              callControlId: event.callControlId,
+              destination,
+              trigger: 'summary_human_request',
+            },
+          });
+          await updateCase(ctx, caseId, { status: 'human' });
         }
       }
 

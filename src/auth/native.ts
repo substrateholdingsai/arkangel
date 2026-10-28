@@ -841,5 +841,16 @@ export async function removeTenantMember(
     .bind(tenantId, userId)
     .run();
 
+  // Si el usuario ya no pertenece a ningún despacho, se revocan sus sesiones
+  // para que no quede un acceso huérfano (la membresía era lo que autorizaba).
+  try {
+    const restantes = await getMemberships(env, userId);
+    if (restantes.length === 0) {
+      await revokeAllSessions(env, userId);
+    }
+  } catch {
+    // No tumbar la revocación por un fallo al verificar membresías.
+  }
+
   return { ok: true };
 }

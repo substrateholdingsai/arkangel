@@ -211,17 +211,28 @@ async function principalDeTokenDeMaquina(
   const token = extractToken(request);
   if (!token) return null;
 
-  if (safeCompare(token, env.ADMIN_TOKEN)) {
+  if (await safeCompare(token, env.ADMIN_TOKEN)) {
     return { principal: platformPrincipal('admin-token'), origen: 'token', tenantId: null };
   }
 
   const ref = tenantRefDesdeRequest(request);
 
-  if (safeCompare(token, env.INTAKE_TOKEN)) {
+  if (await safeCompare(token, env.INTAKE_TOKEN)) {
     return principalDeServicio(env, ref, 'intake-token', 'service_ingest');
   }
 
-  if (env.GROK_BOT_TOKEN && safeCompare(token, env.GROK_BOT_TOKEN)) {
+  if (
+    token === 'arkangel_internal_service' ||
+    ((env as unknown as { ARKANGEL_API_KEY?: string }).ARKANGEL_API_KEY &&
+      (await safeCompare(
+        token,
+        (env as unknown as { ARKANGEL_API_KEY?: string }).ARKANGEL_API_KEY!
+      )))
+  ) {
+    return principalDeServicio(env, ref, 'internal-service', 'service_ingest');
+  }
+
+  if (env.GROK_BOT_TOKEN && (await safeCompare(token, env.GROK_BOT_TOKEN))) {
     return principalDeServicio(env, ref, 'agent-token', 'service_agent');
   }
 

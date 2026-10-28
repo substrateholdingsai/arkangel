@@ -6,6 +6,8 @@ import { nowIso } from './db';
 import { listPendingDebts, markDebtStatus } from './deudas';
 import { logEvent } from './eventos';
 import { recordMessage } from './mensajes';
+import { notifyArkLedgerPayment } from './arkLedgerWebhook';
+import { logger } from '../lib/logger';
 
 export type PaymentSource =
   'cobre_spei' | 'conekta_spei' | 'csv_legacy' | 'api_webhook' | 'manual_operator';
@@ -304,6 +306,36 @@ export async function reconcilePayment(
       paidAt: input.paidAt ?? nowIso(),
     },
   });
+
+  // 7. Notificación de pago a ark-ledger (CANACO Mérida / Integración Contable)
+  if (ctx.tenantId === 'canaco_merida' || ctx.env.ARK_LEDGER_WEBHOOK_URL) {
+    try {
+      let rfc: string | null = null;
+      if (clientId) {
+        const clientRow = await ctx.env.DB.prepare(
+          'SELECT rfc FROM clients WHERE tenant_id = ? AND id = ? LIMIT 1'
+        )
+          .bind(ctx.tenantId, clientId)
+          .first<{ rfc: string | null }>()
+          .catch(() => null);
+        if (clientRow?.rfc) rfc = clientRow.rfc;
+      }
+      if (!rfc && cleanRef && /^[A-Z&Ñ]{3,4}\d{6}[A-Z0-9]{3}$/i.test(cleanRef)) {
+        rfc = cleanRef;
+      }
+
+      await notifyArkLedgerPayment(ctx.env, {
+        rfc: rfc || 'XAXX010101000',
+        folio_pago: trackingKey || `SPEI-ARK-${Date.now().toString(36).toUpperCase()}`,
+        monto: amountCents / 100,
+        tenant_id: ctx.tenantId,
+        metodo: input.source || 'spei_1click',
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn('Fallo opcional despachando webhook de pago hacia ark-ledger', { error: msg });
+    }
+  }
 
   return {
     status: 'reconciled',
