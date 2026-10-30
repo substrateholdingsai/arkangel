@@ -9,12 +9,54 @@ import { recordMessage } from '../services/mensajes';
 import { recordPromise } from '../services/promesas';
 import { updateCase } from '../services/casos';
 import { resolveTenantContext } from '../tenancy/context';
+import { liberarCanalTroncal, reportarSaturacionTroncal } from '../durable/trunk-governor';
 import type { Env } from '../types/env';
 
 export interface TelnyxCallConfig {
   apiKey?: string;
   fromNumber?: string;
   connectionId?: string;
+}
+
+/**
+ * Política de grabación de audio conforme a LFPDPPP (fail-closed).
+ *
+ * Debe provenir de la configuración efectiva del tenant
+ * (`TenantConfig.recording`). La grabación solo se permite si la política está
+ * completa y habilitada; de lo contrario `validateRecordingPolicy` devuelve
+ * errores y `startRecordingGoverned` no invoca a Telnyx.
+ */
+export interface RecordingPolicy {
+  enabled: boolean;
+  announcement: string;
+  retentionDays: number;
+  consentRequired: boolean;
+  privacyNoticeUrl: string;
+  /** Consentimiento expreso ya capturado para esta llamada (si aplica). */
+  consentGranted?: boolean;
+}
+
+export interface RecordingPolicyValidation {
+  ok: boolean;
+  errors: string[];
+}
+
+export function validateRecordingPolicy(policy: RecordingPolicy): RecordingPolicyValidation {
+  const errors: string[] = [];
+  if (policy.enabled !== true) errors.push('recording_disabled');
+  if (!policy.announcement || policy.announcement.trim().length === 0) {
+    errors.push('missing_announcement');
+  }
+  if (!Number.isFinite(policy.retentionDays) || policy.retentionDays <= 0) {
+    errors.push('invalid_retention_days');
+  }
+  if (!policy.privacyNoticeUrl || policy.privacyNoticeUrl.trim().length === 0) {
+    errors.push('missing_privacy_notice_url');
+  }
+  if (policy.consentRequired && policy.consentGranted !== true) {
+    errors.push('consent_not_granted');
+  }
+  return { ok: errors.length === 0, errors };
 }
 
 export interface DialCallParams {
@@ -155,6 +197,9 @@ export async function dialCall(
   });
 
   if (!response.ok) {
+    if (response.status === 429) {
+      await reportarSaturacionTroncal(env, 'telnyx_429_limit');
+    }
     const errorMsg =
       response.data?.errors?.[0]?.detail ??
       response.data?.errors?.[0]?.title ??
@@ -365,6 +410,34 @@ export async function startRecording(
   };
 }
 
+/**
+ * Inicia la grabación de la llamada aplicando la gobernanza LFPDPPP.
+ *
+ * Fail-closed: valida la política antes de invocar `record_start` en Telnyx.
+ * Si la política está incompleta o deshabilitada, devuelve `{ ok: false }`
+ * sin realizar ninguna llamada a la API de Telnyx.
+ */
+export async function startRecordingGoverned(
+  env: Env,
+  callControlId: string,
+  policy: RecordingPolicy,
+  override?: TelnyxCallConfig
+): Promise<CallActionResult & { policyErrors?: string[] }> {
+  const validation = validateRecordingPolicy(policy);
+  if (!validation.ok) {
+    logger.warn('Grabación bloqueada por gobernanza LFPDPPP', {
+      callControlId,
+      errors: validation.errors,
+    });
+    return {
+      ok: false,
+      error: `recording_governance_blocked: ${validation.errors.join(',')}`,
+      policyErrors: validation.errors,
+    };
+  }
+
+  return startRecording(env, callControlId, override);
+}
 /**
  * Inicia el streaming de audio bidireccional vía WebSocket (Media Streaming).
  * Permite conectar la llamada en vivo al STT/TTS de IA o Copiloto.
@@ -990,6 +1063,9 @@ export async function processTelnyxVoiceEvent(
           hangupCause: event.hangupCause,
         },
       });
+      if (event.callControlId) {
+        await liberarCanalTroncal(env, event.callControlId);
+      }
       return { ok: true, actionTaken: 'hangup_logged' };
     }
 

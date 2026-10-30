@@ -47,6 +47,11 @@ interface TenantRow {
   is_default: number;
   created_at: string;
   updated_at: string;
+  parent_tenant_id?: string | null;
+  tenant_level?: string | null;
+  marca_comercial?: string | null;
+  comm_max_por_semana?: number | null;
+  comm_optout_scope?: string | null;
 }
 
 interface TenantChannelRow {
@@ -85,7 +90,31 @@ function mapTenant(row: TenantRow): Tenant {
     is_default: Number(row.is_default),
     created_at: row.created_at,
     updated_at: row.updated_at,
+    ...mapJerarquia(row),
   };
+}
+
+/**
+ * Campos de jerarquía y comunicación (migración 0017). Si la columna no existe
+ * todavía no se añade la propiedad: el objeto de cobranza queda idéntico.
+ */
+function mapJerarquia(row: TenantRow): Partial<Tenant> {
+  const out: Partial<Tenant> = {};
+  if (row.parent_tenant_id !== undefined) out.parent_tenant_id = row.parent_tenant_id ?? null;
+  if (row.tenant_level !== undefined && row.tenant_level !== null) {
+    out.tenant_level =
+      row.tenant_level === 'platform' || row.tenant_level === 'socio'
+        ? row.tenant_level
+        : 'organizacion';
+  }
+  if (row.marca_comercial !== undefined) out.marca_comercial = row.marca_comercial ?? '';
+  if (row.comm_max_por_semana !== undefined && row.comm_max_por_semana !== null) {
+    out.comm_max_por_semana = Number(row.comm_max_por_semana);
+  }
+  if (row.comm_optout_scope !== undefined && row.comm_optout_scope !== null) {
+    out.comm_optout_scope = row.comm_optout_scope === 'organizacion' ? 'organizacion' : 'marca';
+  }
+  return out;
 }
 
 function mapChannel(row: TenantChannelRow): TenantChannel {

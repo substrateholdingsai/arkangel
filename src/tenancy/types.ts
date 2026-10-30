@@ -59,7 +59,34 @@ export interface Tenant {
   is_default: number;
   created_at: string;
   updated_at: string;
+
+  // ── Gobernanza LFPDPPP de grabación de audio (Voice AI) ──
+  /** 1 = grabación estéreo dual-channel habilitada (opt-in). */
+  recording_enabled?: number;
+  /** Locución obligatoria al descolgar antes de grabar. */
+  recording_announcement?: string;
+  /** Días de retención del audio grabado (0 = sin política → bloqueado). */
+  recording_retention_days?: number;
+  /** 1 = requiere consentimiento expreso del titular antes de grabar. */
+  recording_consent_required?: number;
+  /** URL del aviso de privacidad que nombra a Telnyx y al almacenamiento en nube. */
+  recording_privacy_notice_url?: string;
+
+  // ── Jerarquía y comunicación general (migración 0017) ──
+  /** Organización de la que cuelga un socio. `null` = raíz. */
+  parent_tenant_id?: string | null;
+  /** Nivel en la jerarquía. Sin migración 0017 se asume `organizacion`. */
+  tenant_level?: TenantLevel;
+  /** Nombre comercial que se firma en cada mensaje de comunicación general. */
+  marca_comercial?: string;
+  /** Mensajes de marketing por marca y número en 7 días. */
+  comm_max_por_semana?: number;
+  /** Alcance de una baja recibida por un canal compartido. */
+  comm_optout_scope?: 'marca' | 'organizacion';
 }
+
+/** Nivel del tenant: plataforma, organización (cámara/despacho) o socio. */
+export type TenantLevel = 'platform' | 'organizacion' | 'socio';
 
 /** Credenciales propias del tenant para un canal, sobre las de la plataforma. */
 export type TenantChannelCredentials = ChannelOverride;
@@ -109,6 +136,15 @@ export interface TenantConfig {
   agentAutoThresholdCents: number;
   dryRun: boolean;
   cronAutoFire: boolean;
+
+  // ── Gobernanza LFPDPPP de grabación de audio ──
+  recording?: {
+    enabled: boolean;
+    announcement: string;
+    retentionDays: number;
+    consentRequired: boolean;
+    privacyNoticeUrl: string;
+  };
 }
 
 /**

@@ -18,6 +18,12 @@ export interface Env {
   COBRANZA_QUEUE: Queue<CobranzaQueueMessage | ContabilidadRetryMessage>;
   CALL_LOCK: DurableObjectNamespace;
   RATE_LIMITER: DurableObjectNamespace;
+  /** FrequencyCapDO para control de impactos semanales en marketing por brand + número. */
+  FREQUENCY_CAP?: DurableObjectNamespace;
+  /** CampaignRunnerDO para orquestación y pacing de campañas de comunicación. */
+  CAMPAIGN_RUNNER?: DurableObjectNamespace;
+  /** TrunkGovernorDO para control de DPS y concurrencia saliente en trunks Telnyx. */
+  TRUNK_GOVERNOR?: DurableObjectNamespace;
   /** DO del spike de voz: uno por llamada. */
   CALL_SESSION: DurableObjectNamespace;
   /** DO para microVMs Firecracker del Agente Hermes (Plano 2). */
@@ -96,6 +102,13 @@ export interface Env {
   MAX_CONTACTS_PER_DAY?: string;
   LEGAL_MONTO_TOLERANCIA_CENTS?: string;
   LEGAL_HORARIO_EN_RESPUESTAS?: string;
+
+  // ── Gobernanza LFPDPPP de grabación de audio (Voice AI) ──
+  RECORDING_ENABLED?: string;
+  RECORDING_ANNOUNCEMENT?: string;
+  RECORDING_RETENTION_DAYS?: string;
+  RECORDING_CONSENT_REQUIRED?: string;
+  RECORDING_PRIVACY_NOTICE_URL?: string;
 
   // ── Módulo contable (Alegra vía MCP) ──
   ALEGRA_MCP_URL?: string;

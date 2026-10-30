@@ -5,6 +5,7 @@ import { logger } from '../lib/logger';
 import type { Env } from '../types/env';
 import { parseTelnyxPayload } from './telnyx';
 import {
+  envioRef,
   isDryRun,
   mapProviderStatus,
   type ChannelAdapter,
@@ -167,6 +168,42 @@ export function whatsappChallengeResponse(
   });
 }
 
+/**
+ * Cuerpo `template`/`text` del mensaje, común a Meta Graph y Telnyx.
+ *
+ * Orden de precedencia:
+ *   1. `params.template` (plantilla elegida para este mensaje, comunicación general).
+ *   2. Plantilla única del tenant (cobranza): el texto va como parámetro {{1}}.
+ *   3. Texto libre (sólo respuestas, `meta.reply`).
+ */
+export function construirMensajeWhatsApp(
+  params: SendParams,
+  templateName?: string,
+  templateLang?: string
+): Record<string, unknown> {
+  if (params.template) {
+    return {
+      type: 'template',
+      template: {
+        name: params.template.name,
+        language: { code: params.template.lang || 'es_MX' },
+        components: params.template.components,
+      },
+    };
+  }
+  const useTemplate = Boolean(templateName) && !params.meta?.reply;
+  return useTemplate
+    ? {
+        type: 'template',
+        template: {
+          name: templateName,
+          language: { code: templateLang ?? 'es_MX' },
+          components: [{ type: 'body', parameters: [{ type: 'text', text: params.body }] }],
+        },
+      }
+    : { type: 'text', text: { body: params.body } };
+}
+
 async function sendMetaWhatsApp(
   token: string,
   phoneNumberId: string,
@@ -175,26 +212,22 @@ async function sendMetaWhatsApp(
   templateName?: string,
   templateLang?: string
 ): Promise<SendResult> {
-  const useTemplate = Boolean(templateName) && !params.meta?.reply;
-  const payload = useTemplate
-    ? {
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: params.to,
-        type: 'template',
-        template: {
-          name: templateName,
-          language: { code: templateLang ?? 'es_MX' },
-          components: [{ type: 'body', parameters: [{ type: 'text', text: params.body }] }],
-        },
-      }
-    : {
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: params.to,
-        type: 'text',
-        text: { preview_url: false, body: params.body },
-      };
+  const mensaje = construirMensajeWhatsApp(params, templateName, templateLang);
+  const payload =
+    mensaje.type === 'text'
+      ? {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: params.to,
+          type: 'text',
+          text: { preview_url: false, body: params.body },
+        }
+      : {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: params.to,
+          ...mensaje,
+        };
 
   const url = `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`;
   const response = await fetchJson<{
@@ -210,12 +243,20 @@ async function sendMetaWhatsApp(
 
   if (!response.ok) {
     const message = response.data?.error?.message ?? response.error ?? 'whatsapp_error';
-    logger.error('WhatsApp send falló (Meta)', { caseId: params.caseId, error: message });
+    logger.error('WhatsApp send falló (Meta)', {
+      caseId: params.caseId,
+      campaignId: params.campaignId,
+      error: message,
+    });
     return { ok: false, channel: 'whatsapp', status: 'failed', error: message };
   }
 
   const providerId = response.data?.messages?.[0]?.id;
-  logger.info('WhatsApp enviado vía Meta Graph', { caseId: params.caseId, providerId });
+  logger.info('WhatsApp enviado vía Meta Graph', {
+    caseId: params.caseId,
+    campaignId: params.campaignId,
+    providerId,
+  });
   return { ok: true, channel: 'whatsapp', providerId, status: 'sent' };
 }
 
@@ -249,7 +290,7 @@ export async function sendWhatsApp(env: Env, params: SendParams): Promise<SendRe
     return {
       ok: true,
       channel: 'whatsapp',
-      providerId: `dry_run_${params.caseId}`,
+      providerId: `dry_run_${envioRef(params)}`,
       status: 'sent',
     };
   }
@@ -270,20 +311,7 @@ export async function sendWhatsApp(env: Env, params: SendParams): Promise<SendRe
   }
 
   // Telnyx WhatsApp API v2
-  const useTemplate = Boolean(templateName) && !params.meta?.reply;
-  const whatsappMessage = useTemplate
-    ? {
-        type: 'template',
-        template: {
-          name: templateName,
-          language: { code: templateLang ?? 'es_MX' },
-          components: [{ type: 'body', parameters: [{ type: 'text', text: params.body }] }],
-        },
-      }
-    : {
-        type: 'text',
-        text: { body: params.body },
-      };
+  const whatsappMessage = construirMensajeWhatsApp(params, templateName, templateLang);
 
   const payload = {
     from: fromNumber,

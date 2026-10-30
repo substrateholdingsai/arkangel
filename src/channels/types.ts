@@ -40,14 +40,39 @@ export interface SendParams {
   to: string;
   body: string;
   subject?: string;
-  caseId: string;
-  clientId: string;
+  /**
+   * Caso de cobranza. En comunicación general no hay caso: se usa
+   * `campaignId`. Al menos uno de los dos identifica el envío en los logs.
+   */
+  caseId?: string;
+  /** Campaña del Motor de Comunicación (marketing, avisos, transaccional). */
+  campaignId?: string;
+  clientId?: string;
   idempotencyKey?: string;
   meta?: Record<string, unknown>;
   /** Credenciales propias del tenant; lo que falte se toma de la plataforma. */
   credentials?: ChannelOverride;
   /** Modo de ensayo del tenant: no se envía, sólo se registra. */
   dryRun?: boolean;
+  /**
+   * Plantilla HSM elegida para ESTE mensaje (WhatsApp). Si viene, gana sobre
+   * la plantilla única configurada en el tenant y `body` sólo es el texto de
+   * referencia para la bitácora. Es lo que usa el Motor de Comunicación.
+   */
+  template?: WhatsAppTemplateRef;
+}
+
+/** Referencia a una plantilla aprobada por Meta con sus parámetros ya resueltos. */
+export interface WhatsAppTemplateRef {
+  name: string;
+  lang: string;
+  /** Componentes en formato de la Cloud API (`header`, `body`, `button`). */
+  components: Array<Record<string, unknown>>;
+}
+
+/** Identificador del envío para logs y claves de ensayo. */
+export function envioRef(params: SendParams): string {
+  return params.caseId ?? params.campaignId ?? 'sin_ref';
 }
 
 export interface SendResult {

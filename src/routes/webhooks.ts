@@ -19,6 +19,8 @@ import type { AuthVars } from '../auth/middleware';
 import type { Env } from '../types/env';
 import { handleInbound } from '../orquestacion/inbound';
 import { updateMessageStatus } from '../services/mensajes';
+import { actualizarEstadoEnvio, procesarInboundOptOut } from '../services/comunicacion';
+import { normalizePhone } from '../lib/phone';
 import { reconcilePayment } from '../services/pagos';
 import { resolveTenantContext, resolveTenantIdForInbound } from '../tenancy/context';
 
@@ -33,6 +35,7 @@ async function processParsed(
 ): Promise<void> {
   for (const status of parsed.statuses) {
     await updateMessageStatus(env, status.providerId, status.status);
+    await actualizarEstadoEnvio(env, status.providerId, status.status);
   }
 
   for (const message of parsed.messages) {
@@ -40,6 +43,17 @@ async function processParsed(
       // El tenant se deduce del enrutado del proveedor, no de lo que diga el
       // cliente: es lo que evita que un deudor de la empresa A se atribuya a la B.
       message.tenantId = await resolveTenantIdForInbound(env, message);
+
+      // Verificación prioritaria de solicitud de baja (Opt-out anti-spam)
+      const phone = normalizePhone(message.from) ?? message.from;
+      const optOut = await procesarInboundOptOut(env, phone, message.body, message.tenantId);
+      if (optOut.handled) {
+        logger.info('Opt-out procesado desde webhook inbound', {
+          contacto: phone,
+          tenantsAfectados: optOut.tenantsAfectados,
+        });
+      }
+
       await handleInbound(env, message);
     } catch (error) {
       logger.error('Error procesando inbound', {

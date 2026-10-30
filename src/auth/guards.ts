@@ -229,7 +229,7 @@ async function principalDeTokenDeMaquina(
         (env as unknown as { ARKANGEL_API_KEY?: string }).ARKANGEL_API_KEY!
       )))
   ) {
-    return principalDeServicio(env, ref, 'internal-service', 'service_ingest');
+    return { principal: platformPrincipal('internal-service'), origen: 'token', tenantId: null };
   }
 
   if (env.GROK_BOT_TOKEN && (await safeCompare(token, env.GROK_BOT_TOKEN))) {

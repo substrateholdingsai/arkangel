@@ -123,6 +123,14 @@ export function configDesdeEntorno(env: Env): TenantConfig {
     ),
     dryRun: env.DRY_RUN === 'true',
     cronAutoFire: (env.CRON_AUTO_FIRE ?? String(DEFAULTS_PLATAFORMA.cronAutoFire)) === 'true',
+
+    recording: {
+      enabled: env.RECORDING_ENABLED === 'true',
+      announcement: (env.RECORDING_ANNOUNCEMENT || '').trim(),
+      retentionDays: Number(env.RECORDING_RETENTION_DAYS || 0),
+      consentRequired: (env.RECORDING_CONSENT_REQUIRED ?? 'true') === 'true',
+      privacyNoticeUrl: (env.RECORDING_PRIVACY_NOTICE_URL || '').trim(),
+    },
   };
 }
 
@@ -153,6 +161,14 @@ export function configDesdeFila(env: Env, tenant: Tenant): TenantConfig {
     agentAutoThresholdCents: tenant.agent_auto_threshold_cents,
     dryRun: tenant.dry_run === 1 || env.DRY_RUN === 'true',
     cronAutoFire: tenant.cron_auto_fire === 1,
+
+    recording: {
+      enabled: tenant.recording_enabled === 1,
+      announcement: (tenant.recording_announcement || '').trim(),
+      retentionDays: Number(tenant.recording_retention_days || 0),
+      consentRequired: tenant.recording_consent_required !== 0, // default required if undefined?
+      privacyNoticeUrl: (tenant.recording_privacy_notice_url || '').trim(),
+    },
   };
 }
 
@@ -173,4 +189,22 @@ export function resolveTenantConfig(env: Env, tenant: Tenant): TenantConfig {
  */
 export function tenantListoParaOperar(config: TenantConfig): boolean {
   return config.razonSocial.length > 0;
+}
+
+/**
+ * ¿El tenant puede grabar audio de llamadas conforme a LFPDPPP?
+ *
+ * Fail-closed: requiere grabación habilitada explícitamente, locución de aviso
+ * no vacía, política de retención en días > 0 y aviso de privacidad. Sin todo
+ * esto, `startRecordingGoverned` bloquea el `record_start` aunque se invoque.
+ */
+export function tenantListoParaGrabar(config: TenantConfig): boolean {
+  const r = config.recording;
+  if (!r) return false;
+  return (
+    r.enabled === true &&
+    r.announcement.trim().length > 0 &&
+    r.retentionDays > 0 &&
+    r.privacyNoticeUrl.trim().length > 0
+  );
 }

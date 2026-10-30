@@ -1275,6 +1275,13 @@ api.get('/tenant/settings', async (c) => {
       agent_mode: ctx.config.agentMode,
       agent_auto_threshold_cents: ctx.config.agentAutoThresholdCents,
       dry_run: ctx.config.dryRun,
+      recording: {
+        enabled: ctx.config.recording?.enabled ?? false,
+        announcement: ctx.config.recording?.announcement ?? '',
+        retention_days: ctx.config.recording?.retentionDays ?? 0,
+        consent_required: ctx.config.recording?.consentRequired ?? true,
+        privacy_notice_url: ctx.config.recording?.privacyNoticeUrl ?? '',
+      },
     },
     webhooks: {
       conekta: `${appUrl}/webhooks/conekta`,
@@ -1360,6 +1367,35 @@ api.put('/tenant/settings', async (c) => {
   const dryRun =
     typeof body.dry_run === 'boolean' ? (body.dry_run ? 1 : 0) : ctx.config.dryRun ? 1 : 0;
 
+  const recordingEnabled =
+    typeof body.recording_enabled === 'boolean'
+      ? body.recording_enabled
+        ? 1
+        : 0
+      : ctx.config.recording?.enabled
+        ? 1
+        : 0;
+  const recordingAnnouncement =
+    typeof body.recording_announcement === 'string'
+      ? body.recording_announcement.trim().slice(0, 500)
+      : (ctx.config.recording?.announcement ?? '');
+  const recordingRetentionDays =
+    typeof body.recording_retention_days === 'number'
+      ? Math.max(0, Math.min(3650, Math.round(body.recording_retention_days)))
+      : (ctx.config.recording?.retentionDays ?? 0);
+  const recordingConsentRequired =
+    typeof body.recording_consent_required === 'boolean'
+      ? body.recording_consent_required
+        ? 1
+        : 0
+      : ctx.config.recording?.consentRequired
+        ? 1
+        : 0;
+  const recordingPrivacyNoticeUrl =
+    typeof body.recording_privacy_notice_url === 'string'
+      ? body.recording_privacy_notice_url.trim().slice(0, 500)
+      : (ctx.config.recording?.privacyNoticeUrl ?? '');
+
   const configMode = razonSocial && condusefRegistro ? 'db' : ctx.tenant.config_mode;
 
   await ctx.env.DB.prepare(
@@ -1368,16 +1404,21 @@ api.put('/tenant/settings', async (c) => {
          config_mode = ?,
          razon_social = ?,
          condusef_registro = ?,
-         allowed_payment_domains = ?,
-         send_window_start = ?,
-         send_window_end = ?,
-         max_contacts_per_day = ?,
-         rate_limit_rpm = ?,
-         agent_mode = ?,
-         agent_auto_threshold_cents = ?,
-         dry_run = ?,
-         updated_at = datetime('now')
-     WHERE id = ?`
+      allowed_payment_domains = ?,
+      send_window_start = ?,
+      send_window_end = ?,
+      max_contacts_per_day = ?,
+      rate_limit_rpm = ?,
+      agent_mode = ?,
+      agent_auto_threshold_cents = ?,
+      dry_run = ?,
+      recording_enabled = ?,
+      recording_announcement = ?,
+      recording_retention_days = ?,
+      recording_consent_required = ?,
+      recording_privacy_notice_url = ?,
+      updated_at = datetime('now')
+      WHERE id = ?`
   )
     .bind(
       nombre,
@@ -1392,6 +1433,11 @@ api.put('/tenant/settings', async (c) => {
       agentMode,
       agentAutoThresholdCents,
       dryRun,
+      recordingEnabled,
+      recordingAnnouncement,
+      recordingRetentionDays,
+      recordingConsentRequired,
+      recordingPrivacyNoticeUrl,
       ctx.tenantId
     )
     .run();
@@ -1441,6 +1487,13 @@ api.put('/tenant/settings', async (c) => {
       agent_mode: agentMode,
       agent_auto_threshold_cents: agentAutoThresholdCents,
       dry_run: Boolean(dryRun),
+      recording: {
+        enabled: Boolean(recordingEnabled),
+        announcement: recordingAnnouncement,
+        retention_days: recordingRetentionDays,
+        consent_required: Boolean(recordingConsentRequired),
+        privacy_notice_url: recordingPrivacyNoticeUrl,
+      },
     },
   });
 });

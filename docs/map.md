@@ -1,7 +1,7 @@
 # ARKANGEL — Mapa del proyecto y bitácora de sprints
 
-> **Estado**: `main` · **24 suites / 363 tests verdes** (incluye arnés de regresión de voz y suite forense Hermes-flare en Cloudflare Sandboxes) · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.  
-> Última actualización: **2026-10-25** (Sprint 14: Agente Autónomo Hermes en Cloudflare Sandboxes / Hermes-flare — MicroVMs Firecracker, Skip-Tracing Patrimonial RPPC, Peritaje SAT Arts. 29-A / 69-B CFF / 27-XV LISR, Síntesis de Cuaderno Judicial Art. 1298-A CCom y Persistencia R2).
+> **Estado**: `main` · **34 suites / 422 tests verdes** (incluye Motor de Comunicación Multi-Marca, aislamiento estricto de dominios, suite REPEP PROFECO SHA-256 edge, TrunkGovernorDO con 30 DPS y arbitraje de cobranza, arnés E2E de 10 contactos, suite forense Hermes-flare y arnés de regresión de voz) · lint + typecheck + build limpios · desplegado en `https://arkangel.arksystems.site`.  
+> Última actualización: **2026-10-29** (Sprints 16–18 completados al 100%: Motor de Comunicación, Contrato CAMPAIGN_DISPATCH_V1, FrequencyCapDO, CampaignRunnerDO, REPEP PROFECO 35 días, TrunkGovernorDO 30 DPS/concurrencia, bolsa de consumo `usage_events`, opt-out automático y jerarquía cámara → socio en migraciones 0017, 0018 y 0019).
 
 ---
 
@@ -45,14 +45,22 @@ src/
 │   ├── nom151.ts            Constancias NOM-151, emisión, verificación judicial pública, bitácora WORM, cuaderno procesal y config ATEB PSC
 │   ├── portal.ts            Portal público de autoservicio del deudor (/api/v1/portal/*, /pay/:id, cartas finiquito)
 │   ├── a2a.ts               Protocolo Agent-to-Agent: auth con secreto financiero, negociación de quitas y servidor MCP JSON-RPC 2.0
-│   ├── webhooks.ts          Recepción y validación criptográfica (Telnyx Ed25519, Meta HMAC-SHA256, Resend, Conekta RSA, Cobre HMAC)
+│   ├── webhooks.ts          Recepción y validación criptográfica (Telnyx Ed25519, Meta HMAC-SHA256, Resend, Conekta RSA, Cobre HMAC, opt-out automático)
 │   ├── agent.ts             Endpoints agénticos del Grok Bot (/api/v1/state, /decide, /dispatch, /audit, /classify, /calibrate)
 │   ├── contabilidad.ts      Corte contable diario y resumen para auditoría (/api/v1/contabilidad/resumen)
+│   ├── comunicacion.ts      Endpoints de marketing y avisos (/comunicacion/preview, /campaigns, /pause, /repep/upload, /repep/status)
 │   ├── autenticacion.ts     Auth nativa (login, logout, session, request-password-reset, reset-password, change-password)
 │   ├── guard.ts             Guardias de seguridad y validación de scopes por rol
 │   ├── tenant.ts            Resolución de contexto multitenant
 │   ├── auth.ts              Helpers de autenticación y cabeceras
 │   └── spike.ts             Rutas de benchmarking experimental (archivado)
+├── comunicacion/            Motor de Marketing y Comunicación General (multi-marca, anti-spam, fail-closed)
+│   ├── tipos.ts             Tipos, categorías, propósitos, canales y motivos de exclusión
+│   ├── reglas.ts            Catálogo de 6 reglas anti-spam y argumentos de valor pro-negocio
+│   ├── horarios.ts          Quiet hours 21:00-08:00 local time, zonas horarias de México y cálculo de siguiente apertura
+│   ├── plantillas.ts        Interpolación de variables, inyección obligatoria de marca y componentes Meta HSM
+│   ├── motorMarketing.ts    Función principal evaluarEnvio(ctx) con evaluación secuencial fail-closed
+│   └── contrato.ts          Esquema Zod estricto CAMPAIGN_DISPATCH_V1 para contrato entre Ark Sales CRM y Arkangel
 ├── services/                
 │   ├── hermesForensics.ts   Orquestador de Plano 2: Skip-tracing patrimonial, peritaje SAT (Arts. 29-A/69-B CFF/27-XV LISR) y síntesis judicial
 │   ├── casos.ts             Gestión del ciclo de vida de casos (ready, queued, contacted, promised, paid, escalated, dnd)
@@ -72,14 +80,17 @@ src/
 │   ├── judicialDocket.ts    Generador de Cuaderno Procesal Judicial (Art. 1298-A CCom) y Carpeta Fiscal SAT (Arts. 29-A, 69-B CFF, 27-XV LISR)
 │   ├── debtorPortal.ts      Lógica de consulta, cálculo de quitas y emisión de finiquitos para deudores
 │   ├── a2a.ts               Lógica de secreto financiero, evaluación de ofertas y convenios entre agentes
+│   ├── comunicacion.ts      Gestión D1 de consentimientos, supresiones, plantillas y detección de cobranza activa
+│   ├── repep.ts             Ingesta y verificación REPEP PROFECO: hashes SHA-256 en edge y vigencia fail-closed 35 días
+│   ├── arkLedgerWebhook.ts  Notificaciones asíncronas de eventos hacia Ark Ledger
 │   └── db.ts                Helpers y tipos para consultas en Cloudflare D1
 ├── orquestacion/            Disparador de cartera, consumidor de cola Cloudflare Queues, inbound y orquestador
 ├── legal/                   Motor legal fail-closed, catálogo de 12 reglas, sanitizador y tipos legales
 ├── ai/                      Agente LLM Workers AI, streaming, clasificación de intenciones, copilot y prompts
 ├── channels/                
-│   ├── whatsapp.ts          Adaptador WhatsApp Business vía Telnyx API v2 con validación Ed25519
+│   ├── whatsapp.ts          Adaptador WhatsApp Business vía Telnyx API v2 con validación Ed25519 y plantillas HSM
 │   ├── telnyx.ts            Adaptador SMS transaccional con palabras clave de opt-out (STOP/BAJA)
-│   ├── telnyxVoice.ts       Telefonía PSTN Call Control v2, Voice AI Assistants, AMD, WebRTC y bridging
+│   ├── telnyxVoice.ts       Telefonía PSTN Call Control v2, Voice AI Assistants, AMD, gobernanza de troncal y bridging
 │   ├── resend.ts            Adaptador de correo electrónico transaccional y reportes
 │   ├── conekta.ts           Integración de pasarela SPEI / OXXO Pay con órdenes de CLABE dinámica
 │   ├── cobre.ts             Integración de pagos B2B corporativos vía rieles SPEI
@@ -87,15 +98,14 @@ src/
 │   └── types.ts             Interfaces comunes de adaptadores
 ├── cron/                    Crons programados: manana.ts (cobranza 6 AM CDMX), contabilidadDaily.ts (23:59 CDMX), reconciliacion.ts
 ├── contabilidad/            buildPayload, sendToAlegra, alegraClient (MCP JSON-RPC 2.0 / SSE) y esquemas Zod
-├── tenancy/                 Tipos, resolución de contexto, repositorio, canales por tenant, llaves y middleware
+├── tenancy/                 Tipos, resolución de contexto, repositorio, jerarquía cámara/socio (jerarquia.ts), canales y llaves
 ├── auth/                    Autenticación nativa (PBKDF2-SHA256), sesiones hasheadas en D1, membresías, guards, scopes y email Resend
-├── durable/                 Durable Objects: HermesSandboxDO (Sandboxes Firecracker), RateLimiterDO, CallLockDO y CallSessionDO
+├── durable/                 Durable Objects: HermesSandboxDO, RateLimiterDO, CallLockDO, CallSessionDO, FrequencyCapDO, CampaignRunnerDO y TrunkGovernorDO
 ├── lib/                     Criptografía, parseo CSV, utilidades HTTP, idempotencia, logger estructurado W3C, money, phone, score
-└── types/                   Variables de entorno (env.ts) y modelos de cobranza (cobranza.ts)
+└── types/                   Variables de entorno (env.ts), modelos de cobranza (cobranza.ts) y protocolos A2A (a2a.ts)
 
 Dockerfile.sandbox           Definición de contenedor Firecracker para Cloudflare Sandboxes con sandbox-shim y runtime Hermes
-migrations/
-└── 0014_hermes_forensics.sql Tabla hermes_forensic_jobs con índices por tenant, caso, cliente y status
+migrations/                  0001 a 0019 (init, legal, alegra, tenants, native auth, tenant config, a2a, nom151, ateb_psc, hermes, canaco, recording governance, hierarchy, comunicacion, campaigns)
 
 frontend/                    Single Page Application React + Vite + Tailwind CSS
 ├── App.tsx                  Dashboard principal: KPIs omnicanal y Voice AI, Dropzone CSV, tabla con buscador/orden/paginación, telemetría
@@ -107,13 +117,13 @@ frontend/                    Single Page Application React + Vite + Tailwind CSS
 ├── TenantSettingsModal.tsx  Configuración self-serve del despacho: Razón Social, REDECO, Sincronización en 1-clic Asistente Telnyx, Test Canales
 ├── AccountingReportModal.tsx Visualización de corte contable en vivo (?live=1) y verificación de cadena de bloques del ledger
 ├── main.tsx                 Punto de entrada React
-└── auth/                    AuthContext.tsx y AuthGate.tsx (inicio de sesión, selector de despachos y recuperación de contraseña)
+├── auth/                    AuthContext.tsx y AuthGate.tsx (inicio de sesión, selector de despachos y recuperación de contraseña)
+└── landing/                 LandingPage, ComplianceMatrix, ProductTour, RoiCalculator, SplineShieldHero, TechArchitecture, TechnicalWhitepaperModal
 
 design-system/               Meridian Core: componentes accesibles reutilizables (KpiCard, DataTable, PageShell, Dropzone, Button, Alert, etc.)
-migrations/                  0001 a 0013 (init, legal, alegra, tenants, native auth, tenant config, a2a, nom151, ateb_psc_integration)
-scripts/                     seed.sql, seed-demo-data.sql, seed-owner.ts, forge_arkangel_watermark.py
+scripts/                     seed.sql, seed-demo-data.sql, seed-owner.ts, seed-canaco.ts, seed-tenant-config.ts, spike-voz.ts, forge_arkangel_watermark.py, forge_meridian_assets.py
 docs/                        Documentación técnica de arquitectura, spike de voz, contrato Alegra MCP, instructivos por rol (INDEX + 01 al 06)
-tests/                       23 suites unitarias y de integración (358 tests aprobados al 100%, incluye tests/spikeVoz.test.ts con 25 tests como arnés de regresión)
+tests/                       34 suites unitarias y de integración (422 tests aprobados al 100%, incluye tests/spikeVoz.test.ts como arnés de regresión, tests/comunicacionAislamiento.test.ts, arnés E2E de 10 contactos y trunkGovernor)
 ```
 
 ---
@@ -170,8 +180,8 @@ tests/                       23 suites unitarias y de integración (358 tests ap
 | GET | `/api/v1/a2a/agreement/:id` | público / token A2A | Detalle y estado del convenio pactado entre agentes |
 | POST | `/api/v1/a2a/mcp` | público / token A2A | Servidor Model Context Protocol (MCP) JSON-RPC 2.0 (`tools/list` y `tools/call` para agentes de IA) |
 | **Configuración del Despacho (Tenant Self-Serve)** | | | |
-| GET | `/api/v1/tenant/settings` | `legal:read` | Configuración legal/operativa del despacho y URLs de webhooks |
-| PUT | `/api/v1/tenant/settings` | `legal:config` | Guardado de Razón Social, REDECO, dominios, horario NOM-184 y modo de agente |
+| GET | `/api/v1/tenant/settings` | `legal:read` | Configuración legal/operativa del despacho, URLs de webhooks y política de grabación LFPDPPP |
+| PUT | `/api/v1/tenant/settings` | `legal:config` | Guardado de Razón Social, REDECO, dominios, horario NOM-184, modo de agente y política de grabación (aviso, retención, consentimiento, aviso de privacidad) |
 | GET | `/api/v1/tenant/channels` | `legal:read` | Consulta de canales operativos del despacho (`whatsapp`, `sms`, `email`) |
 | PUT | `/api/v1/tenant/channels` | `legal:config` | Activación/desactivación de canales y credenciales de enrutado |
 | POST | `/api/v1/tenant/channels/test` | `legal:read` | Test interactivo de conectividad y handshake en vivo con telemetría de latencia |
@@ -190,6 +200,13 @@ tests/                       23 suites unitarias y de integración (358 tests ap
 | POST | `/api/v1/decide` · `/dispatch` · `/audit` | `agent:decide` / etc. | Operación agéntica autónoma del bot |
 | POST | `/api/v1/bot/classify` | `agent:decide` | Clasificación en tiempo real de mensajes entrantes con transición automática |
 | POST | `/api/v1/scoring/calibrate` | `agent:decide` | Calibración algorítmica continua de Sherman v2 según cobranza real |
+| **Motor de Comunicación General & Campañas (Marketing / Avisos)** | | | |
+| POST | `/api/v1/comunicacion/preview` | `messages:send` | Evaluación previa fail-closed de audiencia (opt-in, REPEP, quiet hours, cap semanal) y cotización de costo |
+| POST | `/api/v1/comunicacion/campaigns` | `messages:send` | Disparo formal de campaña masiva bajo contrato `CAMPAIGN_DISPATCH_V1` orquestado por `CampaignRunnerDO` |
+| GET | `/api/v1/comunicacion/campaigns/:id` | `messages:read` | Reporte detallado post-campaña: enviados, diferidos, excluidos por regla y argumentos de valor legal |
+| POST | `/api/v1/comunicacion/campaigns/:id/pause` | `messages:send` | Pausa inmediata de una campaña en ejecución gobernada por `CampaignRunnerDO` |
+| POST | `/api/v1/comunicacion/repep/upload` | `legal:config` | Carga e ingesta de lista oficial REPEP (PROFECO) con hashing SHA-256 en edge |
+| GET | `/api/v1/comunicacion/repep/status` | `legal:read` | Consulta de vigencia (< 35 días) y antigüedad de la versión activa de REPEP |
 | **Webhooks Receptores** | | | |
 | GET/POST | `/webhooks/whatsapp` | Meta HMAC-SHA256 | Verificación de challenge y recepción de mensajes WhatsApp Business |
 | POST | `/webhooks/telnyx` | Telnyx Ed25519 | Webhook omnicanal Telnyx: SMS, WhatsApp v2, eventos de llamada, AMD, grabaciones y Voice AI |
@@ -203,7 +220,7 @@ tests/                       23 suites unitarias y de integración (358 tests ap
 
 | Tabla | Migración | Rol y contenido |
 | :--- | :--- | :--- |
-| `tenants` | 0004, 0009, 0011 | Catálogo de despachos: razón social, REDECO, ventana NOM-184, rate limit, config de agente y políticas A2A |
+| `tenants` | 0004, 0009, 0011, 0015, 0016, 0017 | Catálogo de despachos y agremiados: razón social, REDECO, ventana NOM-184, rate limit, config de agente y políticas A2A; columnas de gobernanza LFPDPPP de grabación de audio (`recording_enabled`, etc.) en 0016; jerarquía multi-tenant en 0017 (`parent_tenant_id`, `tenant_level`, `marca_comercial`, `comm_max_por_semana`, `comm_optout_scope`) |
 | `tenant_channels` | 0004, 0009 | Enrutado y credenciales por canal de cada despacho (WhatsApp phone ID, SMS profile ID, dominio email) |
 | `tenant_memberships` | 0007 | Relación usuario ↔ despacho con asignación estricta de roles (`owner`, `admin`, `member`) |
 | `users` | 0007 | Directorio de usuarios: correo electrónico, hash PBKDF2 y rol de plataforma |
@@ -230,6 +247,14 @@ tests/                       23 suites unitarias y de integración (358 tests ap
 | `worm_audit_log` | 0013 | **Bitácora WORM inmutable encadenada** (`prev_hash` -> `entry_hash`) para retención de 10 años (Art. 49 CCom; ver §1) |
 | `tenant_psc_settings` | 0013 | Credenciales de Conector ATEB PSC por despacho (Modo A oficial vs Modo B presuntivo) |
 | `hermes_forensic_jobs` | 0014 | Dictámenes periciales y trabajos forenses de Hermes (Skip-Trace, SAT 69-B, Síntesis Judicial) |
+| `comm_consents` | 0018 | Consentimientos expresos de comunicación comercial/institucional (opt-in) por marca, contacto, canal y categoría con fecha y fuente |
+| `comm_suppressions` | 0018 | Lista negra de bajas y supresión de envíos por marca o tenant (opt-out automático y manual) |
+| `comm_templates` | 0018 | Plantillas Meta HSM y avisos aprobados con variables estrictas e interpolación de marca comercial |
+| `comm_repep_versions` | 0018 | Versiones de la lista oficial REPEP (PROFECO) con fecha de corte y control atómico de estado (`loading`, `active`, `superseded`) |
+| `comm_repep_numbers` | 0018 | Teléfonos inscritos en REPEP almacenados como hashes SHA-256 en formato E.164 para cotejo privado en edge |
+| `comm_envios` | 0018 | Bitácora unitaria de envíos y exclusiones del Motor de Comunicación con estatus (`sent`, `excluded`, `deferred`), motivo y provider_id |
+| `comm_campaigns` | 0019 | Campañas masivas de comunicación orquestadas por `CampaignRunnerDO` con control de progreso, cursor y estatus |
+| `usage_events` | 0019 | Bitácora de consumo de recursos (mensajes y minutos de voz) con costo unitario para cobro contra la bolsa de créditos de la cámara |
 
 ---
 
@@ -298,14 +323,36 @@ tests/                       23 suites unitarias y de integración (358 tests ap
 
 ---
 
+### Sprint 15 — Gobernanza LFPDPPP de grabación de audio (Voice AI)
+* **Política de grabación por tenant**: columnas `recording_enabled`, `recording_announcement`, `recording_retention_days`, `recording_consent_required`, `recording_privacy_notice_url` en `tenants` (migración 0016), fail-closed (deshabilitado por defecto).
+* **Guard fail-closed**: `validateRecordingPolicy` + `startRecordingGoverned` en `src/channels/telnyxVoice.ts` bloquean `record_start` si la política está incompleta (sin aviso, retención 0, sin aviso de privacidad, consentimiento no otorgado).
+* **Configuración efectiva**: `TenantConfig.recording` y helper `tenantListoParaGrabar` en `src/tenancy/config.ts`.
+* **Self-serve**: campos de grabación integrados en `GET/PUT /api/v1/tenant/settings`.
+* **Tests**: `tests/recordingGovernance.test.ts` (7 casos de política + 2 de guard).
+
+### Sprints 16 al 18 — Motor de Comunicación General y Campañas Multi-Marca (Marketing / Avisos)
+* **Aislamiento Estricto de Dominios (`src/comunicacion/`)**: Módulo de marketing y comunicación institucional desacoplado del Motor Legal de cobranza (`src/legal/`); verificado por `tests/comunicacionAislamiento.test.ts` que prohíbe imports cruzados entre dominios.
+* **Jerarquía Cámara → Socio y Marca Comercial (Migración 0017)**: Columnas `parent_tenant_id`, `tenant_level` (`platform | organizacion | socio`), `marca_comercial`, `comm_max_por_semana` y `comm_optout_scope`. Resolución de canales heredados (`canalesEfectivos`) donde el socio usa los canales de la cámara o sus propios números.
+* **Consentimiento y Supresión por Marca (Migración 0018)**: Tablas `comm_consents` (opt-in con fecha y origen por marca/canal/categoría), `comm_suppressions` (lista negra de baja), `comm_templates` (plantillas aprobadas) y `comm_envios` (bitácora detallada de auditoría).
+* **Reglas Anti-Spam Fail-Closed**: Switch obligatorio sin default, quiet hours de 21:00 a 08:00 (`horarios.ts`), identificación obligatoria de marca comercial (LFPC Art. 17), exclusión automática de contactos con cobranza activa y plantillas curadas con variables estrictas (`plantillas.ts`).
+* **Frequency Cap Aislado en Durable Objects (`FrequencyCapDO`)**: Control de impactos semanales en ventana deslizante de 7 días indexado por marca + teléfono (`fcap:${brandId}:${phone}`) con purga por alarmas, garantizando que campañas de diferentes marcas no colisionen.
+* **Orquestador de Campañas (`CampaignRunnerDO`) y Bolsa de Consumo (Migración 0019)**: Despacho formal bajo contrato `CAMPAIGN_DISPATCH_V1` con pacing, soporte de pausa/reanudación y registro de eventos de consumo en `usage_events` (minutos y mensajes con costo unitario) para liquidación contra la bolsa de créditos de la cámara.
+* **Opt-out Inbound Automático**: Detección inmediata de palabras clave ("BAJA", "STOP", "ALTO") en webhooks de WhatsApp/SMS para revocar el consentimiento al vuelo y suprimir futuros envíos.
+* **API de Comunicación**: Endpoints `/api/v1/comunicacion/preview` (evaluación y cotización previa en pesos), `/api/v1/comunicacion/campaigns` (disparo formal y consulta de estado con argumentos de valor), `/pause`, `/repep/upload` y `/repep/status`.
+* **Ingesta y Verificación Mensual REPEP PROFECO (Sprint 17)**: Hashing SHA-256 en edge de números telefónicos E.164 (`comm_repep_numbers`), vigencia fail-closed de 35 días (`comm_repep_versions`), carga atómica de versiones (`loading` → `active` → `superseded`) y bloqueo automático preventivo ante listas ausentes o caducadas.
+* **Gobernador de Troncal Voice AI (`TrunkGovernorDO` — Sprint 18)**: Límite duro de 30 Dials Per Second (DPS) calculado con media móvil en ventana deslizante de 5 segundos, control de concurrencia saliente (2 canales base Level 1 / 10 canales Level 2), arbitraje fail-closed con paso preferencial inmediato de llamadas de cobranza sobre marketing, y manejo de saturación HTTP 429 (Telnyx 90103) con backoff exponencial mediante alarmas de Durable Objects (`setAlarm()`).
+* **Arnés de Integración E2E**: `tests/campaignDispatchE2E.test.ts` validó con éxito una campaña de 10 contactos (5 enviados vía WhatsApp, 3 excluidos por falta de opt-in, 1 excluido por cobranza activa y 1 por opt-out previo), con generación de eventos de consumo para la bolsa de créditos.
+
+---
+
 ## 6. Estado de verificación y calidad del código
 
 | Verificación | Herramienta / Comando | Resultado actual |
 | :--- | :--- | :--- |
-| **Suite completa de pruebas** | `npm test` (24 archivos) | **24 suites / 363 tests aprobados (100% verde)**; incluye peritajes forenses Hermes, arnés de voz y contratos procesales |
+| **Suite completa de pruebas** | `npm test` (34 archivos) | **34 suites / 422 tests aprobados (100% verde)**; incluye Motor de Comunicación, aislamiento estricto de dominios, suite REPEP SHA-256 edge, TrunkGovernorDO 30 DPS/concurrencia, arnés E2E de 10 contactos, peritajes forenses Hermes, arnés de voz y contratos procesales |
 | **Latencia Voice AI (Telnyx)** | Telemetría en producción | **< 800 ms objetivo de diseño bajo SLA del proveedor; arnés telemétrico formal de p50/p95 en producción en curso (ver §8)** |
 | **Linter de código** | `npm run lint` (`--max-warnings 0`) | **0 errores, 0 warnings** |
-| **Compilación frontend** | `npm run build:frontend` (Vite) | **1638 módulos transformados, bundle limpio** |
+| **Compilación frontend** | `npm run build:frontend` (Vite) | **1645 módulos transformados, bundle limpio** |
 | **Compilación del Worker** | `npm run build:worker` (Wrangler dry-run) | **Todos los bindings D1/KV/Queue/DO/R2/AI/Sandbox validados** |
 | **Integración Continua** | `.github/workflows/ci.yml` en GitHub Actions | **Runs en `main` y pull requests en verde** |
 | **Ambiente de Producción** | `curl -s https://arkangel.arksystems.site/api/v1/health` | **`{"ok": true, "service": "arkangel-cobranza", "env": "production"}`** |
@@ -328,12 +375,17 @@ La carpeta [`docs/instructivos/`](file:///c:/Users/PAV/Desktop/e-commerce/arkang
 ## 8. Frontera activa, pendientes y hoja de ruta
 
 ### Resuelto y Superado (Sin deuda en estos componentes)
+* **Motor de Comunicación y Marketing Multi-Marca (Sprints 16–18)**: Desacoplado 100% de cobranza (`src/comunicacion/`), contrato Zod `CAMPAIGN_DISPATCH_V1`, switch explícito y fail-closed, evaluación de plantillas Meta HSM, inyección obligatoria de marca comercial (LFPC Art. 17), quiet hours 21:00 a 08:00 hora local, y aislamiento estricto verificado por test AST estático (`tests/comunicacionAislamiento.test.ts`).
+* **Ingesta y Verificación Mensual de REPEP PROFECO (Sprint 17)**: Hashing SHA-256 en edge de teléfonos en formato E.164 (`comm_repep_numbers`), vigencia fail-closed de 35 días (`comm_repep_versions`), carga atómica de versiones (`loading` → `active` → `superseded`) y bloqueo preventivo de campañas si la lista no está vigente o si el número está registrado.
+* **Gobernador de Troncal y Pacing de Telefonía Saliente Voice AI (`TrunkGovernorDO` — Sprint 18)**: Control estricto de concurrencia saliente (2 canales base Level 1, 10 canales Level 2), cota dura de 30 Dials Per Second calculada como media móvil en ventana deslizante de 5 segundos, arbitraje fail-closed con paso preferencial inmediato de llamadas de cobranza sobre campañas comerciales, y manejo de saturación HTTP 429 de Telnyx (error 90103) mediante backoff exponencial gobernado por alarmas de Durable Objects (`setAlarm()`).
+* **Jerarquía de Tenants y Facturación por Consumo**: Modelo Cámara (`tenant_level = 'organizacion'`) y Agremiado (`tenant_level = 'socio'`), herencia segura de credenciales de canal, registro de `usage_events` para tarificación de bolsa de créditos, y receptor webhook con opt-out automático ("BAJA"/"STOP").
 * **Spike de Voz Artesanal (Workers AI / Cloudflare Realtime)**: Formalmente cerrado como antecedente superado; sustituido en producción por **Telnyx Voice AI Assistants**, marcación PSTN mexicana (+52), Answering Machine Detection (AMD) y latencia conversacional ultrabaja.
 * **Desfase de Cron de Cobranza**: Alineado a las 12:00 UTC = 6:00 AM hora del centro de México (CDMX) en `wrangler.jsonc`.
 * **Identidad y Autenticación**: 100% nativa con PBKDF2 en Cloudflare D1; cero dependencias de Clerk o SaaS de identidad.
 * **Integración Continua**: Pipeline activo en `.github/workflows/ci.yml`.
+* **Gobernanza LFPDPPP de grabación de audio (Sprint 15)**: política por tenant, guard fail-closed `startRecordingGoverned`, campos self-serve en `/api/v1/tenant/settings` y tests. La grabación sigue opt-in; se habilita solo con política completa.
 
-### Frontera Activa (Prioridades siguientes)
+### Frontera Activa (Prioridades siguientes y Pendientes)
 
 1. **Validación en Vivo de Credenciales de Producción ATEB PSC (Modo A)**:
    * Los despachos operan actualmente en Modo B (evidencia interna y resguardo criptográfico WORM pleno).
@@ -343,10 +395,3 @@ La carpeta [`docs/instructivos/`](file:///c:/Users/PAV/Desktop/e-commerce/arkang
 2. **Validación de Catálogo Real contra Alegra**:
    * El cliente Alegra MCP JSON-RPC 2.0 está implementado y probado en arnés unitario.
    * Pendiente ejecutar un ensayo end-to-end contra una instancia de pruebas de Alegra para verificar que los identificadores de cuentas del plan contable coincidan con el mapeo por despacho.
-
-3. **Campañas Masivas de Telefonía Saliente Voice AI**:
-   * Orquestación de lotes de llamadas telefónicas salientes respetando el límite de concurrencia del trunk Telnyx (por defecto 10 canales concurrentes por despacho, configurable en `tenant_channels`) y la ventana legal NOM-184 (8:00 AM a 10:00 PM L-V).
-
-4. **Aviso de Grabación y Retención de Audio Voice AI (Gobernanza LFPDPPP)**:
-   * La grabación estéreo dual-channel de Telnyx se mantiene **apagada por defecto (opt-in)**.
-   * Su activación por un despacho requiere: (a) locución obligatoria al descolgar ("Esta llamada está siendo grabada para fines de calidad y cumplimiento legal"), (b) política de retención documentada y verificable en días, (c) si se almacena o procesa audio, consentimiento expreso del titular por tratamiento de dato biométrico/personal (LFPDPPP), y (d) aviso de privacidad que nombre a Telnyx y al almacenamiento en nube como encargados, con base legal para transferencia internacional de datos.

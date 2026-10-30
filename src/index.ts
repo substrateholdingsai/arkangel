@@ -22,13 +22,25 @@ import { CallLockDO } from './durable/call-lock';
 import { RateLimiterDO } from './durable/rate-limiter';
 import { CallSessionDO } from './durable/call-session';
 import { HermesSandboxDO } from './durable/hermes-sandbox';
+import { FrequencyCapDO } from './durable/frequency-cap';
+import { CampaignRunnerDO } from './durable/campaign-runner';
+import { TrunkGovernorDO } from './durable/trunk-governor';
 import { spike } from './routes/spike';
 import { a2a } from './routes/a2a';
 import { portal } from './routes/portal';
 import { nom151 } from './routes/nom151';
 import { hermes } from './routes/hermes';
+import { comunicacion } from './routes/comunicacion';
 
-export { CallLockDO, RateLimiterDO, CallSessionDO, HermesSandboxDO };
+export {
+  CallLockDO,
+  RateLimiterDO,
+  CallSessionDO,
+  HermesSandboxDO,
+  FrequencyCapDO,
+  CampaignRunnerDO,
+  TrunkGovernorDO,
+};
 
 const app = new Hono<{ Bindings: Env; Variables: AuthVars }>();
 
@@ -97,6 +109,7 @@ app.route('/api/v1/a2a', a2a);
 app.route('/api/v1/portal', portal);
 app.route('/api/v1/nom151', nom151);
 app.route('/api/v1/hermes', hermes);
+app.route('/api/v1', comunicacion);
 app.route('/webhooks', webhooks);
 
 // Spike de voz (EXPERIMENTAL). Las rutas responden 404 mientras
